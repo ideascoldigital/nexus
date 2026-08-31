@@ -1,6 +1,6 @@
 [package]
 name = "nexux"
-version = "0.1.7"
+version = "0.1.8"
 description = "Nexus desktop shell"
 authors = ["Ideascol"]
 edition = "2021"

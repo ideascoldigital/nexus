@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Nexus",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "identifier": "com.ideascol.nexux",
   "build": {
     "beforeDevCommand": "PORT=3100 NEXUX_TERMINAL_PORT=3102 pnpm --filter @nexux/web dev:next",
