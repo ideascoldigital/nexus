@@ -1,0 +1,13 @@
+-- Which git credential a repository is cloned and pulled with.
+--
+-- The clone used whichever credential for the remote's provider was saved
+-- first. That is right for one account and wrong the moment there are two:
+-- several GitHub tokens are ordinary — a personal one plus one per org — and
+-- the first-saved token generally cannot see a private repo belonging to the
+-- other account. Git's own answer to that is a username prompt, which with
+-- prompts disabled surfaces as `could not read Username`, so the failure did
+-- not even name the token it had tried.
+--
+-- Null keeps the provider-wide fallback, which is what every existing row and
+-- every single-account install wants.
+ALTER TABLE "Repository" ADD COLUMN "gitCredentialId" TEXT REFERENCES "CloudCredential"("id") ON DELETE SET NULL ON UPDATE CASCADE;

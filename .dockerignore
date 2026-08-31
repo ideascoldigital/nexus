@@ -1,0 +1,25 @@
+# Keep build context small + force clean linux builds of native deps.
+**/node_modules
+**/.next
+**/dist
+**/.turbo
+
+# The Tauri desktop shell, in full. This image is the standalone server; it
+# never imports apps/native, and shipping its manifest into the builder only
+# pulls @tauri-apps/cli (~100MB of per-platform binaries) into the install.
+# The Dockerfile's `pnpm install --filter @nexux/web...` is scoped to match.
+apps/native
+
+# VCS / editor / OS cruft
+.git
+.gitignore
+**/.DS_Store
+
+# Local env — inject secrets at runtime instead (see docker-compose / -e flags).
+**/.env
+**/.env.*
+!**/.env.example
+
+# Docs / specs not needed to build
+specs
+*.md

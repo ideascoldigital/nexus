@@ -1,0 +1,180 @@
+name: Release native app
+
+# Builds the Tauri desktop app. Runs on demand (workflow_dispatch) or when a
+# release tag (v*) is pushed. Tag builds attach the bundles to a draft GitHub
+# release; manual builds upload them as workflow artifacts.
+#
+# One job per target OS (macOS arm64, Linux x86_64, Windows x86_64): the
+# sidecar bundles the build host's own `node` binary (build-sidecar.ts
+# copyNodeBinary), so cross-compilation is not possible.
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "Which OS to build"
+        type: choice
+        default: all
+        options: [all, macos, linux, windows]
+  push:
+    tags: ["v*"]
+
+# Scope concurrency to the ref *and* the chosen target, so a Windows-only
+# dispatch and a macOS-only dispatch don't cancel each other. Only a re-dispatch
+# of the same target supersedes.
+#
+# Tags are never cancelled, matching release-image.yml: a release build takes
+# ~30 minutes across three operating systems, and a half-published release —
+# some bundles attached, others cancelled mid-upload — is worse than a wasted
+# runner. Re-running a tag deliberately queues behind the in-flight one.
+concurrency:
+  group: release-native-${{ github.ref }}-${{ github.event.inputs.targets || 'all' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  # Compute the build matrix. `workflow_dispatch` can target a single OS
+  # (inputs.targets: macos | linux | windows); tag pushes and the "all" choice
+  # build every OS. The full per-OS definition lives here so the build job's
+  # matrix is just fromJSON of the filtered list.
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          TARGETS: ${{ github.event.inputs.targets || 'all' }}
+        run: |
+          all='[
+            {"os":"macos-latest","label":"macos-arm64","display":"macOS arm64",
+             "key":"macos",
+             "artifacts":"apps/native/src-tauri/target/release/bundle/dmg/*.dmg\napps/native/src-tauri/target/release/bundle/macos/*.app.tar.gz"},
+            {"os":"ubuntu-22.04","label":"linux-x64","display":"Linux x86_64",
+             "key":"linux",
+             "artifacts":"apps/native/src-tauri/target/release/bundle/appimage/*.AppImage\napps/native/src-tauri/target/release/bundle/deb/*.deb\napps/native/src-tauri/target/release/bundle/rpm/*.rpm"},
+            {"os":"windows-latest","label":"windows-x64","display":"Windows x86_64",
+             "key":"windows",
+             "artifacts":"apps/native/src-tauri/target/release/bundle/nsis/*-setup.exe\napps/native/src-tauri/target/release/bundle/msi/*.msi"}
+          ]'
+          if [ "$TARGETS" = "all" ]; then
+            matrix=$(jq -c '{include: .}' <<<"$all")
+          else
+            matrix=$(jq -c --arg k "$TARGETS" '{include: [.[] | select(.key == $k)]}' <<<"$all")
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Selected targets: $TARGETS"
+          jq '.include[].display' <<<"$matrix"
+
+  # Parity first: a native build whose versions/ports drifted from the webapp
+  # must not ship. Tag ↔ manifest agreement is not checked here: the build job
+  # syncs every manifest from the tag (scripts/set-version.sh), so the tag is
+  # the single source of truth and a forgotten local bump cannot mis-version
+  # a release.
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Native ↔ web parity tests
+        run: pnpm --filter @nexux/native test
+
+  # One job per OS in the (possibly filtered) matrix, so the Actions UI shows a
+  # distinct "Release native app: <OS>" entry and one failing target doesn't
+  # hide the others. Steps are identical; only OS deps and upload paths differ.
+  build:
+    needs: [setup, verify]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    name: "Release native app: ${{ matrix.display }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/native/src-tauri
+
+      - name: Install Tauri system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # libappindicator3-dev conflicts with libayatana-appindicator3-dev
+          # on jammy; Tauri v2 only needs the ayatana variant.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev \
+            librsvg2-dev patchelf libssl-dev build-essential curl wget file \
+            libxdo-dev libayatana-appindicator3-dev
+
+      # Tag is the single source of truth for the version: sync every manifest
+      # (package.jsons, tauri.conf.json, Cargo.toml) from it before building,
+      # knock-style. No more "bump five files or the release fails".
+      - name: Sync version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: ./scripts/set-version.sh "${GITHUB_REF_NAME}"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @nexux/db generate
+        env:
+          DATABASE_URL: "file:./release.db"
+
+      # tauri.conf.json's beforeBuildCommand runs build-sidecar.ts, which
+      # builds the web app standalone; `next build` may touch the DB while
+      # prerendering, so give it a migrated scratch database.
+      - name: Build native app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Build identity baked into the sidecar's build-info.json — the
+          # statusbar's /api/version reads it at runtime.
+          NEXUX_GIT_SHA: ${{ github.sha }}
+          NEXUX_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          DATABASE_URL: "file:${{ github.workspace }}/release.db"
+          NEXUX_MIGRATIONS_DIR: ${{ github.workspace }}/packages/db/prisma/migrations
+          # GitHub Actions runners have no FUSE, so linuxdeploy (the AppImage
+          # bundler) fails to mount its own AppImage. Extract-and-run instead.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          # linuxdeploy strips every ELF it bundles; the sidecar ships a full
+          # node binary (+ native .node addons) that strip chokes on, killing
+          # the AppImage with a bare "failed to run linuxdeploy" (v0.1.0 run
+          # 31148354360 — deb and rpm bundled fine). Binaries stay unstripped.
+          NO_STRIP: "true"
+        with:
+          projectPath: apps/native
+          # Tag builds: draft release with the bundles attached.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Nexus {0}', github.ref_name) || '' }}
+          releaseDraft: true
+          # Verbose on Linux only: the AppImage step is the one that fails
+          # opaquely ("failed to run linuxdeploy" with no stderr otherwise).
+          args: ${{ matrix.key == 'linux' && '--verbose' || '' }}
+
+      - name: Upload bundles as artifacts (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: nexux-${{ matrix.label }}
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ matrix.artifacts }}

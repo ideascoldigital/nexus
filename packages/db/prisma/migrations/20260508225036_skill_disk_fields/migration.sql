@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "Skill" ADD COLUMN "body" TEXT;
+ALTER TABLE "Skill" ADD COLUMN "path" TEXT;
+ALTER TABLE "Skill" ADD COLUMN "scope" TEXT;

@@ -1,0 +1,1054 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// Workspace - hard isolation boundary: each workspace owns its projects,
+// agent/skill catalogs, credentials and (key-prefixed) settings. "ws-default"
+// is seeded by migration and holds everything created before workspaces.
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  icon      String? // emoji shown in the switcher; null = first letter
+  logo      String? // small data-URL image; wins over icon when set
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projects    Project[]
+  agents      Agent[]
+  skills      Skill[]
+  credentials CloudCredential[]
+}
+
+model Project {
+  id            String    @id @default(cuid())
+  workspaceId   String    @default("ws-default")
+  workspace     Workspace @relation(fields: [workspaceId], references: [id])
+  name          String
+  description   String?
+  workspacePath String? // root directory for the project workspace
+  bootstrapType String? // set when bootstrapped from scratch: frontend | backend | fullstack | scripting | data-ai | research | mobile | library
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  repositories  Repository[]
+  features      Feature[]
+  conversations Conversation[]
+  plans         Plan[]
+  projectSkills ProjectSkill[]
+  projectAgents ProjectAgent[]
+  agentSkills   AgentSkill[]
+  brain         ProjectBrain?
+  phases        Phase[]
+  devPhases     DevPhase[]
+  document      ProjectDocument?
+  envVars       ProjectEnvVar[]
+  sandboxConfig SandboxConfig?
+  sandboxes     Sandbox[]
+  stackNodes    StackNode[]
+  stackEdges    StackEdge[]
+  taskSchedules TaskSchedule[]
+}
+
+model Repository {
+  id          String   @id @default(cuid())
+  projectId   String
+  name        String // display name e.g. "frontend", "api", "infra"
+  repoUrl     String?
+  localPath   String?
+  cloneStatus String   @default("pending") // pending | cloning | ready | error
+  isMain      Boolean  @default(false) // primary repo used as cwd for conversations
+  // Git credential to clone/pull this repo with. Null = fall back to the first
+  // saved credential for the remote's provider, which is right until an install
+  // holds two accounts on the same host: several GitHub tokens are ordinary
+  // (personal plus one per org), and guessing picks one that cannot see a
+  // private repo belonging to the other.
+  gitCredentialId String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  setup         RepositorySetup?
+  envVars       ProjectEnvVar[]
+  stackNode     StackNode?
+  // SetNull, not Cascade: deleting a credential must never delete the repo row
+  // — it just returns this repo to the provider-wide fallback.
+  gitCredential CloudCredential? @relation("RepositoryGitCredential", fields: [gitCredentialId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+}
+
+// RepositorySetup - how to install/build/run one repository inside a sandbox
+model RepositorySetup {
+  id             String   @id @default(cuid())
+  repositoryId   String   @unique
+  installCommand String? // e.g. "pnpm install"
+  buildCommand   String? // e.g. "pnpm build"
+  runCommand     String? // e.g. "pnpm start"
+  // Branch this repo is cloned at, overriding SandboxConfig.branch.
+  // null = fall back to the project-wide base branch, then the repo default.
+  branch         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+}
+
+// ProjectEnvVar - environment variables injected into sandboxes.
+// repositoryId null  -> project-wide (exported for every shell on the instance)
+// repositoryId set   -> written to <repo>/.env after clone
+model ProjectEnvVar {
+  id           String   @id @default(cuid())
+  projectId    String
+  repositoryId String?
+  key          String
+  value        String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  repository Repository? @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+// StackNode - a unit on the project "Stack" canvas: a repository or an infra
+// service (postgres, redis, ...). Defines how it runs (docker vs local) so the
+// stack can be composed and brought up as a whole.
+model StackNode {
+  id           String  @id @default(cuid())
+  projectId    String
+  kind         String // "repo" | "service"
+  repositoryId String? @unique // set when kind = "repo"
+  name         String // display + compose service name (slugified at generation)
+  runMode      String  @default("docker") // "docker" | "local"
+
+  // docker mode
+  image        String? // infra services (e.g. "postgres:17")
+  dockerfile   String? // path relative to repo localPath, default "Dockerfile"
+  buildContext String? // subdir relative to repo localPath, default "."
+  command      String? // container command override
+
+  // local mode
+  installCommand String? // e.g. "pnpm install" — how this repo installs deps
+  buildCommand   String? // e.g. "pnpm build"
+  localCommand String? // e.g. "pnpm dev"
+  stopCommand  String? // optional teardown, e.g. "make docker-down"
+  workdir      String? // subdir relative to localPath for cwd
+  // The command is a launcher: it starts background work (containers, a
+  // daemon) and exits. Its process exiting says nothing about liveness, and
+  // stopCommand — not killing the process — is what tears it down.
+  managesServices Boolean @default(false)
+
+  ports     Json? // [{ host: number, container: number }]
+  env       Json? // [{ key: string, value: string }]
+  volumes   Json? // [{ host: string, container: string }]
+  detection Json? // cached DetectionResult
+  // Ordered StackPhase[] — the node's commands, each saying what it does
+  // (install/build/services/run/stop) and what executes it (host, compose,
+  // compose-extern, container). Source of truth (spec 17 / D-20); the command
+  // columns above are still written from it, and drop once nothing reads them.
+  // Null on rows written before the cutover — derive with phasesOf().
+  phases Json?
+
+  posX      Float    @default(0)
+  posY      Float    @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  repository Repository? @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  edgesFrom  StackEdge[] @relation("StackEdgeSource")
+  edgesTo    StackEdge[] @relation("StackEdgeTarget")
+
+  @@index([projectId])
+}
+
+// StackEdge - dependency between stack nodes. source depends_on target
+// (arrow points from the app to its dependency).
+model StackEdge {
+  id        String @id @default(cuid())
+  projectId String
+  sourceId  String
+  targetId  String
+
+  project Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  source  StackNode @relation("StackEdgeSource", fields: [sourceId], references: [id], onDelete: Cascade)
+  target  StackNode @relation("StackEdgeTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, targetId])
+  @@index([projectId])
+}
+
+// CloudCredential - saved, named provider credentials for sandboxes.
+// data JSON: civo/github => { token }, aws => { accessKeyId, secretAccessKey },
+// LLM providers (openai | openrouter | google | xai-llm | anthropic-key | zai) => { apiKey }
+model CloudCredential {
+  id          String    @id @default(cuid())
+  workspaceId String    @default("ws-default")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  name        String
+  provider    String // civo | aws | github | gitlab | bitbucket | claude | openai | openrouter | google | xai-llm | anthropic-key | zai | tailscale
+  data        Json
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  sandboxConfigs       SandboxConfig[]              @relation("SandboxConfigCredential")
+  githubSandboxConfigs SandboxConfig[]              @relation("SandboxConfigGithubCredential")
+  claudeSandboxConfigs SandboxConfig[]              @relation("SandboxConfigClaudeCredential")
+  llmSandboxConfigs    SandboxConfigLlmCredential[]
+  sandboxes            Sandbox[]
+  nexusHosts           NexusHost[]                  @relation("NexusHostCredential")
+  tailscaleNexusHosts  NexusHost[]                  @relation("NexusHostTailscaleCredential")
+  registryNexusHosts   NexusHost[]                  @relation("NexusHostRegistryCredential")
+  repositories         Repository[]                 @relation("RepositoryGitCredential")
+
+  @@index([provider])
+}
+
+// NexusHost - the 24/7 VM that runs Nexux itself (spec 19).
+//
+// Deliberately not a `Sandbox`: a sandbox belongs to a project, is often
+// ephemeral, and local ones are reconciled by inspecting Docker containers on
+// this machine (D-24) — a host is none of those, and sharing the table would
+// list it in every project's Sandboxes tab while marking it dead.
+model NexusHost {
+  id       String @id @default(cuid())
+  name     String // instance hostname
+  status   String @default("pending") // pending | provisioning | bootstrapping | running | error | destroying | destroyed
+  provider String @default("civo") // civo | aws
+
+  credentialId String? // cloud credential used to provision; destroy prefers the same account
+  // Tailscale auth key (provider "tailscale"). Provisioning is refused without
+  // one: a VM running this unauthenticated app that cannot join the private
+  // network is the one outcome worth blocking outright (D-34).
+  tailscaleCredentialId String?
+  // Git credential the host logs in to the image registry with. GHCR accepts a
+  // GitHub PAT with read:packages as the docker password, so a private package
+  // needs no second secret — but it does need the *right* token, which is why
+  // this is chosen rather than inferred from whichever git credential is oldest.
+  registryCredentialId String?
+
+  region    String
+  size      String
+  diskImage String @default("ubuntu-jammy")
+
+  instanceId String?
+  // Provider-assigned, and NOT how the dashboard is reached — nothing is
+  // published on it. Kept so "did the VM come up?" stays answerable, and for
+  // the SSH that reads bootstrap state.
+  publicIp   String?
+  // 100.x.y.z — the address the app actually binds and serves on.
+  tailscaleIp   String?
+  tailscaleName String? // MagicDNS name, when available
+
+  // What was actually pulled, not what was configured: the setting can change
+  // later and this must stay answerable.
+  imageRef           String
+  pullEmbeddingModel Boolean @default(true) // the slowest bootstrap step; opt out if embeddings are not wanted
+
+  workDir String // terraform working directory on disk
+  log     String @default("")
+  error   String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  destroyedAt DateTime?
+
+  credential          CloudCredential? @relation("NexusHostCredential", fields: [credentialId], references: [id], onDelete: SetNull)
+  tailscaleCredential CloudCredential? @relation("NexusHostTailscaleCredential", fields: [tailscaleCredentialId], references: [id], onDelete: SetNull)
+  registryCredential  CloudCredential? @relation("NexusHostRegistryCredential", fields: [registryCredentialId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+}
+
+// LLM provider API keys selected for a project's sandboxes (N:M with
+// CloudCredential rows whose provider is an LLM one: openai | openrouter |
+// google | xai-llm | anthropic-key). Injected as env vars so the OpenCode
+// CLI picks them up (OPENAI_API_KEY, OPENROUTER_API_KEY, ...).
+model SandboxConfigLlmCredential {
+  id           String @id @default(cuid())
+  configId     String
+  credentialId String
+
+  config     SandboxConfig   @relation(fields: [configId], references: [id], onDelete: Cascade)
+  credential CloudCredential @relation(fields: [credentialId], references: [id], onDelete: Cascade)
+
+  @@unique([configId, credentialId])
+  @@index([configId])
+}
+
+// SandboxConfig - per-project settings for ephemeral sandbox instances (1:1 with Project)
+model SandboxConfig {
+  id                   String   @id @default(cuid())
+  projectId            String   @unique
+  provider             String   @default("civo") // civo | aws
+  credentialId         String? // saved credential to launch with (null = first credential for the provider, or legacy settings)
+  githubCredentialId   String? // saved GitHub token injected as GITHUB_TOKEN (project env var wins; null = first github credential)
+  claudeCredentialId   String? // saved Claude Code token injected as CLAUDE_CODE_OAUTH_TOKEN (project env var wins; null = first claude credential)
+  region               String   @default("NYC1") // provider region (Civo: NYC1..., AWS: us-east-1...)
+  size                 String   @default("g3.medium")
+  diskImage            String   @default("ubuntu-jammy")
+  branch               String? // base branch: cloned in the sandbox, task branches and PRs start from it (null = repo default)
+  sshPublicKey         String? // added to the instance for SSH access
+  installDocker        Boolean  @default(true)
+  installNode          Boolean  @default(true) // required by Claude Code / agent-browser
+  installClaudeCode    Boolean  @default(true)
+  installAgentBrowser  Boolean  @default(true)
+  installCloudflared   Boolean  @default(true) // quick tunnels for live previews
+  installTailscale     Boolean  @default(false) // join the instance to a Tailscale tailnet at bootstrap
+  tailscaleCredentialId String? // saved tailscale auth key used to join (null = first tailscale credential)
+  includeStackServices Boolean  @default(true) // start the Stack tab's docker services on the instance
+  telegramChatId       String? // per-project Telegram chat for notifications/remote control (null = global chat)
+  slackChannelId       String? // per-project Slack channel for notifications (null = global channel)
+  setupScript          String? // extra bash appended to the bootstrap script
+  mcpServers           Json? // Claude Code MCP servers, native mcpServers shape: { "<name>": { command, args, env } | { type: "http"|"sse", url, headers } } — written to ~/.claude.json at bootstrap
+  // Agent policy — how the delegated agent CLI works on this project's tasks.
+  brain                String   @default("claude") // claude | opencode — which agent CLI runs tasks/dev prompts
+  agentInstructions    String? // extra standing instructions for every task
+  taskTimeoutMinutes   Int? // cap on one agent run; null = 45 min default
+  claudeModel          String? // claude --model for agent runs (e.g. "sonnet", "opus"); null = CLI default
+  openCodeModel        String? // opencode -m "provider/model" (e.g. "anthropic/claude-sonnet-4-5"); null = CLI default
+  installOpenCode      Boolean  @default(false) // install the OpenCode CLI in the sandbox (auto-on when brain=opencode)
+  createPr             Boolean  @default(true) // open a PR with the result
+  runTests             Boolean  @default(true) // run/repair the test suite
+  captureScreenshots   Boolean  @default(true) // agent-browser screenshots in the PR
+  // After a task, run the app and expose it on a public cloudflare quick
+  // tunnel so the PR can be reviewed live. The URL is unguessable but public.
+  livePreview          Boolean  @default(false)
+  // null = inherit the port from the Stack canvas (the app node's port, or the
+  // one its dev command implies); a value is a deliberate override.
+  previewPort          Int?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  project          Project                      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  credential       CloudCredential?             @relation("SandboxConfigCredential", fields: [credentialId], references: [id], onDelete: SetNull)
+  githubCredential CloudCredential?             @relation("SandboxConfigGithubCredential", fields: [githubCredentialId], references: [id], onDelete: SetNull)
+  claudeCredential CloudCredential?             @relation("SandboxConfigClaudeCredential", fields: [claudeCredentialId], references: [id], onDelete: SetNull)
+  llmCredentials   SandboxConfigLlmCredential[]
+}
+
+// Sandbox - one provisioned ephemeral compute instance (Terraform-managed)
+model Sandbox {
+  id            String    @id @default(cuid())
+  projectId     String
+  name          String // instance hostname
+  status        String    @default("pending") // pending | provisioning | running | destroying | destroyed | error
+  provider      String    @default("civo")
+  credentialId  String? // credential used to provision — destroy prefers the same account
+  region        String
+  size          String
+  instanceId    String?
+  publicIp      String?
+  tailscaleIp   String? // tailnet address, read from the instance once tailscale is up (installTailscale sandboxes)
+  previewUrl    String? // live cloudflare tunnel to the app running on it
+  stackServices Json? // launch-time snapshot: [{name, image, ports:[{host,container}]}]
+  ephemeral     Boolean   @default(false) // destroy automatically after its task finishes
+  dedicated     Boolean   @default(false) // dev sandbox: chat-style prompts, no PR pipeline, never auto-destroyed
+  muteTelegram  Boolean   @default(false) // silence outgoing Telegram notifications for this sandbox
+  muteSlack     Boolean   @default(false) // silence outgoing Slack notifications for this sandbox
+  archived      Boolean   @default(false) // hidden from lists; kept so task/PR history survives ("remove from list" archives, never deletes)
+  devSessionId  String? // continuous Claude session for dev prompts (reset = null)
+  workDir       String // terraform working directory on disk
+  log           String    @default("")
+  error         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  destroyedAt   DateTime?
+
+  project    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  credential CloudCredential?  @relation(fields: [credentialId], references: [id], onDelete: SetNull)
+  tasks      SandboxTask[]
+  processes  SandboxProcess[]
+
+  @@index([projectId])
+}
+
+// SandboxProcess - one long-running command started on a sandbox instance
+// (a repo's dev server, a launcher's emulators). One row per startable process,
+// so a multi-repo project can run each of its apps independently.
+//
+// `key` identifies the process across restarts and drives its remote PID/log
+// paths (/tmp/nexux-proc-<key>.{pid,log}); killing is always by that PID, never
+// by pattern. Derived from the stack node ("<nodeId>#<index>") or, for repos
+// with no node, from the repository ("repo-<repositoryId>").
+model SandboxProcess {
+  id           String    @id @default(cuid())
+  sandboxId    String
+  key          String // stable slug: <nodeId>#<i> | repo-<repositoryId>
+  label        String // display name, e.g. "web" or "functions (2)"
+  repositoryId String? // repo this process belongs to, when it has one
+  command      String
+  cwd          String // absolute remote dir the command runs in
+  port         Int? // port it serves on, when known — drives probe + tunnel
+  role         String    @default("run") // run | services (a launcher)
+  status       String    @default("stopped") // stopped | starting | running | error
+  pid          Int?
+  previewUrl   String? // cloudflare quick tunnel, when exposed
+  error        String?
+  startedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sandbox Sandbox @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
+  @@unique([sandboxId, key])
+  @@index([sandboxId])
+}
+
+// SandboxTask - one headless Claude Code run on a sandbox instance,
+// optionally driven by a Feature.
+model SandboxTask {
+  id         String    @id @default(cuid())
+  sandboxId  String
+  featureId  String?
+  kind       String    @default("task") // task (PR pipeline) | dev (free-form chat prompt)
+  prompt     String
+  workDir    String // remote cwd, e.g. /opt/nexux/metaphor
+  status     String    @default("queued") // queued | running | completed | error | canceled
+  phase      String? // clone | agent | tests | pr — what it's doing right now
+  branch     String? // nexux/<feature-slug>
+  prUrl      String? // PR opened with the result
+  previewUrl String? // live cloudflare tunnel to the app built by this task
+  sessionId  String? // Claude Code session — lets a follow-up --resume it
+  followUpOf String? // parent task this one continues
+  attachments Json? // dev prompts: [{ name, mime, size, path }] staged on the host, pushed to the sandbox at run
+  log        String    @default("")
+  result     String? // Claude's final message
+  costUsd    Float?
+  durationMs Int?
+  error      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  finishedAt DateTime?
+
+  sandbox Sandbox  @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+  feature Feature? @relation(fields: [featureId], references: [id], onDelete: SetNull)
+
+  @@index([sandboxId])
+  @@index([featureId])
+}
+
+model Feature {
+  id                String   @id @default(cuid())
+  projectId         String
+  devPhaseId        String? // development phase (roadmap) this feature belongs to
+  title             String
+  description       String?
+  status            String   @default("backlog") // backlog | todo | queued | in_progress | in_review | done
+  priority          String   @default("medium") // low | medium | high | urgent
+  createPr          Boolean? // null = inherit SandboxConfig.createPr; true/false override it for this feature
+  aiRefinement      String?
+  sourceSectionKeys Json? // definition section keys this feature was generated from
+  attachments       Json? // [{ name, mime, size, path }] staged on the host; pushed to the sandbox when the feature is dispatched
+  order             Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  devPhase      DevPhase?      @relation(fields: [devPhaseId], references: [id], onDelete: SetNull)
+  conversations       Conversation[]
+  plans               Plan[]
+  featureIssues       FeatureIssue[]
+  featureClickUpTasks FeatureClickUpTask[]
+  featureGitLabIssues FeatureGitLabIssue[]
+  sandboxTasks        SandboxTask[]
+  taskSchedules       TaskSchedule[]
+
+  @@index([projectId])
+  @@index([status])
+  @@index([devPhaseId])
+}
+
+model Conversation {
+  id             String   @id @default(cuid())
+  projectId      String
+  featureId      String?
+  sessionId      String   @unique
+  name           String?
+  status         String   @default("idle") // idle | running | paused | completed | error
+  agentId        String?
+  model          String   @default("opus")
+  permissionMode String   @default("acceptEdits")
+  systemPrompt   String?
+  totalCostUsd   Float    @default(0)
+  lastActivity   DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  feature  Feature?  @relation(fields: [featureId], references: [id], onDelete: SetNull)
+  agent    Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  messages Message[]
+  plans    Plan[]
+
+  @@index([projectId])
+  @@index([featureId])
+  @@index([sessionId])
+}
+
+model Message {
+  id              String   @id @default(cuid())
+  conversationId  String
+  role            String // user | assistant | system | tool_use | tool_result
+  content         String
+  messageType     String   @default("text") // text | thinking | tool_use | tool_result | error
+  claudeMessageId String?
+  costUsd         Float?
+  agentRole       String? // user | orchestrator | project-manager | finance-manager | technical-architect | product-ux | detractor
+  createdAt       DateTime @default(now())
+
+  conversation Conversation              @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  revisions    ProjectDocumentRevision[]
+
+  @@index([conversationId])
+  @@index([agentRole])
+}
+
+model Agent {
+  id           String    @id @default(cuid())
+  workspaceId  String    @default("ws-default")
+  workspace    Workspace @relation(fields: [workspaceId], references: [id])
+  name         String    @unique
+  description  String?
+  systemPrompt String
+  model        String    @default("opus")
+  color        String    @default("#3b82f6")
+  isBuiltIn    Boolean   @default(false)
+  filePath     String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  conversations Conversation[]
+  projectAgents ProjectAgent[]
+  agentSkills   AgentSkill[]
+}
+
+model Skill {
+  id          String    @id @default(cuid())
+  workspaceId String    @default("ws-default")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  name        String    @unique
+  description String?
+  source      String    @default("built-in") // built-in | plugin | user | project | custom
+  scope       String? // user | project | plugin (where SKILL.md lives on disk)
+  path        String? // absolute path to SKILL.md (for disk-backed skills)
+  body        String? // SKILL.md body (no frontmatter)
+  isBuiltIn   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  projectSkills ProjectSkill[]
+  agentSkills   AgentSkill[]
+}
+
+model ProjectSkill {
+  id        String @id @default(cuid())
+  projectId String
+  skillId   String
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  skill   Skill   @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, skillId])
+  @@index([projectId])
+}
+
+model ProjectAgent {
+  id        String @id @default(cuid())
+  projectId String
+  agentId   String
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  agent   Agent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, agentId])
+  @@index([projectId])
+}
+
+model AgentSkill {
+  id        String   @id @default(cuid())
+  agentId   String
+  skillId   String
+  projectId String?
+  createdAt DateTime @default(now())
+
+  agent   Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  skill   Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([agentId, skillId, projectId])
+  @@index([projectId])
+  @@index([agentId])
+}
+
+model Plan {
+  id             String   @id @default(cuid())
+  projectId      String
+  featureId      String?
+  conversationId String?
+  title          String
+  content        String
+  status         String   @default("draft") // draft | pending_review | approved | rejected
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  feature      Feature?      @relation(fields: [featureId], references: [id], onDelete: SetNull)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([status])
+}
+
+model ProjectBrain {
+  id        String   @id @default(cuid())
+  projectId String   @unique
+  provider  String // claude | codex | xai | ollama | lmstudio | ...
+  model     String
+  config    Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Tool {
+  id          String   @id @default(cuid())
+  name        String
+  provider    String // cli | mcp
+  type        String // command | server
+  command     String?
+  endpoint    String?
+  description String?
+  schema      Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Settings {
+  id        String   @id @default(cuid())
+  key       String   @unique // e.g. "anthropic_api_key", "openai_api_key", "xai_api_key", "codex_api_key"
+  value     String // encrypted API key or configuration value
+  provider  String? // anthropic | openai | xai | ollama | lmstudio | codex
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Connected Accounts - for OAuth integrations (GitHub, Slack, etc)
+model ConnectedAccount {
+  id            String    @id @default(cuid())
+  providerType  String // github | clickup | etc (not for API key providers)
+  category      String    @default("integration") // integration
+  label         String // user-friendly name for the account
+  authMode      String // oauth | pat | github_app
+  status        String    @default("pending") // pending | connected | expired | revoked | error
+  metadata      Json? // provider-specific metadata (username, avatar_url, etc)
+  lastCheckedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  oauthTokens  OAuthToken[]
+  githubIssues GitHubIssue[]
+  clickUpTasks ClickUpTask[]
+  gitLabIssues GitLabIssue[]
+  gitLabEpics  GitLabEpic[]
+
+  @@index([providerType])
+  @@index([status])
+}
+
+// OAuth Tokens - encrypted storage (for future OAuth integrations)
+model OAuthToken {
+  id           String    @id @default(cuid())
+  accountId    String
+  accessToken  String // encrypted
+  refreshToken String? // encrypted
+  tokenType    String    @default("Bearer")
+  expiresAt    DateTime?
+  scope        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  account ConnectedAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+}
+
+// OAuth State - temporary state storage for OAuth flow
+model OAuthState {
+  id           String   @id @default(cuid())
+  state        String   @unique
+  provider     String
+  codeVerifier String? // for PKCE
+  returnUrl    String?
+  metadata     Json?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([state])
+  @@index([expiresAt])
+}
+
+// GitHub Issues - cached from GitHub API
+model GitHubIssue {
+  id              String    @id @default(cuid())
+  accountId       String
+  owner           String // repo owner (user or org)
+  repo            String // repo name
+  issueNumber     Int
+  title           String
+  body            String?
+  state           String // open | closed
+  labels          Json? // array of {name, color}
+  url             String
+  author          String?
+  assignees       Json? // array of login strings
+  milestone       String?
+  closedAt        DateTime?
+  githubCreatedAt DateTime?
+  syncedAt        DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  account       ConnectedAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  featureIssues FeatureIssue[]
+
+  @@unique([accountId, owner, repo, issueNumber])
+  @@index([accountId])
+  @@index([state])
+  @@index([owner, repo])
+}
+
+// FeatureIssue - links a Feature to a GitHub Issue
+model FeatureIssue {
+  id        String   @id @default(cuid())
+  featureId String
+  issueId   String
+  createdAt DateTime @default(now())
+
+  feature Feature     @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  issue   GitHubIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@unique([featureId, issueId])
+  @@index([featureId])
+  @@index([issueId])
+}
+
+// ClickUp Tasks - cached from the ClickUp API (mirror of GitHubIssue)
+model ClickUpTask {
+  id           String    @id @default(cuid())
+  accountId    String
+  taskId       String // ClickUp task id
+  teamId       String // ClickUp workspace id
+  spaceId      String?
+  folderId     String?
+  listId       String
+  listName     String?
+  name         String
+  description  String?
+  status       String? // raw ClickUp status label (free-form per list)
+  statusType   String? // open | custom | done | closed
+  priority     String? // urgent | high | normal | low
+  dueDate      DateTime?
+  url          String
+  assignees    Json? // array of usernames
+  tags         Json? // array of tag names
+  parentTaskId String? // ClickUp subtask hierarchy (null = top-level)
+  syncedAt     DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  account      ConnectedAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  featureTasks FeatureClickUpTask[]
+
+  @@unique([accountId, taskId])
+  @@index([accountId])
+  @@index([listId])
+}
+
+// FeatureClickUpTask - links a Feature to a ClickUp task
+model FeatureClickUpTask {
+  id        String   @id @default(cuid())
+  featureId String
+  taskId    String
+  createdAt DateTime @default(now())
+
+  feature Feature     @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  task    ClickUpTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([featureId, taskId])
+  @@index([featureId])
+  @@index([taskId])
+}
+
+// GitLab Issues - cached from a GitLab instance (mirror of GitHubIssue).
+//
+// Keyed by the numeric project id rather than the path: a project that gets
+// renamed or moved between groups keeps its id, and re-syncing under the new
+// path would otherwise duplicate every issue. `projectPath` rides along as
+// the label the pickers show.
+model GitLabIssue {
+  id              String    @id @default(cuid())
+  accountId       String
+  projectId       Int // numeric GitLab project id
+  projectPath     String // group/subgroup/project, for display
+  issueIid        Int // per-project issue number (the "#12" users know)
+  title           String
+  body            String?
+  state           String // opened | closed
+  labels          Json? // array of label name strings
+  url             String
+  author          String?
+  assignees       Json? // array of username strings
+  milestone       String?
+  closedAt        DateTime?
+  gitlabCreatedAt DateTime?
+  syncedAt        DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // The epic this issue hangs off, denormalized from the issue payload rather
+  // than joined to `GitLabEpic`. An issue's epic routinely lives in a *different*
+  // group than the one it was fetched from — `operators/operator-central#300`
+  // belongs to epic &586 of the `civo` group — so requiring the epic row to
+  // exist would drop the reference for every group the user has not synced.
+  // `epicId` is GitLab's global id; `epicIid` + `epicGroupId` are what render
+  // the "&586" a human recognises.
+  epicId          Int?
+  epicIid         Int?
+  epicGroupId     Int?
+  epicTitle       String?
+
+  // Which column this issue sat in on the board it was imported from. GitLab
+  // 18 models these as work-item *statuses* ("Ready for Dev", "Released"), not
+  // labels, and they carry the placement a plain opened/closed would flatten.
+  boardStatus     String?
+
+  account       ConnectedAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  featureIssues FeatureGitLabIssue[]
+
+  @@unique([accountId, projectId, issueIid])
+  @@index([accountId])
+  @@index([state])
+  @@index([projectId])
+  @@index([accountId, epicId])
+  // Group reads match on the path prefix (`operators/…`), which is also how a
+  // parent group picks up every subgroup below it without a second query.
+  @@index([accountId, projectPath])
+}
+
+// GitLab Epics - group-level bodies of work, cached so the epic picker can
+// search without a round-trip per keystroke.
+//
+// Keyed on GitLab's global `id`, not on (group, iid): an epic's iid is unique
+// only within its own group, and both the issue payload and nested epics refer
+// across groups. `groupId`/`epicIid` are kept for display and for building the
+// URLs a user clicks.
+model GitLabEpic {
+  id              String    @id @default(cuid())
+  accountId       String
+  epicId          Int // GitLab's global epic id
+  epicIid         Int // per-group number (the "&6" users know)
+  groupId         Int
+  groupPath       String
+  title           String
+  body            String?
+  state           String // opened | closed
+  labels          Json? // array of label name strings
+  url             String
+  author          String?
+  parentId        Int? // global id of the parent epic, when nested
+  startDate       DateTime?
+  dueDate         DateTime?
+  closedAt        DateTime?
+  gitlabCreatedAt DateTime?
+  syncedAt        DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  account ConnectedAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, epicId])
+  @@index([accountId, groupId])
+  @@index([state])
+}
+
+// FeatureGitLabIssue - links a Feature to a GitLab issue (mirror of FeatureIssue)
+model FeatureGitLabIssue {
+  id        String   @id @default(cuid())
+  featureId String
+  issueId   String
+  createdAt DateTime @default(now())
+
+  feature Feature     @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  issue   GitLabIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@unique([featureId, issueId])
+  @@index([featureId])
+  @@index([issueId])
+}
+
+// Phase - ordered stages of the project-definer workflow
+model Phase {
+  id        String   @id @default(cuid())
+  projectId String
+  key       String // discovery | requirements | architecture | finance | risks | finalization
+  order     Int
+  status    String   @default("locked") // locked | active | completed | revisiting
+  title     String
+  summary   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, key])
+  @@index([projectId, order])
+}
+
+// DevPhase - development roadmap phase ("MVP", "Fase 2 — Pagos"...). Groups
+// features; proposed by AI from the definition document, editable by hand.
+model DevPhase {
+  id                String   @id @default(cuid())
+  projectId         String
+  name              String
+  goal              String?
+  order             Int      @default(0)
+  status            String   @default("planned") // planned | in_progress | done
+  sourceSectionKeys Json? // definition section keys that motivated this phase
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  features Feature[]
+
+  @@index([projectId, order])
+}
+
+// ProjectDocument - the structured technical planning doc per project
+model ProjectDocument {
+  id             String   @id @default(cuid())
+  projectId      String   @unique
+  version        Int      @default(1)
+  status         String   @default("draft") // draft | in_review | approved
+  conversationId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project  Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sections ProjectDocumentSection[]
+}
+
+// ProjectDocumentSection - one chunk of the planning doc (e.g. tech-stack, budget, risks)
+model ProjectDocumentSection {
+  id         String   @id @default(cuid())
+  documentId String
+  phaseKey   String
+  key        String
+  title      String
+  content    String   @default("")
+  ownerRole  String // project-manager | finance-manager | technical-architect | product-ux | detractor
+  order      Int      @default(0)
+  status     String   @default("empty") // empty | draft | approved
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  document  ProjectDocument           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  revisions ProjectDocumentRevision[]
+
+  @@unique([documentId, key])
+  @@index([documentId, order])
+  @@index([phaseKey])
+}
+
+// ProjectDocumentRevision - immutable history of section edits
+model ProjectDocumentRevision {
+  id         String   @id @default(cuid())
+  sectionId  String
+  content    String
+  authorRole String
+  messageId  String?
+  createdAt  DateTime @default(now())
+
+  section ProjectDocumentSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  message Message?               @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([sectionId, createdAt])
+}
+
+// EmbeddingIndex - tracks what has been indexed into vector stores (LanceDB).
+// LanceDB owns the vectors; this table owns control metadata for incremental diffs.
+// bucket + indexKey identify which physical store the source lives in:
+//   - bucket="repo",          indexKey=repoKey (shared across projects using same repo)
+//   - bucket="conversations", indexKey=projectSlug
+//   - bucket="project-data",  indexKey=projectSlug
+model EmbeddingIndex {
+  id          String   @id @default(cuid())
+  projectId   String
+  bucket      String   @default("project-data") // repo | conversations | project-data
+  indexKey    String   @default("")
+  sourceType  String // file | document_section | feature | message | skill
+  sourceId    String // path or db id
+  contentHash String
+  chunkCount  Int
+  provider    String // ollama-nomic | local-minilm | openai-3-small | openai-3-large
+  dimensions  Int
+  indexedAt   DateTime @default(now())
+
+  @@unique([bucket, indexKey, sourceType, sourceId])
+  @@index([projectId])
+  @@index([bucket, indexKey])
+}
+
+// ApiToken - a bearer token for the MCP control surface (spec 21), the first
+// inbound programmatic path into Nexux. Only the sha-256 `hash` is stored:
+// the token is shown once at creation and is unrecoverable afterwards, so a
+// leaked screen cannot leak a token that was issued earlier.
+//
+// `scopes` is a string[] as Json, matching every other list column here
+// (sqlite has no array type). Revocation is a timestamp rather than a delete
+// because the row is the record that the token existed at all.
+model ApiToken {
+  id         String    @id @default(cuid())
+  name       String // what it is for, shown in Settings
+  hash       String    @unique // sha-256 of the token; never the token itself
+  scopes     Json // string[] — projects:read, tasks:write, sandboxes:write…
+  lastUsedAt DateTime? // a token nobody remembers issuing is visible as live
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([revokedAt])
+}
+
+// TaskSchedule - a recurring (cron) or one-shot (runAt) agent task. The
+// scheduler launches an ephemeral sandbox, runs the task (PR included) and
+// destroys the sandbox when it finishes.
+model TaskSchedule {
+  id         String    @id @default(cuid())
+  projectId  String
+  featureId  String? // task = the feature's prompt; else use `prompt`
+  prompt     String?
+  provider   String    @default("local") // civo | aws | local
+  ephemeral  Boolean   @default(true) // tear the sandbox down after the task
+  cron       String? // 5-field cron for recurring runs
+  runAt      DateTime? // one-shot
+  enabled    Boolean   @default(true)
+  lastRunAt  DateTime?
+  nextRunAt  DateTime?
+  lastTaskId String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  feature Feature? @relation(fields: [featureId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([enabled, nextRunAt])
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "tui",
+  // Turborepo hands tasks a filtered environment, so anything not declared
+  // here silently never arrives. NODE_OPTIONS is the one that matters: without
+  // it `next dev` runs on V8's default heap (~4.3 GB), and Next restarts the
+  // dev server whenever used heap passes 80% of that limit
+  // (`start-server.js`). On this app that lands every few minutes — and each
+  // restart kills the in-flight agent task, which is how the passthrough came
+  // to be missed: the ceiling appeared to be set and was being dropped here.
+  //
+  // Most of the process's RSS is Turbopack's native (Rust) memory, which V8
+  // does not count, so a box that looks like it is using 8 GB can still be
+  // restarting over a 3.4 GB heap.
+  "globalPassThroughEnv": ["NODE_OPTIONS"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": {},
+    "test": {},
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "db:migrate": {
+      "cache": false
+    }
+  }
+}

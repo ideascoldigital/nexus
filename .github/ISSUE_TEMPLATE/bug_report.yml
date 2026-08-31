@@ -1,0 +1,31 @@
+name: Bug report
+description: Something broke or behaves wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead.
+      placeholder: |
+        1. Launched a local Docker sandbox from the wizard
+        2. Expected it to reach "running"
+        3. It stayed in "provisioning" with this in the log: …
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node/pnpm versions, how you run Nexus (dev / Docker / native app), sandbox provider if relevant.
+      placeholder: |
+        macOS 15.4 · Node 22 · pnpm 10 · `pnpm dev` · local Docker sandbox
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Paste the relevant log output. **Redact tokens, IPs and hostnames first.**
+      render: text

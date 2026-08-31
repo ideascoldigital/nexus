@@ -1,0 +1,34 @@
+{
+  "name": "@nexux/terminal",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./terminal-server": "./src/terminal-server.ts",
+    "./sidecar-server": "./src/sidecar-server.ts",
+    "./types": "./src/types.ts"
+  },
+  "scripts": {
+    "dev:terminal": "tsx --watch src/terminal-server.ts",
+    "dev:server": "tsx --watch src/sidecar-server.ts",
+    "start:terminal": "tsx src/terminal-server.ts",
+    "start:server": "tsx src/sidecar-server.ts",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "node scripts/fix-pty-permissions.mjs",
+    "test": "tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@nexux/config": "workspace:*",
+    "@nexux/core": "workspace:*",
+    "node-pty": "^1.1.0",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}

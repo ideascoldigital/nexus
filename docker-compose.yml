@@ -1,0 +1,65 @@
+# Nexux server deployment (a VM you keep running, or a local container run).
+#
+#   docker compose up -d --build
+#
+# SECURITY — read before exposing anything. The app has NO authentication: every
+# /api route is open, `/env-vars/<id>/reveal` returns stored secrets in
+# plaintext, and the terminal WS can exec into sandboxes. Ports are therefore
+# bound to NEXUX_BIND (default 127.0.0.1) rather than 0.0.0.0, so nothing is
+# reachable off-box until you deliberately change it. The supported way to reach
+# a remote install is a private network (Tailscale): set
+# NEXUX_BIND=<tailscale-ip> and publish nothing publicly. See docs/DEPLOYMENT.md.
+#
+# Secrets come from a local .env (never committed) — see .env.docker.example.
+services:
+  nexux:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nexux:latest
+    ports:
+      # Dashboard. Bind address is deliberate — see the note above.
+      - "${NEXUX_BIND:-127.0.0.1}:3030:3030"
+      # Human terminal (WS, @nexux/terminal). Without this "Open terminal" in
+      # the UI has nothing to connect to.
+      - "${NEXUX_BIND:-127.0.0.1}:3002:3002"
+    environment:
+      # Image already defaults these; listed here so prod overrides are obvious.
+      PORT: "3030"
+      DATABASE_URL: "file:/data/dashboard.db"
+      NEXUX_MIGRATIONS_DIR: "/app/prisma/migrations"
+      # LanceDB indexes and the sandbox SSH keypair live here, on the volume.
+      NEXUX_DATA_DIR: "/data"
+      # The bundled Ollama service below, not the host.
+      OLLAMA_URL: "http://ollama:11434"
+      NEXUX_TERMINAL_PORT: "3002"
+      # CORS origin the terminal server allows. Must match the URL you actually
+      # open the dashboard on, or the browser refuses the WS upgrade.
+      NEXUX_WEB_ORIGIN: "${NEXUX_WEB_ORIGIN:-http://127.0.0.1:3030}"
+    # Inject secrets (provider API keys, Telegram token) without baking them in.
+    # Optional so `up` works before you create one (copy .env.docker.example).
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - nexux-data:/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  # Local embeddings (nomic-embed-text) for semantic search and the ⌘K palette.
+  # Kept as a sibling service rather than bundled into the app image: the model
+  # is large, and this way it survives an app rebuild.
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    # Not published at all — only the app container needs to reach it, over the
+    # compose network. Publishing it would expose an unauthenticated model API.
+    expose:
+      - "11434"
+    restart: unless-stopped
+
+volumes:
+  nexux-data:
+  ollama-models:

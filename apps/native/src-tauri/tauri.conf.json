@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Nexus",
+  "version": "0.1.7",
+  "identifier": "com.ideascol.nexux",
+  "build": {
+    "beforeDevCommand": "PORT=3100 NEXUX_TERMINAL_PORT=3102 pnpm --filter @nexux/web dev:next",
+    "beforeBuildCommand": "pnpm --filter @nexux/native build:sidecar",
+    "devUrl": "http://localhost:3100",
+    "frontendDist": "sidecar-build/static"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Nexus",
+        "url": "index.html",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/node"
+    ],
+    "resources": {
+      "sidecar/": "sidecar/"
+    }
+  }
+}

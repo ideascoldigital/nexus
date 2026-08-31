@@ -1,0 +1,283 @@
+name: Release server image
+
+# Builds and publishes the Nexux server container image to GHCR
+# (ghcr.io/<owner>/nexus). This is the image a Nexus host pulls at bootstrap —
+# see docs/DEPLOYMENT.md and specs/19-nexus-host-provisioning.md. Provisioning
+# a VM that then fails to pull costs real money and looks like a Nexux bug, so
+# publishing is a prerequisite for that panel, not an afterthought.
+#
+# Runs on demand (workflow_dispatch), on a release tag (v*), and on pushes to
+# main. Only tags and main actually push; a manual run can build without
+# pushing (`push: false`) to check the Dockerfile still builds.
+#
+# **amd64 only by default.** arm64 is available but opt-in, because on an
+# amd64 runner it builds under QEMU emulation and that is catastrophically
+# slow: the same image takes ~1 minute natively and 45+ minutes emulated —
+# better-sqlite3, node-pty and the Next build all compile under the emulator.
+#
+# The usual fix is a native arm64 runner (`ubuntu-24.04-arm`), but GitHub only
+# provides those free for **public** repositories; this one is private, so they
+# are billable. Since the target VM's architecture is a deliberate choice and
+# amd64 is the default on Civo, Hetzner and EC2, paying 45 minutes on every
+# push for an architecture that may never be used is the wrong trade. Build
+# arm64 on demand via workflow_dispatch when a host actually needs it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push to GHCR (uncheck to only verify the build)"
+        type: boolean
+        default: true
+      platforms:
+        description: "Target platforms (arm64 emulates — expect 45+ min)"
+        type: choice
+        default: "linux/amd64"
+        options:
+          - "linux/amd64"
+          - "linux/amd64,linux/arm64"
+          - "linux/arm64"
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+# A newer commit on the same ref supersedes an in-flight build. Tags are never
+# cancelled: a half-published release tag is worse than a wasted runner.
+concurrency:
+  group: release-image-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  REGISTRY: ghcr.io
+  # Lowercased below — GHCR rejects uppercase in a repository name, and
+  # github.repository preserves the owner's casing.
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Ample for the default amd64 build (a few minutes with a warm cache).
+    # An opt-in arm64 run emulates and needs most of this budget.
+    timeout-minutes: 90
+
+    permissions:
+      contents: read
+      # Required to push to GHCR with the automatic GITHUB_TOKEN.
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Tags, not just the tip: an `edge` build derives its version from
+          # the nearest release tag (see "Derive the build version"), and a
+          # shallow clone has none of them.
+          fetch-depth: 0
+
+      # github.repository is "<owner>/<repo>" with the owner's original casing;
+      # container registries require lowercase. Compute it once here rather
+      # than sprinkling ${{ lower(...) }} (which Actions does not have).
+      - name: Resolve image reference
+        id: image
+        run: |
+          echo "ref=${REGISTRY}/$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      # QEMU only matters for the arm64 leg; harmless when building amd64 only.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Skipped for a build-only manual run, so the workflow stays useful to
+      # contributors without package write access.
+      - name: Log in to GHCR
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tag policy:
+      #   v1.2.3        -> 1.2.3, 1.2, latest
+      #   main          -> edge, main-<sha>
+      #   manual        -> the branch/tag name only
+      # `latest` is deliberately tied to semver tags, NOT to main: a Nexus host
+      # pulling :latest should get a release, not whatever landed an hour ago.
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.ref }}
+          # `latest=false` is load-bearing: metadata-action's default is
+          # `latest=auto`, which tags the FIRST build it sees as `latest` even
+          # on a branch. That silently made a push to main publish `latest`,
+          # which is exactly what the rule below exists to prevent — a host
+          # pulling :latest must get a release, not whatever landed an hour
+          # ago. The explicit `type=raw` line is the only thing allowed to set
+          # it, and only on a v* tag.
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=main-,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=Nexux
+            org.opencontainers.image.description=Local-first AI dev orchestrator — server image
+            org.opencontainers.image.licenses=UNLICENSED
+
+      # What the running app reports as its version.
+      #
+      # A tag build has one: metadata-action's {{version}} is the release. A
+      # main build has none, and the fallback used to be package.json — which
+      # only ever changes on the release commit itself, so every `edge` image
+      # between v0.1.4 and v0.1.6 reported "0.1.4". The statusbar then compared
+      # that frozen number against the newest release and showed
+      # "v0.1.6 available" on a host that had just pulled the newest edge, and
+      # Settings showed the same version before and after an update that had
+      # in fact replaced the image.
+      #
+      # `git describe` gives an edge build an honest, monotonic identity:
+      # 0.1.6-7-gabc1234 — seven commits past v0.1.6. isNewer() parses on
+      # [-+] and compares 0.1.6 against the latest release, so a host on edge
+      # stops being told to update to a release it already contains.
+      - name: Derive the build version
+        id: appversion
+        run: |
+          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            echo "value=${{ steps.meta.outputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            # No tag reachable yet (a fresh fork, a shallow surprise): fall
+            # back to package.json rather than baking an empty string, which
+            # would put the frozen-version bug straight back.
+            described=$(git describe --tags --match 'v[0-9]*' --always 2>/dev/null || true)
+            case "$described" in
+              v*) echo "value=${described#v}" >> "$GITHUB_OUTPUT" ;;
+              *)  echo "value=" >> "$GITHUB_OUTPUT" ;;
+            esac
+          fi
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ github.event_name == 'workflow_dispatch' && inputs.platforms || 'linux/amd64' }}
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Build identity for /api/version — how a running host reports which
+          # build it is on (the context has no .git, so the SHA cannot be read
+          # inside the build).
+          # NEXUX_VERSION is never metadata-action's raw {{version}} on a main
+          # build — that is the literal string "edge", which baked in showed
+          # "vedge" in the statusbar and made the update check compare garbage.
+          # The step above resolves it instead: the release on a tag build, a
+          # `git describe` on main, and an empty string only when neither can
+          # be had (then /api/version falls back to package.json).
+          build-args: |
+            NEXUX_GIT_SHA=${{ github.sha }}
+            NEXUX_VERSION=${{ steps.appversion.outputs.value }}
+          # GitHub's own layer cache — the Next build and the native module
+          # compilation (better-sqlite3, node-pty) dominate the runtime, and
+          # both cache well when only app source changed.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      # Prove the image actually runs before anyone provisions a VM around it.
+      # Requires a pushed image (it is pulled by digest) and an amd64 leg — the
+      # runner is amd64, and executing the arm64 image under QEMU here would
+      # test the emulator more than the image.
+      - name: Smoke test the published image
+        if: >-
+          ${{ (github.event_name != 'workflow_dispatch' || inputs.push)
+              && contains(github.event_name == 'workflow_dispatch' && inputs.platforms || 'linux/amd64', 'linux/amd64') }}
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          echo "::group::Runtime tools"
+          # A Nexus host provisions cloud sandboxes from this image; those shell
+          # out to terraform/ssh/git. Missing binaries fail at launch time, in
+          # front of the user, rather than here.
+          docker run --rm --entrypoint sh "$IMAGE" -c '
+            set -e
+            terraform version | head -1
+            ssh -V
+            git --version
+            test "$NEXUX_DATA_DIR" = /data
+          '
+          echo "::endgroup::"
+
+          echo "::group::Boot and serve"
+          docker volume create nexux-smoke >/dev/null
+          docker run -d --name nexux-smoke \
+            -v nexux-smoke:/data \
+            -p 127.0.0.1:3030:3030 \
+            "$IMAGE" >/dev/null
+
+          # Migrations run on the first DB connection, so readiness is the
+          # health route answering, not the container being up.
+          ok=""
+          for i in $(seq 1 40); do
+            if curl -fsS -m 5 http://127.0.0.1:3030/api/health >/tmp/health.json 2>/dev/null; then
+              ok=1; break
+            fi
+            sleep 3
+          done
+
+          if [ -z "$ok" ]; then
+            echo "health check never answered" >&2
+            docker logs nexux-smoke 2>&1 | tail -50 >&2
+            exit 1
+          fi
+
+          cat /tmp/health.json
+          # terraform is installed in the image, so the app's own readiness
+          # probe must see it — this catches a PATH/permissions regression that
+          # `terraform version` above would not.
+          grep -q '"terraform":true' /tmp/health.json || {
+            echo "app does not see terraform" >&2
+            exit 1
+          }
+
+          # The data dir must be the volume, not an image layer: otherwise a
+          # rebuild silently drops the search indexes and regenerates the
+          # sandbox SSH key, locking the install out of provisioned VMs (D-34).
+          docker exec nexux-smoke test -f /data/dashboard.db
+          echo "::endgroup::"
+
+      - name: Clean up smoke test
+        if: always()
+        run: |
+          docker rm -f nexux-smoke >/dev/null 2>&1 || true
+          docker volume rm nexux-smoke >/dev/null 2>&1 || true
+
+      - name: Summary
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
+        run: |
+          {
+            echo "### Server image published"
+            echo
+            echo "**Digest:** \`${{ steps.build.outputs.digest }}\`"
+            echo
+            echo "**Tags:**"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "Pull it on a host with:"
+            echo '```bash'
+            echo "docker pull ${{ steps.image.outputs.ref }}:latest"
+            echo '```'
+            echo
+            echo "> The published package is **private by default**. Make it public"
+            echo "> (Packages → nexus → Package settings → Change visibility), or a"
+            echo "> Nexus host will need a registry token to pull it."
+          } >> "$GITHUB_STEP_SUMMARY"

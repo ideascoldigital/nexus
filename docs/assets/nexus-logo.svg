@@ -1,0 +1,19 @@
+<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Nexus Point mark on its tile — agents (satellite nodes) converging on a core.
+       sRGB equivalents of the identity tokens: Signal #ba93fb, Core #c9a8fc, Void #0b0d12. -->
+  <rect width="120" height="120" rx="26" fill="#0b0d12"/>
+  <rect x="0.5" y="0.5" width="119" height="119" rx="25.5" stroke="#ba93fb" stroke-opacity="0.18"/>
+  <g transform="translate(10 10)">
+    <line x1="50" y1="50" x2="14" y2="24" stroke="#ba93fb" stroke-width="3" opacity="0.55"/>
+    <line x1="50" y1="50" x2="86" y2="24" stroke="#ba93fb" stroke-width="3" opacity="0.55"/>
+    <line x1="50" y1="50" x2="12" y2="62" stroke="#ba93fb" stroke-width="3" opacity="0.55"/>
+    <line x1="50" y1="50" x2="88" y2="62" stroke="#ba93fb" stroke-width="3" opacity="0.55"/>
+    <line x1="50" y1="50" x2="50" y2="90" stroke="#ba93fb" stroke-width="3" opacity="0.55"/>
+    <circle cx="14" cy="24" r="6" fill="#ba93fb"/>
+    <circle cx="86" cy="24" r="6" fill="#ba93fb"/>
+    <circle cx="12" cy="62" r="6" fill="#ba93fb"/>
+    <circle cx="88" cy="62" r="6" fill="#ba93fb"/>
+    <circle cx="50" cy="90" r="6" fill="#ba93fb"/>
+    <circle cx="50" cy="50" r="13" fill="#c9a8fc"/>
+  </g>
+</svg>

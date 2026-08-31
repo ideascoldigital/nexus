@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The Prisma client output dir (packages/db/src/generated/prisma) is
+      # gitignored — typecheck fails without generating it first. generate
+      # never touches the DB, but prisma.config.ts requires DATABASE_URL to
+      # resolve, so give it a dummy sqlite path.
+      - name: Generate Prisma client
+        run: pnpm --filter @nexux/db generate
+        env:
+          DATABASE_URL: "file:./ci.db"
+
+      # One step per package: a red X in the CI summary points straight at
+      # the failing package. `!cancelled()` keeps the rest running after a
+      # failure so every broken package shows up in the same run.
+      - name: Test @nexux/core
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/core test
+      - name: Test @nexux/config
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/config test
+      - name: Test @nexux/db
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/db test
+      - name: Test @nexux/storage
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/storage test
+      - name: Test @nexux/embeddings
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/embeddings test
+      - name: Test @nexux/terminal
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/terminal test
+      - name: Test @nexux/harness
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/harness test
+      - name: Test @nexux/llm
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/llm test
+      - name: Test @nexux/sandbox
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/sandbox test
+      - name: Test @nexux/mcp
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/mcp test
+      - name: Test @nexux/web
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/web test
+      # Native ↔ web parity: versions, ports, build flags, prune lists.
+      - name: Test @nexux/native (parity)
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nexux/native test
+
+      # --continue for the same reason the tests are split per package: turbo
+      # otherwise aborts the remaining packages on the first failure, so one
+      # broken package hides every other. That is how a one-line type error
+      # stayed red on main for three pushes (2026-08-11 → 08-13) with nothing
+      # to say whether anything else was broken too.
+      - name: Typecheck
+        if: ${{ !cancelled() }}
+        run: pnpm typecheck --continue
+
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: pnpm lint
