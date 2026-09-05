@@ -1,11 +1,12 @@
 // Telegram bot integration: task/sandbox notifications + remote control.
 //
 // Local-first friendly: a long-polling loop (getUpdates) instead of a webhook,
-// so no public URL is needed. The bot token is global (Settings:
-// telegram_bot_token). The chat is resolved per project —
-// SandboxConfig.telegramChatId first (e.g. one Telegram group per project),
-// falling back to the global Settings: telegram_chat_id. Everything no-ops
-// when nothing is configured.
+// so no public URL is needed. The bot token lives in Settings
+// (telegram_bot_token), resolved workspace-aware like Slack's: a project's
+// notifications prefer its workspace's token, the bare key is the fallback.
+// The chat is resolved per project — SandboxConfig.telegramChatId first
+// (e.g. one Telegram group per project), falling back to the
+// telegram_chat_id setting. Everything no-ops when nothing is configured.
 //
 // Remote control works by replying on the phone:
 //   - notifications carry a #task_<id> tag  -> replying sends a follow-up
@@ -19,6 +20,7 @@
 import fs from "fs";
 import path from "path";
 import { prisma } from "@nexux/db";
+import { findSetting, workspaceIdOfProject } from "@/lib/workspace";
 
 const API = "https://api.telegram.org";
 
@@ -35,11 +37,10 @@ type TelegramUpdate = {
 /** Chat routing table: chat id -> project scope (null = global, all projects). */
 type ChatRoutes = Map<string, string | null>;
 
-async function getBotToken(): Promise<string | null> {
-  const row = await prisma.settings.findFirst({
-    where: { key: "telegram_bot_token", isActive: true },
-  });
-  return row?.value ?? null;
+async function getBotToken(
+  workspaceId?: string | null,
+): Promise<string | null> {
+  return findSetting("telegram_bot_token", workspaceId);
 }
 
 // getMe result cache — the bot username backs the t.me deep links and only
@@ -69,20 +70,22 @@ export async function isTelegramConfigured(): Promise<boolean> {
   return projectChat !== null;
 }
 
-async function getGlobalChatId(): Promise<string | null> {
-  const row = await prisma.settings.findFirst({
-    where: { key: "telegram_chat_id", isActive: true },
-  });
-  return row?.value ?? null;
+async function getGlobalChatId(
+  workspaceId?: string | null,
+): Promise<string | null> {
+  return findSetting("telegram_chat_id", workspaceId);
 }
 
 /** The chat a project's notifications go to: its own chat, else the global one. */
-async function resolveProjectChatId(projectId: string): Promise<string | null> {
+async function resolveProjectChatId(
+  projectId: string,
+  workspaceId?: string | null,
+): Promise<string | null> {
   const cfg = await prisma.sandboxConfig.findUnique({
     where: { projectId },
     select: { telegramChatId: true },
   });
-  return cfg?.telegramChatId?.trim() || (await getGlobalChatId());
+  return cfg?.telegramChatId?.trim() || (await getGlobalChatId(workspaceId));
 }
 
 async function getChatRoutes(): Promise<ChatRoutes> {
@@ -162,9 +165,10 @@ export async function sendTelegramPhotos(
   chatId: string,
   files: string[],
   caption?: string,
+  token?: string | null,
 ): Promise<boolean> {
-  const token = await getBotToken();
-  if (!token || !chatId || files.length === 0) return false;
+  const botToken = token ?? (await getBotToken());
+  if (!botToken || !chatId || files.length === 0) return false;
   const batch = files.slice(0, 10);
   try {
     const form = new FormData();
@@ -194,7 +198,7 @@ export async function sendTelegramPhotos(
         form.append(`p${i}`, new Blob([fs.readFileSync(f)]), path.basename(f)),
       );
     }
-    const res = await fetch(`${API}/bot${token}/${method}`, {
+    const res = await fetch(`${API}/bot${botToken}/${method}`, {
       method: "POST",
       body: form,
     });
@@ -243,8 +247,10 @@ export async function notifyTaskFinished(taskId: string): Promise<void> {
   });
   if (!task) return;
   if (task.sandbox.muteTelegram) return;
-  const chatId = await resolveProjectChatId(task.sandbox.projectId);
-  if (!chatId) return;
+  const ws = await workspaceIdOfProject(task.sandbox.projectId);
+  const chatId = await resolveProjectChatId(task.sandbox.projectId, ws);
+  const token = await getBotToken(ws);
+  if (!chatId || !token) return;
 
   const ok = task.status === "completed";
   const title = task.feature?.title ?? task.prompt.slice(0, 80);
@@ -265,11 +271,11 @@ export async function notifyTaskFinished(taskId: string): Promise<void> {
   if (task.previewUrl) lines.push(`Preview: ${task.previewUrl}`);
   lines.push("", `↩️ Reply to continue this task. #task_${task.id}`);
 
-  await sendTelegramMessage(lines.join("\n"), chatId);
+  await sendTelegramMessage(lines.join("\n"), chatId, token);
 
   const shots = await taskScreenshotFiles(task.id).catch(() => []);
   if (shots.length > 0) {
-    await sendTelegramPhotos(chatId, shots, `📸 ${title.slice(0, 200)}`);
+    await sendTelegramPhotos(chatId, shots, `📸 ${title.slice(0, 200)}`, token);
   }
 }
 
@@ -285,8 +291,10 @@ export async function notifyDevTask(taskId: string): Promise<void> {
   });
   if (!task || task.kind !== "dev") return;
   if (task.sandbox.muteTelegram) return;
-  const chatId = await resolveProjectChatId(task.sandbox.projectId);
-  if (!chatId) return;
+  const ws = await workspaceIdOfProject(task.sandbox.projectId);
+  const chatId = await resolveProjectChatId(task.sandbox.projectId, ws);
+  const token = await getBotToken(ws);
+  if (!chatId || !token) return;
 
   const needsInput = task.phase === "needs_input";
   const ok = task.status === "completed";
@@ -308,11 +316,11 @@ export async function notifyDevTask(taskId: string): Promise<void> {
   if (meta.length) lines.push("", meta.join(" · "));
   lines.push("", `↩️ Reply to send the next prompt. #task_${task.id}`);
 
-  await sendTelegramMessage(lines.join("\n"), chatId);
+  await sendTelegramMessage(lines.join("\n"), chatId, token);
 
   const shots = await taskScreenshotFiles(task.id).catch(() => []);
   if (shots.length > 0) {
-    await sendTelegramPhotos(chatId, shots, `📸 ${task.prompt.slice(0, 200)}`);
+    await sendTelegramPhotos(chatId, shots, `📸 ${task.prompt.slice(0, 200)}`, token);
   }
 }
 
@@ -321,8 +329,10 @@ export async function notifySandboxStatus(sandboxId: string): Promise<void> {
   const sandbox = await prisma.sandbox.findUnique({ where: { id: sandboxId } });
   if (!sandbox) return;
   if (sandbox.muteTelegram) return;
-  const chatId = await resolveProjectChatId(sandbox.projectId);
-  if (!chatId) return;
+  const ws = await workspaceIdOfProject(sandbox.projectId);
+  const chatId = await resolveProjectChatId(sandbox.projectId, ws);
+  const token = await getBotToken(ws);
+  if (!chatId || !token) return;
 
   if (sandbox.status === "running") {
     const lines = [
@@ -331,11 +341,12 @@ export async function notifySandboxStatus(sandboxId: string): Promise<void> {
       "",
       `↩️ Reply with a prompt to run a task on it. #sandbox_${sandbox.id}`,
     ];
-    await sendTelegramMessage(lines.join("\n"), chatId);
+    await sendTelegramMessage(lines.join("\n"), chatId, token);
   } else if (sandbox.status === "error") {
     await sendTelegramMessage(
       `❌ Sandbox <code>${escapeHtml(sandbox.name)}</code> failed to provision:\n${escapeHtml((sandbox.error ?? "unknown error").slice(0, 300))}`,
       chatId,
+      token,
     );
   }
 }

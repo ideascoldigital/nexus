@@ -13,32 +13,9 @@
 import fs from "fs";
 import path from "path";
 import { prisma } from "@nexux/db";
-import { getWorkspaceSetting, workspaceIdOfProject } from "@/lib/workspace";
+import { findSetting, workspaceIdOfProject } from "@/lib/workspace";
 
 const API = "https://slack.com/api";
-
-/**
- * Settings saved from a non-default workspace live under "ws:<id>:<key>"
- * (see workspace.ts) — a bare-key read misses them, which is exactly how the
- * first Slack setup "didn't take". Resolution: the given workspace's value
- * (falling back to the bare key), else ANY workspace's — a local-first
- * install talks to one Slack app, wherever it was configured from.
- */
-async function findSetting(
-  key: string,
-  workspaceId?: string | null,
-): Promise<string | null> {
-  if (workspaceId) {
-    const scoped = await getWorkspaceSetting(workspaceId, key);
-    if (scoped) return scoped.value;
-  }
-  const rows = await prisma.settings.findMany({
-    where: { isActive: true, OR: [{ key }, { key: { endsWith: `:${key}` } }] },
-    orderBy: { key: "asc" },
-  });
-  const bare = rows.find((r) => r.key === key);
-  return (bare ?? rows[0])?.value ?? null;
-}
 
 export async function getBotToken(): Promise<string | null> {
   return findSetting("slack_bot_token");
