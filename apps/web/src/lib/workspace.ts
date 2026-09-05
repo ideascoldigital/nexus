@@ -70,6 +70,30 @@ export async function getWorkspaceSetting(
   return prisma.settings.findFirst({ where: { key, isActive: true } });
 }
 
+/**
+ * Settings saved from a non-default workspace live under "ws:<id>:<key>" — a
+ * bare-key read misses them, which is exactly how the first Slack setup
+ * "didn't take" and how a Telegram token rotated from inside a workspace kept
+ * the revoked global one in play. Resolution: the given workspace's value
+ * (falling back to the bare key), else ANY workspace's — a local-first
+ * install talks to one bot/app, wherever it was configured from.
+ */
+export async function findSetting(
+  key: string,
+  workspaceId?: string | null,
+): Promise<string | null> {
+  if (workspaceId) {
+    const scoped = await getWorkspaceSetting(workspaceId, key);
+    if (scoped) return scoped.value;
+  }
+  const rows = await prisma.settings.findMany({
+    where: { isActive: true, OR: [{ key }, { key: { endsWith: `:${key}` } }] },
+    orderBy: { key: "asc" },
+  });
+  const bare = rows.find((r) => r.key === key);
+  return (bare ?? rows[0])?.value ?? null;
+}
+
 /** Boot-time guard: the default workspace must always exist. */
 export async function ensureDefaultWorkspace(): Promise<void> {
   await prisma.workspace
