@@ -58,11 +58,14 @@ import {
   policyModel,
   prUrlMatchesRepo,
   renderAgentFile,
+  renderLivePreviewScript,
   renderSkillFile,
   sandboxReachable,
   sandboxTarget,
   withFeaturePrOverride,
   HEADLESS_RULES,
+  PREVIEW_APP_PID,
+  PREVIEW_TUNNEL_PID,
   REMOTE_SHOT_DIR,
   type AgentDef,
   type AgentPolicy,
@@ -390,10 +393,6 @@ done
 /** Orphan branch that holds review evidence; never merged, never in a diff. */
 const ASSETS_BRANCH = "nexux-assets";
 
-/** PID files for the live preview — see startLivePreview for why not pkill. */
-const PREVIEW_APP_PID = "/tmp/nexux-app.pid";
-const PREVIEW_TUNNEL_PID = "/tmp/nexux-tunnel.pid";
-
 /** Local store, served back to the UI: <dataDir>/screenshots/<taskId>/. */
 export function taskScreenshotDir(taskId: string): string {
   return path.join(getConfig().dataDir, "screenshots", taskId);
@@ -508,60 +507,11 @@ export async function startLivePreview(
     return null;
   }
 
-  // The run command goes into a script file via a quoted heredoc: nesting it
-  // inline would have to survive three levels of shell quoting (this template,
-  // execRemote's `bash -lc '…'`, and ssh's own) and silently mangles.
-  const script = `
-set -u
-# Stop the previous preview by PID, never by pattern: this script's own
-# command line contains the words "nexux-preview" and "cloudflared tunnel",
-# so a pkill -f would match — and kill — the shell running it.
-for f in ${PREVIEW_APP_PID} ${PREVIEW_TUNNEL_PID}; do
-  if [ -f "$f" ]; then
-    kill -TERM -"$(cat "$f")" 2>/dev/null || kill -TERM "$(cat "$f")" 2>/dev/null || true
-    rm -f "$f"
-  fi
-done
-sleep 1
-
-cat > /tmp/nexux-preview.sh <<'NEXUX_RUN_EOF'
-#!/bin/bash
-[ -f /etc/profile.d/nexus-env.sh ] && . /etc/profile.d/nexus-env.sh
-cd ${ssh.cwd}
-exec ${opts.runCommand}
-NEXUX_RUN_EOF
-chmod +x /tmp/nexux-preview.sh
-
-: > /tmp/nexux-app.log
-: > /tmp/nexux-tunnel.log
-setsid /tmp/nexux-preview.sh > /tmp/nexux-app.log 2>&1 < /dev/null &
-echo $! > ${PREVIEW_APP_PID}
-
-# Wait for the app to actually answer before exposing it (a cold Next build
-# takes a while).
-for i in $(seq 1 90); do
-  curl -fs -o /dev/null "http://localhost:${opts.port}" 2>/dev/null && break
-  sleep 2
-done
-if ! curl -fs -o /dev/null "http://localhost:${opts.port}" 2>/dev/null; then
-  echo "APP_FAILED"
-  tail -n 25 /tmp/nexux-app.log
-  exit 0
-fi
-
-setsid cloudflared tunnel --no-autoupdate --url "http://localhost:${opts.port}" \\
-  > /tmp/nexux-tunnel.log 2>&1 < /dev/null &
-echo $! > ${PREVIEW_TUNNEL_PID}
-
-# The quick-tunnel URL shows up in the log a few seconds in.
-for i in $(seq 1 30); do
-  URL=$(grep -oE 'https://[a-z0-9-]+\\.trycloudflare\\.com' /tmp/nexux-tunnel.log | head -1)
-  [ -n "$URL" ] && { echo "PREVIEW:$URL"; exit 0; }
-  sleep 2
-done
-echo "TUNNEL_FAILED"
-tail -n 25 /tmp/nexux-tunnel.log
-`.trim();
+  const script = renderLivePreviewScript({
+    cwd: ssh.cwd,
+    runCommand: opts.runCommand,
+    port: opts.port,
+  });
 
   // Keep the SSH failure itself: swallowing it leaves the caller with an empty
   // log and no way to tell "app crashed" from "could not reach the sandbox".
