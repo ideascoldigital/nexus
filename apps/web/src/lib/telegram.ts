@@ -34,8 +34,36 @@ type TelegramUpdate = {
   };
 };
 
-/** Chat routing table: chat id -> project scope (null = global, all projects). */
-type ChatRoutes = Map<string, string | null>;
+/**
+ * A chat's scope: null = the global chat, may act on every project; a Set =
+ * the projects sharing this chat. One group per project turned out to be the
+ * exception, not the rule — a team routes several related projects into one
+ * group — and a map that kept only the last project made replies about the
+ * others come back "belongs to another project's chat".
+ */
+export type ChatScope = Set<string> | null;
+
+/** Chat routing table: chat id -> scope. */
+type ChatRoutes = Map<string, ChatScope>;
+
+/** Pure so the merge is testable: duplicate chat ids union their projects. */
+export function buildChatRoutes(
+  rows: Array<{ chatId: string | null | undefined; projectId: string }>,
+  globalChatId: string | null,
+): ChatRoutes {
+  const routes: ChatRoutes = new Map();
+  for (const r of rows) {
+    const id = r.chatId?.trim();
+    if (!id) continue;
+    const scope = routes.get(id);
+    if (scope) scope.add(r.projectId);
+    else routes.set(id, new Set([r.projectId]));
+  }
+  // Global chat last so it wins over a project accidentally using the same id.
+  const global = globalChatId?.trim();
+  if (global) routes.set(global, null);
+  return routes;
+}
 
 async function getBotToken(
   workspaceId?: string | null,
@@ -89,18 +117,14 @@ async function resolveProjectChatId(
 }
 
 async function getChatRoutes(): Promise<ChatRoutes> {
-  const routes: ChatRoutes = new Map();
   const configs = await prisma.sandboxConfig.findMany({
     where: { NOT: { telegramChatId: null } },
     select: { projectId: true, telegramChatId: true },
   });
-  for (const c of configs) {
-    if (c.telegramChatId?.trim()) routes.set(c.telegramChatId.trim(), c.projectId);
-  }
-  // Global chat last so it wins over a project accidentally using the same id.
-  const global = await getGlobalChatId();
-  if (global) routes.set(global, null);
-  return routes;
+  return buildChatRoutes(
+    configs.map((c) => ({ chatId: c.telegramChatId, projectId: c.projectId })),
+    await getGlobalChatId(),
+  );
 }
 
 function escapeHtml(s: string): string {
@@ -359,12 +383,12 @@ const TAG_TASK = /#task_([a-z0-9]+)/i;
 const TAG_SANDBOX = /#sandbox_([a-z0-9]+)/i;
 
 /**
- * scopeProjectId null = the global chat: may act on every project. Shared
- * with the Slack socket — same tags, same routing; the return string is
- * Telegram HTML (the Slack side converts it to mrkdwn).
+ * scope null = the global chat: may act on every project. Shared with the
+ * Slack socket — same tags, same routing; the return string is Telegram HTML
+ * (the Slack side converts it to mrkdwn).
  */
 export async function handleReply(
-  scopeProjectId: string | null,
+  scope: ChatScope,
   repliedText: string,
   prompt: string,
 ): Promise<string> {
@@ -379,7 +403,7 @@ export async function handleReply(
       include: { sandbox: true },
     });
     if (!parent) return "Task not found — it may have been deleted.";
-    if (scopeProjectId && parent.sandbox.projectId !== scopeProjectId) {
+    if (scope && !scope.has(parent.sandbox.projectId)) {
       return "That task belongs to another project's chat.";
     }
     // Replying in a dev-console thread queues the next prompt on the same
@@ -415,7 +439,7 @@ export async function handleReply(
       where: { id: sandboxTag[1] },
     });
     if (!sandbox) return "Sandbox not found — it may have been destroyed.";
-    if (scopeProjectId && sandbox.projectId !== scopeProjectId) {
+    if (scope && !scope.has(sandbox.projectId)) {
       return "That sandbox belongs to another project's chat.";
     }
     if (sandbox.dedicated) {
@@ -442,13 +466,13 @@ export async function handleReply(
 }
 
 async function handleCommand(
-  scopeProjectId: string | null,
+  scope: ChatScope,
   text: string,
 ): Promise<string> {
   if (text.startsWith("/tasks")) {
     const tasks = await prisma.sandboxTask.findMany({
-      where: scopeProjectId
-        ? { sandbox: { projectId: scopeProjectId } }
+      where: scope
+        ? { sandbox: { projectId: { in: [...scope] } } }
         : undefined,
       orderBy: { createdAt: "desc" },
       take: 5,
@@ -470,7 +494,7 @@ async function handleCommand(
       where: {
         status: { notIn: ["destroyed"] },
         archived: false,
-        ...(scopeProjectId ? { projectId: scopeProjectId } : {}),
+        ...(scope ? { projectId: { in: [...scope] } } : {}),
       },
       orderBy: { createdAt: "desc" },
       take: 10,
@@ -484,9 +508,11 @@ async function handleCommand(
       .join("\n");
   }
 
-  const scopeNote = scopeProjectId
-    ? "This chat is scoped to one project."
-    : "This chat sees every project.";
+  const scopeNote = !scope
+    ? "This chat sees every project."
+    : scope.size === 1
+      ? "This chat is scoped to one project."
+      : `This chat is shared by ${scope.size} projects.`;
   return [
     "<b>Nexus bot</b>",
     "• Reply to a ✅/❌ task message → follow-up on that task",
@@ -546,10 +572,10 @@ async function handleUpdate(
     return;
   }
 
-  const scopeProjectId = routes.get(chatKey) ?? null;
+  const scope = routes.get(chatKey) ?? null;
   const reply = msg.reply_to_message?.text
-    ? await handleReply(scopeProjectId, msg.reply_to_message.text, text)
-    : await handleCommand(scopeProjectId, text);
+    ? await handleReply(scope, msg.reply_to_message.text, text)
+    : await handleCommand(scope, text);
   await sendTelegramMessage(reply, chatKey, token);
 }
 
