@@ -23,6 +23,7 @@ import {
   parseShotUploads,
   prUrlMatchesRepo,
   renderAgentFile,
+  renderLivePreviewScript,
   renderSkillFile,
   sandboxReachable,
   sandboxTarget,
@@ -598,4 +599,27 @@ test("the MR-append command carries args as argv, never inlined content", () => 
     "section content stays in its file — only paths ride the shell",
   );
   assert.ok(cmd.includes("not in desc"), "idempotent re-append guard");
+});
+
+test("the live-preview script tunnels the configured port with a localhost Host", () => {
+  const script = renderLivePreviewScript({
+    cwd: "/opt/nexus/acme-ui",
+    runCommand: "npm start",
+    port: 3010,
+  });
+  assert.ok(
+    script.includes('--url "http://localhost:3010"'),
+    "the tunnel targets the configured port, not a default",
+  );
+  assert.ok(
+    script.includes('--http-host-header "localhost:3010"'),
+    "dev servers with host checks (webpack's Invalid Host header) must see localhost",
+  );
+  assert.ok(
+    script.includes('curl -fs -o /dev/null "http://localhost:3010"'),
+    "readiness waits on the same port the tunnel exposes",
+  );
+  assert.ok(script.includes("cd /opt/nexus/acme-ui"), "runs in the checkout");
+  assert.ok(script.includes("exec npm start"), "run command via the heredoc script");
+  assert.ok(!script.includes("pkill"), "previous preview dies by PID, never by pattern");
 });

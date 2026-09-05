@@ -702,3 +702,77 @@ export function parseShotUploads(
   }
   return links;
 }
+
+/** PID files for the live preview — killed by PID, never pkill (the script's
+ * own command line contains "nexux-preview" and "cloudflared tunnel", so a
+ * pkill -f would match — and kill — the shell running it). */
+export const PREVIEW_APP_PID = "/tmp/nexux-app.pid";
+export const PREVIEW_TUNNEL_PID = "/tmp/nexux-tunnel.pid";
+
+/**
+ * The remote script behind "Start preview": stop the previous app+tunnel by
+ * PID, run the app, wait until it answers on the port, then expose it through
+ * a Cloudflare quick tunnel. Pure so the shell is testable — the run command
+ * travels in a quoted heredoc because inline it would have to survive three
+ * levels of quoting (this template, execRemote's `bash -lc`, ssh's own).
+ */
+export function renderLivePreviewScript(opts: {
+  cwd: string;
+  runCommand: string;
+  port: number;
+}): string {
+  return `
+set -u
+for f in ${PREVIEW_APP_PID} ${PREVIEW_TUNNEL_PID}; do
+  if [ -f "$f" ]; then
+    kill -TERM -"$(cat "$f")" 2>/dev/null || kill -TERM "$(cat "$f")" 2>/dev/null || true
+    rm -f "$f"
+  fi
+done
+sleep 1
+
+cat > /tmp/nexux-preview.sh <<'NEXUX_RUN_EOF'
+#!/bin/bash
+[ -f /etc/profile.d/nexus-env.sh ] && . /etc/profile.d/nexus-env.sh
+cd ${opts.cwd}
+exec ${opts.runCommand}
+NEXUX_RUN_EOF
+chmod +x /tmp/nexux-preview.sh
+
+: > /tmp/nexux-app.log
+: > /tmp/nexux-tunnel.log
+setsid /tmp/nexux-preview.sh > /tmp/nexux-app.log 2>&1 < /dev/null &
+echo $! > ${PREVIEW_APP_PID}
+
+# Wait for the app to actually answer before exposing it (a cold Next build
+# takes a while).
+for i in $(seq 1 90); do
+  curl -fs -o /dev/null "http://localhost:${opts.port}" 2>/dev/null && break
+  sleep 2
+done
+if ! curl -fs -o /dev/null "http://localhost:${opts.port}" 2>/dev/null; then
+  echo "APP_FAILED"
+  tail -n 25 /tmp/nexux-app.log
+  exit 0
+fi
+
+# --http-host-header: dev servers commonly refuse Hosts they don't know
+# (webpack's "Invalid Host header", Vite's allowedHosts), and the tunnel
+# forwards its public trycloudflare hostname by default — so the app answered
+# on localhost and 403'd every visitor. Pinning the origin-facing Host to
+# localhost passes every framework's check without per-app config.
+setsid cloudflared tunnel --no-autoupdate --url "http://localhost:${opts.port}" \\
+  --http-host-header "localhost:${opts.port}" \\
+  > /tmp/nexux-tunnel.log 2>&1 < /dev/null &
+echo $! > ${PREVIEW_TUNNEL_PID}
+
+# The quick-tunnel URL shows up in the log a few seconds in.
+for i in $(seq 1 30); do
+  URL=$(grep -oE 'https://[a-z0-9-]+\\.trycloudflare\\.com' /tmp/nexux-tunnel.log | head -1)
+  [ -n "$URL" ] && { echo "PREVIEW:$URL"; exit 0; }
+  sleep 2
+done
+echo "TUNNEL_FAILED"
+tail -n 25 /tmp/nexux-tunnel.log
+`.trim();
+}
