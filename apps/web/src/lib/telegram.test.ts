@@ -31,3 +31,39 @@ test("a token and chat saved from a non-default workspace count", async () => {
   });
   assert.equal(await isTelegramConfigured(), true, "scoped keys must count");
 });
+
+test("buildChatRoutes unions the projects sharing one chat", async () => {
+  const { buildChatRoutes } = await import("./telegram");
+  // The topology that broke it live: three group chats, each carrying several
+  // projects, plus a global chat.
+  const routes = buildChatRoutes(
+    [
+      { chatId: "-100A", projectId: "konstruct" },
+      { chatId: "-100A", projectId: "konstruct-ui" },
+      { chatId: "-100B", projectId: "landing" },
+      { chatId: "-100C", projectId: "admin" },
+      { chatId: "-100C", projectId: "risk" },
+      { chatId: "-100C", projectId: "landing2" },
+      { chatId: "  ", projectId: "ignored" },
+      { chatId: null, projectId: "ignored-too" },
+    ],
+    "G1",
+  );
+  assert.deepEqual([...(routes.get("-100A") ?? [])].sort(), [
+    "konstruct",
+    "konstruct-ui",
+  ]);
+  assert.deepEqual([...(routes.get("-100B") ?? [])], ["landing"]);
+  assert.equal(routes.get("-100C")?.size, 3);
+  assert.equal(routes.get("G1"), null, "the global chat scopes to everything");
+  assert.equal(routes.size, 4, "blank/null chat ids never route");
+});
+
+test("the global chat wins over a project reusing the same id", async () => {
+  const { buildChatRoutes } = await import("./telegram");
+  const routes = buildChatRoutes(
+    [{ chatId: "G1", projectId: "p1" }],
+    "G1",
+  );
+  assert.equal(routes.get("G1"), null);
+});

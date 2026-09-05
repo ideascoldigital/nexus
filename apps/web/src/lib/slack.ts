@@ -14,6 +14,7 @@ import fs from "fs";
 import path from "path";
 import { prisma } from "@nexux/db";
 import { findSetting, workspaceIdOfProject } from "@/lib/workspace";
+import { buildChatRoutes } from "@/lib/telegram";
 
 const API = "https://slack.com/api";
 
@@ -142,23 +143,27 @@ async function resolveProjectChannelId(
 }
 
 /**
- * Routing table for the socket: channel id -> project scope (null = the
- * global channel, which may act on every project).
+ * Routing table for the socket: channel id -> scope (null = the global
+ * channel; a Set = the projects sharing the channel — see buildChatRoutes).
  */
-export async function getSlackRoutes(): Promise<Map<string, string | null>> {
-  const routes = new Map<string, string | null>();
+export async function getSlackRoutes(): Promise<
+  Map<string, Set<string> | null>
+> {
   const configs = await prisma.sandboxConfig.findMany({
     where: { NOT: { slackChannelId: null } },
     select: { projectId: true, slackChannelId: true },
   });
+  const rows: Array<{ chatId: string | null; projectId: string }> = [];
   for (const c of configs) {
-    const id = await resolveChannelRef(c.slackChannelId);
-    if (id) routes.set(id, c.projectId);
+    rows.push({
+      chatId: await resolveChannelRef(c.slackChannelId),
+      projectId: c.projectId,
+    });
   }
-  // Global channel last so it wins over a project reusing the same channel.
-  const global = await resolveChannelRef(await getGlobalChannelRef());
-  if (global) routes.set(global, null);
-  return routes;
+  return buildChatRoutes(
+    rows,
+    await resolveChannelRef(await getGlobalChannelRef()),
+  );
 }
 
 /** Health-strip check: a bot token plus at least one routable channel. */
