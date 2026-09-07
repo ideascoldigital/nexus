@@ -261,39 +261,120 @@ const PROVIDER_OPTIONS: Record<
 > = {
   civo: {
     regions: ["NYC1", "LON1", "FRA1", "PHX1"],
+    // The g4 generation (civo.com/pricing, 2026-09): g4s standard, g4c CPU-,
+    // g4m RAM-optimized, g4p performance. Sandboxes provisioned on the old
+    // g3.* slugs keep working — the select falls back to the raw value.
     sizes: [
       {
-        value: "g3.xsmall",
-        label: "g3.xsmall — 1 CPU / 1 GB",
+        value: "g4s.xsmall",
+        label: "g4s.xsmall — 1 CPU / 1 GB",
         hourly: 0.00744,
         monthly: 5.43,
       },
       {
-        value: "g3.small",
-        label: "g3.small — 1 CPU / 2 GB",
+        value: "g4s.small",
+        label: "g4s.small — 1 CPU / 2 GB",
         hourly: 0.014881,
         monthly: 10.86,
       },
       {
-        value: "g3.medium",
-        label: "g3.medium — 2 CPU / 4 GB",
+        value: "g4s.medium",
+        label: "g4s.medium — 2 CPU / 4 GB",
         hourly: 0.029762,
         monthly: 21.73,
       },
       {
-        value: "g3.large",
-        label: "g3.large — 4 CPU / 8 GB",
+        value: "g4s.large",
+        label: "g4s.large — 4 CPU / 8 GB",
         hourly: 0.059524,
         monthly: 43.45,
       },
       {
-        value: "g3.xlarge",
-        label: "g3.xlarge — 6 CPU / 16 GB",
+        value: "g4s.xlarge",
+        label: "g4s.xlarge — 6 CPU / 16 GB",
         hourly: 0.119048,
         monthly: 86.91,
       },
+      {
+        value: "g4s.2xlarge",
+        label: "g4s.2xlarge — 8 CPU / 32 GB",
+        hourly: 0.238095,
+        monthly: 173.81,
+      },
+      {
+        value: "g4c.small",
+        label: "g4c.small — 8 CPU / 16 GB",
+        hourly: 0.190476,
+        monthly: 128.0,
+      },
+      {
+        value: "g4c.medium",
+        label: "g4c.medium — 16 CPU / 32 GB",
+        hourly: 0.380952,
+        monthly: 256.0,
+      },
+      {
+        value: "g4c.large",
+        label: "g4c.large — 32 CPU / 64 GB",
+        hourly: 0.761905,
+        monthly: 512.0,
+      },
+      {
+        value: "g4c.xlarge",
+        label: "g4c.xlarge — 64 CPU / 128 GB",
+        hourly: 1.52381,
+        monthly: 1024.0,
+      },
+      {
+        value: "g4m.small",
+        label: "g4m.small — 2 CPU / 16 GB",
+        hourly: 0.107137,
+        monthly: 78.21,
+      },
+      {
+        value: "g4m.medium",
+        label: "g4m.medium — 4 CPU / 32 GB",
+        hourly: 0.214288,
+        monthly: 156.43,
+      },
+      {
+        value: "g4m.large",
+        label: "g4m.large — 8 CPU / 64 GB",
+        hourly: 0.428575,
+        monthly: 312.86,
+      },
+      {
+        value: "g4m.xlarge",
+        label: "g4m.xlarge — 16 CPU / 128 GB",
+        hourly: 0.857137,
+        monthly: 625.71,
+      },
+      {
+        value: "g4p.small",
+        label: "g4p.small — 4 CPU / 16 GB",
+        hourly: 0.119055,
+        monthly: 86.91,
+      },
+      {
+        value: "g4p.medium",
+        label: "g4p.medium — 8 CPU / 32 GB",
+        hourly: 0.238096,
+        monthly: 173.81,
+      },
+      {
+        value: "g4p.large",
+        label: "g4p.large — 16 CPU / 64 GB",
+        hourly: 0.476192,
+        monthly: 347.62,
+      },
+      {
+        value: "g4p.xlarge",
+        label: "g4p.xlarge — 32 CPU / 128 GB",
+        hourly: 0.952384,
+        monthly: 695.24,
+      },
     ],
-    defaults: { region: "NYC1", size: "g3.medium" },
+    defaults: { region: "NYC1", size: "g4s.medium" },
   },
   aws: {
     regions: [
@@ -1361,7 +1442,7 @@ function SetupEditor({
                     <span className="flex w-full items-baseline gap-2">
                       {s.label}
                       <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-                        ${s.monthly.toFixed(2)}/mes
+                        ${s.monthly.toFixed(2)}/mo
                       </span>
                     </span>
                   </SelectItem>
@@ -1371,7 +1452,7 @@ function SetupEditor({
             {sizeInfo && (
               <p className="font-mono text-[10px] text-muted-foreground">
                 ~${sizeInfo.hourly.toFixed(3)}/h · $
-                {sizeInfo.monthly.toFixed(2)}/mes — factura hasta destruir
+                {sizeInfo.monthly.toFixed(2)}/mo — billed until destroyed
               </p>
             )}
           </div>
