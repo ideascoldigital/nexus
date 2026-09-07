@@ -57,7 +57,7 @@ export const SANDBOX_CONFIG_DEFAULTS = {
   githubCredentialId: null as string | null,
   claudeCredentialId: null as string | null,
   region: "NYC1",
-  size: "g3.medium",
+  size: "g4s.medium",
   diskImage: "ubuntu-jammy",
   branch: null as string | null,
   sshPublicKey: null as string | null,

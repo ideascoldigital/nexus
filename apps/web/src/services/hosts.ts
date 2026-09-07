@@ -221,9 +221,9 @@ export const HOST_SIZES: Record<
   Array<{ value: string; label: string }>
 > = {
   civo: [
-    { value: "g3.small", label: "g3.small — 1 vCPU / 2 GB (no embeddings)" },
-    { value: "g3.medium", label: "g3.medium — 2 vCPU / 4 GB" },
-    { value: "g3.large", label: "g3.large — 4 vCPU / 8 GB (recommended)" },
+    { value: "g4s.small", label: "g4s.small — 1 vCPU / 2 GB (no embeddings)" },
+    { value: "g4s.medium", label: "g4s.medium — 2 vCPU / 4 GB" },
+    { value: "g4s.large", label: "g4s.large — 4 vCPU / 8 GB (recommended)" },
   ],
   aws: [
     { value: "t3.small", label: "t3.small — 2 vCPU / 2 GB (no embeddings)" },
