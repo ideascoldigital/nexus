@@ -171,6 +171,33 @@ someone who is not at this machine. What changes is the default: for testing
 it yourself, the embedded browser is strictly better, so the tunnel becomes
 opt-in rather than automatic.
 
+## Alternatives considered
+
+**Browserbase (and hosted browser infrastructure generally).** The request
+that started this spec named Browserbase as the experience to aim for, so it
+deserves an explicit answer rather than a silent omission.
+
+It does not fit, for the same reason tunnels do not. Browserbase runs the
+browser **in its cloud**, so a front end asking for `localhost:8000` resolves
+that against Browserbase's container, where the back end does not exist. The
+identity problem is relocated, not solved: reaching the services would still
+mean exposing both publicly, which is the thing being avoided. Closing that
+gap means putting a hosted browser inside this network — Tailscale in their
+container, or a reverse proxy — which is not what the product sells.
+
+Three further reasons, any one of which would be enough:
+
+- **Local-first** (CLAUDE.md: no cloud requirement). A paid API key would
+  become the first mandatory cloud dependency of a core workflow.
+- **The browser is already installed.** Every sandbox with
+  `installAgentBrowser` has Chromium, in the right network, unused for this.
+- **What it sells is not what is missing.** Hosted browser infra is for scale
+  — pools, concurrency, captchas, IP rotation — aimed at scraping and agent
+  fleets. This needs one browser, inside one network, driven by hand.
+
+Where it *would* fit is running browser agents in parallel against **public**
+sites. That is a different problem, and this spec does not foreclose it.
+
 ## Tests
 
 - Bootstrap: `renderBrowserSection` is idempotent on re-run, the VNC password
