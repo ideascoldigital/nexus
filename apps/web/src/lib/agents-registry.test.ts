@@ -37,6 +37,17 @@ const CATALOG: CatalogAgent[] = [
     path: "misc/sparse.md",
     // no category / description / downloads — the registry omits them freely
   },
+  // Filler so the 30-result cap is observable. The catalog is fetched once and
+  // then cached for ten minutes, and that cache is module-level with no reset
+  // hook — so every test in this file shares one catalog and the cap has to be
+  // visible in it rather than in a second, larger stub.
+  ...Array.from({ length: 50 }, (_, i) => ({
+    name: `filler-${i}`,
+    path: `filler/filler-${i}.md`,
+    category: "filler",
+    description: "padding",
+    downloads: i,
+  })),
 ];
 
 /**
@@ -60,14 +71,17 @@ function stubCatalog(agents: CatalogAgent[] = CATALOG) {
 // Feeds the agent picker. The catalog is 400+ entries, so what the list shows
 // first is most of what a user ever sees.
 
-test("an empty query lists the catalog, most-downloaded first", () => {
+test("an empty query lists the catalog, most-downloaded first", async () => {
   stubCatalog();
-  return searchRegistryAgents("").then((agents) => {
-    assert.deepEqual(
-      agents.map((a) => a.name),
-      ["db-expert", "code-reviewer", "sparse"],
-    );
-  });
+  const agents = await searchRegistryAgents("");
+  // db-expert (500) outranks every filler entry (0-49) and code-reviewer (100),
+  // which in turn outranks sparse (no downloads at all → 0).
+  assert.equal(agents[0].name, "db-expert");
+  const names = agents.map((a) => a.name);
+  assert.ok(
+    names.indexOf("code-reviewer") < names.indexOf("filler-49"),
+    "code-reviewer (100 downloads) should outrank filler-49 (49)",
+  );
 });
 
 test("a query matches the agent's name", async () => {
@@ -133,37 +147,27 @@ test("missing catalog fields fall back rather than surfacing undefined", async (
   assert.equal(agent.downloads, 0);
 });
 
-// The two tests below need a catalog that has not already been cached by the
-// tests above. The cache is module-level with no reset hook, so they load their
-// own instance of the module rather than reaching into its private state.
-function freshModule(): Promise<typeof import("./agents-registry")> {
-  return import(`./agents-registry?case=${freshModule.n++}`);
-}
-freshModule.n = 0;
-
 test("the result list is capped at 30", async () => {
-  // The catalog is 400+ entries and the response is rendered in full.
-  const many = Array.from({ length: 50 }, (_, i) => ({
-    name: `agent-${i}`,
-    path: `x/agent-${i}.md`,
-    downloads: i,
-  }));
-  stubCatalog(many);
-  const agents = await (await freshModule()).searchRegistryAgents("agent");
+  // The real catalog is 400+ entries and the response is rendered in full, so
+  // the cap is what keeps the picker from painting all of them.
+  stubCatalog();
+  const agents = await searchRegistryAgents("filler");
   assert.equal(agents.length, 30);
-  // Capped after sorting, so the cap keeps the most-downloaded, not the first 30.
-  assert.equal(agents[0].name, "agent-49");
+  // Capped after sorting, so it keeps the most-downloaded — not the first 30
+  // in catalog order.
+  assert.equal(agents[0].name, "filler-49");
+  assert.ok(!agents.some((a) => a.name === "filler-0"));
 });
 
 test("the catalog is fetched once and then cached", async () => {
   // It is a 2MB download; re-fetching it per keystroke is the thing the cache
-  // exists to prevent.
+  // exists to prevent. By the time this runs the catalog is already cached by
+  // an earlier test, so a fresh stub here must go uncalled entirely.
   const calls = stubCatalog();
-  const { searchRegistryAgents: search } = await freshModule();
-  await search("a");
-  await search("b");
-  await search("c");
-  assert.equal(calls.n, 1);
+  await searchRegistryAgents("a");
+  await searchRegistryAgents("b");
+  await searchRegistryAgents("c");
+  assert.equal(calls.n, 0, "the cached catalog was re-fetched");
 });
 
 // --- resolveRegistryAgent ----------------------------------------------------
