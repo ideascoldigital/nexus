@@ -17,7 +17,8 @@
     "start:server": "tsx src/sidecar-server.ts",
     "typecheck": "tsc --noEmit",
     "postinstall": "node scripts/fix-pty-permissions.mjs",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-lines=87 --test-coverage-branches=74 --test-coverage-functions=81 \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@nexux/config": "workspace:*",
