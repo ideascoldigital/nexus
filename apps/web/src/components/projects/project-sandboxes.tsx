@@ -180,6 +180,7 @@ import { ScheduledTasksCard } from "@/components/projects/scheduled-tasks-card";
 import { DevConsoleSheet } from "@/components/projects/dev-console";
 import { SandboxPrefixField } from "@/components/settings/sandbox-prefix-field";
 import { SandboxProcessPanel } from "@/components/projects/sandbox-processes";
+import { SandboxBrowserPanel } from "@/components/projects/sandbox-browser";
 import {
   detectAllRepositories,
   getStackInheritance,
@@ -4318,6 +4319,9 @@ function SandboxRow({
       )}
       {sandbox.status === "running" && (
         <SandboxProcessPanel projectId={projectId} sandboxId={sandbox.id} />
+      )}
+      {sandbox.status === "running" && (
+        <SandboxBrowserPanel projectId={projectId} sandboxId={sandbox.id} />
       )}
       {showLog && (
         <>

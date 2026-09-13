@@ -15,6 +15,9 @@ export {
   TS_UP_LOG,
 } from "./template";
 export {
+  // Shell-quoting, shared by both bootstraps and every caller that builds a
+  // remote command — one implementation, so a fix cannot land on only one.
+  shq,
   sandboxInstanceName,
   customSandboxName,
   normalizeSandboxPrefix,

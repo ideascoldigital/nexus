@@ -1,6 +1,8 @@
 # Spec 23 — Embedded browser: testing an app from inside its own network
 
-Status: **proposed** (2026-09-12).
+Status: **shipped** (2026-09-12, D-69) — bootstrap, model, manager, routes and
+the Browser panel. The idle TTL and the CDP screenshot route remain open; see
+Remaining at the end.
 
 ## Goal
 
@@ -215,6 +217,18 @@ sites. That is a different problem, and this spec does not foreclose it.
   session still tears the forward down; local vs cloud both resolve a target.
 - CDP `navigate` rejects non-`localhost` targets by default, so the session
   cannot be steered at arbitrary origins by a caller that is not the user.
+
+## Remaining
+
+- **Idle TTL.** A forgotten session is a live browser on a billed VM. The row
+  and the forward survive until stopped by hand; nothing reaps an idle one yet.
+- **`POST …/browser/screenshot`.** Specced and unbuilt. `navigate` shipped
+  because the address bar is unusable without it; screenshots are what would
+  let task runs reuse the session, and `renderScreenshotSection` is where they
+  would land.
+- **Local sandboxes.** `provider === "local"` skips the forward (the container
+  is already reachable from this machine) but nothing publishes its wsPort yet,
+  so the panel is cloud-only in practice.
 
 ## Open questions
 
