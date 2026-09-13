@@ -1,4 +1,5 @@
 import { manifestFromSpec, renderNexusCliSection } from "./nexus-cli";
+import { renderBrowserInstallSection } from "./template-browser";
 import { safeSlug, shq } from "./slug";
 import type { SandboxProvider, SandboxRepoSpec, SandboxSpec } from "./types";
 import { SANDBOX_ROOT, writeCodeWorkspaceCommand } from "./workspace";
@@ -1247,6 +1248,13 @@ fi`;
       manifestFromSpec(spec, { generatedAt: opts.generatedAt ?? "" }),
     ),
   );
+
+  // The session itself is started on demand (the user opening the Browser tab),
+  // not here: a browser idling on every sandbox would cost memory on instances
+  // nobody is looking at. Chromium already arrived with installAgentBrowser.
+  if (spec.installBrowserSession) {
+    sections.push(renderBrowserInstallSection());
+  }
 
   // The completion marker is what the host polls to call a sandbox ready, so a
   // run that hit a fatal step must not leave it behind — the failure marker

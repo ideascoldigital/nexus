@@ -49,6 +49,13 @@ export type SandboxSpec = {
   installOpenCode?: boolean;
   installAgentBrowser: boolean;
   installCloudflared: boolean;
+  /**
+   * Install the pieces an interactive browser session needs (spec 23): a
+   * virtual display, a VNC server and a WebSocket bridge. The browser itself
+   * is Chromium from `installAgentBrowser`, so this implies that install
+   * rather than adding a second one.
+   */
+  installBrowserSession?: boolean;
   /** Install tailscale and (with an auth key) join the tailnet at bootstrap. */
   installTailscale?: boolean;
   /**

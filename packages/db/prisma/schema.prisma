@@ -300,6 +300,7 @@ model SandboxConfig {
   installClaudeCode    Boolean  @default(true)
   installAgentBrowser  Boolean  @default(true)
   installCloudflared   Boolean  @default(true) // quick tunnels for live previews
+  installBrowserSession Boolean @default(false) // xvfb + x11vnc + websockify, for the embedded browser (spec 23)
   installTailscale     Boolean  @default(false) // join the instance to a Tailscale tailnet at bootstrap
   tailscaleCredentialId String? // saved tailscale auth key used to join (null = first tailscale credential)
   includeStackServices Boolean  @default(true) // start the Stack tab's docker services on the instance
@@ -365,6 +366,7 @@ model Sandbox {
   credential CloudCredential?  @relation(fields: [credentialId], references: [id], onDelete: SetNull)
   tasks      SandboxTask[]
   processes  SandboxProcess[]
+  browser    BrowserSession?
 
   @@index([projectId])
 }
@@ -398,6 +400,38 @@ model SandboxProcess {
   sandbox Sandbox @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@unique([sandboxId, key])
+  @@index([sandboxId])
+}
+
+// BrowserSession - the interactive browser running on a sandbox (spec 23).
+//
+// A front end and a back end on one instance cannot be tested through tunnels:
+// each process gets its own random public hostname, so the front's API_URL is
+// wrong from the viewer's browser. Inside the sandbox both are localhost ports
+// that already agree, so the browser runs there and the dashboard reaches it
+// over an SSH port-forward — never a public tunnel, since the session can read
+// anything on that instance's localhost.
+//
+// One per sandbox: a second would need its own display, port trio and
+// supervision to solve a problem nobody has. Starting again replaces.
+model BrowserSession {
+  id        String    @id @default(cuid())
+  sandboxId String    @unique
+  status    String    @default("stopped") // stopped | starting | running | error
+  display   String    @default(":99")
+  vncPort   Int       @default(5900)
+  wsPort    Int       @default(6080) // what the SSH forward lands on
+  cdpPort   Int       @default(9222) // loopback only; an open CDP port is RCE
+  token     String // VNC password, generated per session, never logged
+  width     Int       @default(1440)
+  height    Int       @default(900)
+  error     String?
+  startedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  sandbox Sandbox @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
   @@index([sandboxId])
 }
 
