@@ -12,6 +12,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-exclude=\"**/generated/**\" --test-coverage-lines=74 --test-coverage-branches=82 --test-coverage-functions=71 \"src/**/*.test.ts\"",
     "db:migrate": "pnpm --filter @nexux/db db:migrate",
     "stack:backfill-phases": "tsx --env-file=.env scripts/backfill-phases.ts",
     "db:generate": "pnpm --filter @nexux/db generate"

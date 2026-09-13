@@ -183,8 +183,18 @@ test("the apt wrapper retries a locked dpkg and nothing else", realBash, () => {
   // reporting the error it already had in hand.
   const fn = renderCloudInit(baseSpec()).match(/^nexus_apt\(\) \{[\s\S]*?^\}$/m);
   assert.ok(fn, "the apt wrapper is not in the rendered script");
+  // The wrapper logs to a fixed /tmp path, which is fine on a sandbox (one
+  // bootstrap per machine) but not here: `turbo run test test:coverage` runs
+  // this file twice at once, and the two bash harnesses then share the log the
+  // retry greps. A run that reads the other's log sees no lock message and
+  // returns on the first attempt, which surfaced as '100 1' !== '0 3'. Give
+  // each run its own path.
+  const logFile = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "nexux-apt-")),
+    "nexus-apt.log",
+  );
   const harness = (aptGet: string) => `
-${fn[0]}
+${fn[0].replaceAll("/tmp/nexus-apt.log", logFile)}
 sleep() { :; }              # the retry backoff, minus the waiting
 # The wrapper pipes apt-get into tee, which runs it in a subshell — an attempt
 # counter kept in a variable is discarded with it. A file survives.

@@ -28,3 +28,27 @@ test("an unreadable total means unlimited, never a guessed number", () => {
   assert.equal(memoryLimitFromTotalBytes(-1), null);
   assert.equal(memoryLimitFromTotalBytes(Number.POSITIVE_INFINITY), null);
 });
+
+test("the 1024 MB floor is inclusive", () => {
+  // 1.5 GB is exactly two-thirds of 1024 MB, the smallest cap considered
+  // survivable. An exclusive check here would push this box to unlimited and
+  // move the real floor somewhere nobody wrote down.
+  assert.equal(memoryLimitFromTotalBytes(1536 * 1024 * 1024), 1024);
+  assert.equal(memoryLimitFromTotalBytes(1535 * 1024 * 1024), null);
+});
+
+test("the cap is a whole number of megabytes", () => {
+  // Passed to `docker run --memory=<n>m`, which rejects a fractional value.
+  for (const total of [2 * GB, 3 * GB, 6 * GB, 12 * GB, 64 * GB]) {
+    const mb = memoryLimitFromTotalBytes(total);
+    assert.ok(mb !== null && Number.isInteger(mb), `${total} gave ${mb}`);
+  }
+});
+
+test("the cap never exceeds what Docker actually has", () => {
+  // A limit above the engine's own total would not protect anything.
+  for (const total of [2 * GB, 8 * GB, 64 * GB]) {
+    const mb = memoryLimitFromTotalBytes(total)!;
+    assert.ok(mb < total / 1024 / 1024, `${total} gave ${mb}`);
+  }
+});

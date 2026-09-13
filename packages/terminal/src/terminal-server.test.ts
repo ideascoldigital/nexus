@@ -13,7 +13,33 @@ import {
   backpressureAction,
 } from "./terminal-server";
 
-const PORT = 3911;
+// Asked of the OS rather than fixed: `turbo run test test:coverage` runs this
+// file twice at once, and two runs binding one port means whichever loses the
+// race fails on EADDRINUSE — surfacing as a scatter of unrelated-looking
+// failures (a 404 assertion, a websocket close code) rather than as a bind
+// error. Binding :0 and reading back what was granted is the only way to get a
+// port nothing else holds; deriving one from the pid still collides, since
+// nothing stops two pids from mapping to the same number.
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = http.createServer();
+    probe.once("error", reject);
+    probe.listen(0, "localhost", () => {
+      const addr = probe.address();
+      if (typeof addr === "string" || addr === null) {
+        probe.close(() => reject(new Error("no port was assigned")));
+        return;
+      }
+      // Closed before the real server binds it. A third party could take the
+      // port in that window, but nothing else on this machine is asking the
+      // kernel for ephemeral ports in a tight loop, and the alternative —
+      // a fixed number — collides every time rather than almost never.
+      probe.close(() => resolve(addr.port));
+    });
+  });
+}
+
+let PORT: number;
 const ORIGIN = "http://test-origin.local";
 
 // The session tests drive a real pty and assert POSIX shell behaviour â€” `pwd`,
@@ -31,6 +57,7 @@ let handle: TerminalServerHandle;
 let cwd: string;
 
 before(async () => {
+  PORT = await freePort();
   process.env.NEXUX_TERMINAL_PORT = String(PORT);
   process.env.NEXUX_WEB_ORIGIN = ORIGIN;
   process.env.SHELL = "/bin/sh";

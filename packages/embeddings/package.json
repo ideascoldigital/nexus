@@ -14,7 +14,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-lines=89 --test-coverage-branches=87 --test-coverage-functions=89 \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.23.0",

@@ -15,7 +15,8 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:studio": "prisma studio",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-exclude=\"**/generated/**\" --test-coverage-lines=89 --test-coverage-branches=86 --test-coverage-functions=88 \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@nexux/config": "workspace:*",
