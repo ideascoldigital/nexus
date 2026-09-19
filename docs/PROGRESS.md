@@ -2,7 +2,7 @@
 
 Live project state. Update when closing each significant PR/session: move items between sections and add a line to the timeline. Detail of long sessions → `specs/` (like `15-roadmap-definicion-features.md`).
 
-_Last updated: 2026-08-28._
+_Last updated: 2026-09-18._
 
 ## Status by module
 
@@ -18,10 +18,14 @@ _Last updated: 2026-08-28._
 | `sandbox` | ✅ complete | — (multi-cloud Civo/AWS + local DinD) |
 | `storage` | ✅ local complete | `server` adapter (stub) |
 | `terminal` | 🟡 mixed | sidecar-server + types = Phase 0 stubs (Tools/MCP) |
-| `apps/web` | ✅ active | see "In progress" |
+| `apps/web` | ✅ active | see "In progress" · browser session works on local docker (D-70); idle TTL + CDP screenshot route still open (spec 23) |
 | `apps/native` | ✅ functional | — (sidecar :3030, kill on exit) |
 
 ## Milestones (timeline by PR)
+
+- **2026-09-18** — The browser session walked end to end on a local Docker sandbox, which it had never been (D-70). Nine defects, one of them a missing feature and the rest code that existed, typechecked and passed its tests without ever having worked: the panel's noVNC import used a subpath the package's `exports` refuses (the whole project page 500'd); `installBrowserSession` had a column and a bootstrap section but no UI and no API field; launching was gated on terraform and a cloud token a container needs neither of; `provider: "local"` could not be saved, and a saved one was coerced back to Civo on load; the session directory was created `0700 root:root` for a script that runs as the agent user, so the first write failed and took the log with it; the readiness probe used `curl -fs` against websockify, which answers `405`, so a healthy bridge was always declared dead; CDP navigation used `/json/new?url=…`, which Chrome 153 ignores while answering 200, opening one blank tab per click. **And the VNC password: `x11vnc -storepasswd - <file>` does not read stdin — it stores the literal `-`, so every session on every sandbox authenticated against a dash while the UI handed out a token that had never worked.** Now `-passwdfile`, which exists for exactly this. Local transport closed too: `docker run` publishes the bridge on an ephemeral loopback port and websockify binds `0.0.0.0` only for containers, where docker's `127.0.0.1::` binding is the boundary — VNC and CDP stay loopback. 297 sandbox + 1254 web tests.
+
+- **2026-09-12** — A sandbox's app can be tested by hand from inside its own network (spec 23, D-69). Two services on one instance were untestable through tunnels: each process gets its own random public hostname, so a front end's `API_URL` is wrong from the viewer's browser whatever it says, and rewriting it per start only trades that for a build-time value that is stale before it boots. The browser now runs *in* the sandbox — where `localhost:3000` and `localhost:8000` both exist and already agree — reached over an SSH port-forward, never a public tunnel. No new browser: `installAgentBrowser`'s Chromium serves both the human (VNC) and programmatic drive (CDP), so the bootstrap adds only Xvfb, x11vnc and websockify. Every listener is loopback, the VNC password goes in via `x11vnc -storepasswd` inside a `set +x` window (`/proc/<pid>/cmdline` is world-readable), and navigation goes over CDP restricted to loopback targets. 27 new tests, including the shell quoting run through a real bash.
 
 - **2026-09-04** — Telegram reads its settings workspace-aware, closing the gap Slack's 2026-08-19 fix left open. A token updated from inside a workspace lands under `ws:<id>:telegram_bot_token`; `getBotToken` read only the bare key, so every send and the poller kept using the old global token — 401s swallowed by design, nothing visibly wrong. Found live in the worst dressing: the bot token was *rotated* to lock out a rogue second instance, the new value was saved from the Civo workspace, and Telegram went fully silent because the code still held the revoked global row. `findSetting` (the workspace's value → bare key → any workspace's) moved from slack.ts into workspace.ts as the one definition both channels share; the three notify paths resolve the project's workspace, the poller falls back across scopes. 7 new tests pin the precedence.
 

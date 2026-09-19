@@ -84,6 +84,11 @@ export async function registerNode() {
       // Plan-mode runs have no queue to resume — just settle the orphans.
       const { recoverPlanRuns } = await import("@/lib/plan-runner");
       void recoverPlanRuns();
+      // Browser sessions are served by an SSH forward that was a child of the
+      // previous process, so every row still saying "running" is backed by
+      // nothing. Left alone the tab offers an iframe that can never connect.
+      const { reapForwards } = await import("@/lib/browser-session");
+      void reapForwards();
     } catch (err) {
       console.error("[instrumentation] launch recovery failed:", err);
     }

@@ -46,6 +46,9 @@ export type CredentialProvider =
 
 export type SandboxReadiness = {
   terraformInstalled: boolean;
+  /** Docker on this machine. Local sandboxes are containers and need nothing
+   * else — no terraform, no cloud token. */
+  dockerInstalled: boolean;
   hasCivoToken: boolean;
   hasAwsCredentials: boolean;
   /** A saved "claude" credential, or the legacy claude_code_oauth_token
@@ -172,6 +175,9 @@ export type SandboxConfigInput = {
   installClaudeCode: boolean;
   installOpenCode?: boolean;
   installAgentBrowser: boolean;
+  /** xvfb + x11vnc + websockify around the agent browser, for the Browser
+   * panel (spec 23). Only meaningful with `installAgentBrowser`. */
+  installBrowserSession?: boolean;
   installCloudflared: boolean;
   /** Install tailscale and join the tailnet with the saved auth key. */
   installTailscale?: boolean;
@@ -730,6 +736,12 @@ export type SandboxProcessView = {
   command: string;
   cwd: string;
   port: number | null;
+  /**
+   * Every port liveness may probe. A launcher's `port` is null by design (its
+   * shell exits once the containers are detached), so these are the only ports
+   * it ever reports — which makes them the honest set to offer as shortcuts.
+   */
+  checkPorts: number[];
   role: "run" | "services";
   source: "stack" | "repo-setup";
   id: string | null;
@@ -795,6 +807,96 @@ export async function refreshSandboxCli(
   );
   if (!res.ok) return parseError(res, "Could not refresh the sandbox CLI");
   return res.json();
+}
+
+/** The browser session on a sandbox (spec 23), as the tab renders it. */
+export type BrowserSessionView = {
+  id: string;
+  sandboxId: string;
+  status: string; // stopped | starting | running | error
+  display: string;
+  vncPort: number;
+  wsPort: number;
+  cdpPort: number;
+  width: number;
+  height: number;
+  error: string | null;
+  startedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** Loopback URL on the machine running Nexus. Null unless the session is up. */
+  localUrl: string | null;
+  /** VNC password — only sent while the session is actually running. */
+  token: string | null;
+};
+
+export async function getBrowserSession(
+  projectId: string,
+  sandboxId: string,
+): Promise<BrowserSessionView | null> {
+  const res = await fetch(
+    `/api/projects/${projectId}/sandboxes/${sandboxId}/browser`,
+  );
+  if (!res.ok) return parseError(res, "Could not load the browser session");
+  const body = (await res.json()) as { session: BrowserSessionView | null };
+  return body.session;
+}
+
+export async function startBrowserSession(
+  projectId: string,
+  sandboxId: string,
+  opts: { width?: number; height?: number } = {},
+): Promise<BrowserSessionView> {
+  const res = await fetch(
+    `/api/projects/${projectId}/sandboxes/${sandboxId}/browser`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(opts),
+    },
+  );
+  if (!res.ok) return parseError(res, "Could not start the browser session");
+  const body = (await res.json()) as { session: BrowserSessionView };
+  return body.session;
+}
+
+export async function stopBrowserSession(
+  projectId: string,
+  sandboxId: string,
+): Promise<void> {
+  const res = await fetch(
+    `/api/projects/${projectId}/sandboxes/${sandboxId}/browser`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) return parseError(res, "Could not stop the browser session");
+}
+
+export async function navigateBrowserSession(
+  projectId: string,
+  sandboxId: string,
+  url: string,
+): Promise<void> {
+  const res = await fetch(
+    `/api/projects/${projectId}/sandboxes/${sandboxId}/browser/navigate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    },
+  );
+  if (!res.ok) return parseError(res, "Could not open that address");
+}
+
+export async function getBrowserSessionLog(
+  projectId: string,
+  sandboxId: string,
+): Promise<string> {
+  const res = await fetch(
+    `/api/projects/${projectId}/sandboxes/${sandboxId}/browser/log`,
+  );
+  if (!res.ok) return parseError(res, "Could not read the session log");
+  const body = (await res.json()) as { log: string };
+  return body.log;
 }
 
 export async function getSandboxProcessLog(

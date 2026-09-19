@@ -66,6 +66,7 @@ export const SANDBOX_CONFIG_DEFAULTS = {
   installClaudeCode: true,
   installAgentBrowser: true,
   installCloudflared: true,
+  installBrowserSession: false,
   installTailscale: false,
   tailscaleCredentialId: null as string | null,
   includeStackServices: true,
@@ -570,17 +571,25 @@ export async function resolveGitTokens(
 }
 
 export async function getSandboxReadiness() {
-  const [terraformInstalled, savedCreds, civoLegacy, awsLegacy, claudeToken] =
-    await Promise.all([
-      terraformAvailable(),
-      prisma.cloudCredential.groupBy({ by: ["provider"], _count: true }),
-      getCivoToken(),
-      getLegacyAwsCredentials(),
-      getLegacyClaudeCodeToken(),
-    ]);
+  const [
+    terraformInstalled,
+    dockerInstalled,
+    savedCreds,
+    civoLegacy,
+    awsLegacy,
+    claudeToken,
+  ] = await Promise.all([
+    terraformAvailable(),
+    dockerAvailable(),
+    prisma.cloudCredential.groupBy({ by: ["provider"], _count: true }),
+    getCivoToken(),
+    getLegacyAwsCredentials(),
+    getLegacyClaudeCodeToken(),
+  ]);
   const saved = new Set(savedCreds.map((c) => c.provider));
   return {
     terraformInstalled,
+    dockerInstalled,
     hasCivoToken: saved.has("civo") || Boolean(civoLegacy),
     hasAwsCredentials: saved.has("aws") || Boolean(awsLegacy),
     hasClaudeCodeToken: saved.has("claude") || Boolean(claudeToken),
@@ -718,6 +727,10 @@ async function buildSpec(
     claudeModel: cfg.claudeModel,
     installAgentBrowser: cfg.installAgentBrowser,
     installCloudflared: cfg.installCloudflared,
+    // The session runs Chromium from installAgentBrowser, so asking for a
+    // browser without one would install a display serving nothing.
+    installBrowserSession:
+      cfg.installBrowserSession && cfg.installAgentBrowser,
     installTailscale: cfg.installTailscale,
     // Without a key the bootstrap registers interactively and prints the URL
     // to approve, so a missing or keyless credential never blocks a launch.

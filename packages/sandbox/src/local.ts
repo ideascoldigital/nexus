@@ -11,6 +11,7 @@ import {
   renderCloudInit,
   safeSlug,
 } from "./template";
+import { DEFAULT_WS_PORT } from "./template-browser";
 
 const BASE_IMAGE = "ubuntu:22.04";
 export const LOCAL_BOOTSTRAP_LOG = "/var/log/nexus-bootstrap.log";
@@ -134,6 +135,17 @@ export async function launchLocalSandbox(opts: {
       // real volume.
       "-v",
       `${name}-docker:/var/lib/docker`,
+      // The browser session's WebSocket bridge (spec 23). A cloud sandbox is
+      // reached over an SSH forward; a container has no sshd, so the port has
+      // to be published or the dashboard has nothing to connect to.
+      //
+      // The host side is left empty on purpose — docker picks a free port and
+      // `browserWsPort()` reads it back. Pinning 6080 here would collide the
+      // moment a second local sandbox runs. The 127.0.0.1 prefix is the part
+      // that matters: an unbound VNC bridge is a browser holding this
+      // machine's localhost, offered to the network.
+      "-p",
+      `127.0.0.1::${DEFAULT_WS_PORT}`,
       ...mounts,
       "--name",
       name,
@@ -245,6 +257,36 @@ export async function localSandboxRunning(name: string): Promise<boolean> {
     { timeoutMs: 15_000 },
   ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
   return res.code === 0 && res.stdout.trim() === "true";
+}
+
+/**
+ * The host port docker gave the browser session's WebSocket bridge, or null
+ * when the container publishes none — a sandbox created before the port was
+ * published keeps running without one, and a panel that cannot connect is
+ * better than a wrong port that silently connects to something else.
+ *
+ * `docker port` prints one `host:port` line per binding (both IPv4 and IPv6
+ * when both are bound), so the port is parsed off the end rather than by
+ * splitting on ":" — an IPv6 host address carries colons of its own.
+ */
+export function parseDockerPort(stdout: string): number | null {
+  for (const line of stdout.split("\n")) {
+    const match = line.trim().match(/:(\d+)$/);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
+  }
+  return null;
+}
+
+export async function browserWsPort(name: string): Promise<number | null> {
+  const res = await run(
+    "docker",
+    ["port", name, `${DEFAULT_WS_PORT}/tcp`],
+    { timeoutMs: 15_000 },
+  ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
+  if (res.code !== 0) return null;
+  return parseDockerPort(res.stdout);
 }
 
 /** Stop the container — cheap pause; state (checkout, node_modules) stays. */

@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { memoryLimitFromTotalBytes } from "./local";
+import { memoryLimitFromTotalBytes, parseDockerPort } from "./local";
 
 const GB = 1024 * 1024 * 1024;
 
@@ -51,4 +51,25 @@ test("the cap never exceeds what Docker actually has", () => {
     const mb = memoryLimitFromTotalBytes(total)!;
     assert.ok(mb < total / 1024 / 1024, `${total} gave ${mb}`);
   }
+});
+
+test("the published host port is read off the end of the line", () => {
+  // `docker port` prints one binding per line, and an IPv6 address carries
+  // colons of its own — splitting on ":" would take the wrong field.
+  assert.equal(parseDockerPort("0.0.0.0:49154\n"), 49154);
+  assert.equal(parseDockerPort("127.0.0.1:32770"), 32770);
+  assert.equal(parseDockerPort("[::]:49154"), 49154);
+  // Both families bound: either answers, so the first is enough.
+  assert.equal(parseDockerPort("127.0.0.1:32770\n[::1]:32771\n"), 32770);
+});
+
+test("a container with no such binding yields no port", () => {
+  // `docker port` prints nothing when the port was never published, and a
+  // guessed port would connect the panel to whatever else is listening.
+  assert.equal(parseDockerPort(""), null);
+  assert.equal(parseDockerPort("\n"), null);
+  assert.equal(parseDockerPort("Error: No public port"), null);
+  // Out of range is not a port.
+  assert.equal(parseDockerPort("127.0.0.1:99999"), null);
+  assert.equal(parseDockerPort("127.0.0.1:0"), null);
 });

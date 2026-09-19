@@ -105,16 +105,17 @@ export function resolveStep(
  * The destination to open with.
  *
  * The URL wins when it names one, because it records what the user last chose
- * in this drawer — including "local", which the saved config cannot express.
- * Without it, fall back to the saved provider, and to Civo for a config that
- * predates the field.
+ * in this drawer. Without it, fall back to the saved provider — "local"
+ * included: the config stores it now, so coercing it to Civo would reopen the
+ * drawer on a destination the project did not pick. Civo remains the fallback
+ * for a config that predates the field.
  */
 export function resolveDestination(
   fromUrl: string | null | undefined,
   savedProvider: string | null | undefined,
 ): SandboxDestination {
   if (isSandboxDestination(fromUrl)) return fromUrl;
-  return savedProvider === "aws" ? "aws" : "civo";
+  return isSandboxDestination(savedProvider) ? savedProvider : "civo";
 }
 
 /**

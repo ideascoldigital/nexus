@@ -15,6 +15,9 @@ export {
   TS_UP_LOG,
 } from "./template";
 export {
+  // Shell-quoting, shared by both bootstraps and every caller that builds a
+  // remote command — one implementation, so a fix cannot land on only one.
+  shq,
   sandboxInstanceName,
   customSandboxName,
   normalizeSandboxPrefix,
@@ -52,6 +55,27 @@ export {
   HOST_UPDATE_REQUEST,
   type NexusHostSpec,
 } from "./template-host";
+// Spec 23 — the interactive browser session on a sandbox.
+export {
+  renderBrowserInstallSection,
+  renderBrowserStartScript,
+  renderBrowserStopScript,
+  parseBrowserStart,
+  isValidDisplay,
+  isValidPort,
+  isValidDimension,
+  BROWSER_DIR,
+  BROWSER_LOG,
+  BROWSER_READY_MARKER,
+  DEFAULT_DISPLAY,
+  DEFAULT_VNC_PORT,
+  DEFAULT_WS_PORT,
+  DEFAULT_CDP_PORT,
+  DEFAULT_WIDTH,
+  DEFAULT_HEIGHT,
+  VNC_TOKEN_LENGTH,
+  type BrowserSessionSpec,
+} from "./template-browser";
 export { runTerraform, terraformAvailable } from "./terraform";
 export {
   ensureSandboxKeypair,
@@ -121,6 +145,7 @@ export {
   type WorkspaceFolder,
 } from "./workspace";
 export {
+  browserWsPort,
   dockerAvailable,
   launchLocalSandbox,
   localBootstrapComplete,
