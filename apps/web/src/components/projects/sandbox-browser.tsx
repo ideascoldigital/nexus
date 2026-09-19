@@ -62,9 +62,13 @@ function shortcutPorts(
 export function SandboxBrowserPanel({
   projectId,
   sandboxId,
+  provider,
 }: {
   projectId: string;
   sandboxId: string;
+  /** Which transport serves the session — the two differ, and the caption
+   * claiming an SSH forward is wrong for a container, which has no sshd. */
+  provider?: string;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -240,8 +244,10 @@ export function SandboxBrowserPanel({
           <p className="text-[10px] text-muted-foreground">
             Runs inside the sandbox, so <code>localhost</code> here is the
             sandbox&apos;s own — the app&apos;s API URL resolves without any
-            rewriting. Reached over an SSH forward from this machine, not a
-            public tunnel.
+            rewriting.{" "}
+            {provider === "local"
+              ? "Reached over a port docker publishes on this machine's loopback, not a public tunnel."
+              : "Reached over an SSH forward from this machine, not a public tunnel."}
           </p>
         </>
       )}

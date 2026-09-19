@@ -4366,7 +4366,11 @@ function SandboxRow({
         <SandboxProcessPanel projectId={projectId} sandboxId={sandbox.id} />
       )}
       {sandbox.status === "running" && (
-        <SandboxBrowserPanel projectId={projectId} sandboxId={sandbox.id} />
+        <SandboxBrowserPanel
+          projectId={projectId}
+          sandboxId={sandbox.id}
+          provider={sandbox.provider}
+        />
       )}
       {showLog && (
         <>
