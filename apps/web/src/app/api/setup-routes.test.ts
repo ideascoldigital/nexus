@@ -228,6 +228,19 @@ test("an unknown provider or brain is rejected", async () => {
   );
 });
 
+test("local is a provider a project can be saved with", async () => {
+  // launchSandbox branches on `sandboxConfig.provider === "local"` to run the
+  // container path; a schema that refuses the value makes that branch
+  // reachable only through a per-launch override, and the drawer's choice is
+  // silently lost on every save.
+  const res = await put({
+    config: validConfig({ provider: "local", region: "local", size: "docker" }),
+  });
+  assert.equal(res.status, 200);
+  const setup = await (await get()).json();
+  assert.equal(setup.config.provider, "local");
+});
+
 test("a preview port outside the valid range is rejected", async () => {
   assert.equal(
     (await put({ config: validConfig({ previewPort: 0 }) })).status,

@@ -555,9 +555,15 @@ export function ProjectSandboxes({
 
   const { readiness } = setup.data;
   const list = sandboxes.data ?? [];
-  const ready =
+  // Two independent paths to a sandbox, and the drawer already knows both:
+  // a cloud instance (terraform + a provider token) or a local container
+  // (Docker alone — `launchSandbox` asks for nothing else when the provider is
+  // "local"). Gating the button on the cloud path hid the one that needs no
+  // account at all.
+  const cloudReady =
     readiness.terraformInstalled &&
     (readiness.hasCivoToken || readiness.hasAwsCredentials);
+  const ready = cloudReady || readiness.dockerInstalled;
 
   // The in-app terminal lands in the main repo's checkout on the instance
   // (cloned or mounted — both live under /opt/nexus/<slug>).
@@ -600,7 +606,7 @@ export function ProjectSandboxes({
                 title={
                   ready
                     ? "Configure and launch an ephemeral instance"
-                    : "Install terraform and add Civo or AWS credentials first"
+                    : "Start Docker for a local sandbox, or install terraform and add Civo or AWS credentials for a cloud one"
                 }
               >
                 New sandbox
@@ -892,6 +898,11 @@ function SetupEditor({
   };
 
   const [config, setConfig] = useState<SandboxConfigInput>(() => ({
+    // `config.provider` names the *cloud* provider whose regions and sizes the
+    // form edits; where the sandbox runs is `destination`. A saved "local" is
+    // therefore not a provider this form can show — it resolves to the
+    // destination instead, and the cloud fields keep their Civo defaults until
+    // the user picks a cloud.
     provider: initialConfig.provider === "aws" ? "aws" : "civo",
     credentialId:
       initialConfig.credentialId ??
@@ -923,6 +934,7 @@ function SetupEditor({
     installClaudeCode: initialConfig.installClaudeCode,
     installOpenCode: initialConfig.installOpenCode ?? false,
     installAgentBrowser: initialConfig.installAgentBrowser,
+    installBrowserSession: initialConfig.installBrowserSession ?? false,
     installCloudflared: initialConfig.installCloudflared,
     installTailscale: initialConfig.installTailscale ?? false,
     tailscaleCredentialId:
@@ -1254,6 +1266,7 @@ function SetupEditor({
     config.installClaudeCode && "Claude Code",
     (config.installOpenCode || config.brain === "opencode") && "OpenCode",
     config.installAgentBrowser && "agent-browser",
+    config.installBrowserSession && "Browser session",
     config.installCloudflared && "cloudflared",
     config.installTailscale && "Tailscale",
   ].filter(Boolean) as string[];
@@ -1733,7 +1746,23 @@ function SetupEditor({
             <ToolToggle
               label="agent-browser"
               checked={config.installAgentBrowser}
-              onChange={(v) => setConfig({ ...config, installAgentBrowser: v })}
+              onChange={(v) =>
+                setConfig({
+                  ...config,
+                  installAgentBrowser: v,
+                  // The session is a display around *that* browser; without it
+                  // there is nothing to show, and `launchSandbox` forces the
+                  // flag off anyway. Clearing it here keeps the panel honest
+                  // instead of offering a toggle the bootstrap ignores.
+                  installBrowserSession: v ? config.installBrowserSession : false,
+                })
+              }
+            />
+            <ToolToggle
+              label="Browser session"
+              checked={config.installBrowserSession ?? false}
+              disabled={!config.installAgentBrowser}
+              onChange={(v) => setConfig({ ...config, installBrowserSession: v })}
             />
             <ToolToggle
               label="cloudflared"
@@ -2660,15 +2689,27 @@ function ToolToggle({
   label,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  /** For a tool that only means something alongside another one. */
+  disabled?: boolean;
 }) {
   return (
-    <label className="flex items-center justify-between gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2 cursor-pointer">
+    <label
+      className={`flex items-center justify-between gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2 ${
+        disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+      }`}
+    >
       <span className="text-xs">{label}</span>
-      <Switch size="sm" checked={checked} onCheckedChange={onChange} />
+      <Switch
+        size="sm"
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onChange}
+      />
     </label>
   );
 }
@@ -2680,11 +2721,15 @@ function ReadinessBanner({
   readiness: SandboxReadiness;
   onCredentialsSaved: () => void;
 }) {
-  const { terraformInstalled, hasCivoToken, hasAwsCredentials } = readiness;
+  const { terraformInstalled, dockerInstalled, hasCivoToken, hasAwsCredentials } =
+    readiness;
 
   // Hidden once terraform is present and at least one provider is usable;
   // per-provider gaps are surfaced in the setup drawer next to the selector.
   if (terraformInstalled && (hasCivoToken || hasAwsCredentials)) return null;
+  // Docker on its own is a complete path — a local sandbox needs no cloud
+  // account, so a banner demanding one is telling the user to fix nothing.
+  if (dockerInstalled) return null;
 
   return (
     <div className="rounded-md border border-amber-500/20 bg-amber-500/5 p-3 space-y-3">

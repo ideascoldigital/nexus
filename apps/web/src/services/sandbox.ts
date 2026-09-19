@@ -46,6 +46,9 @@ export type CredentialProvider =
 
 export type SandboxReadiness = {
   terraformInstalled: boolean;
+  /** Docker on this machine. Local sandboxes are containers and need nothing
+   * else — no terraform, no cloud token. */
+  dockerInstalled: boolean;
   hasCivoToken: boolean;
   hasAwsCredentials: boolean;
   /** A saved "claude" credential, or the legacy claude_code_oauth_token
@@ -172,6 +175,9 @@ export type SandboxConfigInput = {
   installClaudeCode: boolean;
   installOpenCode?: boolean;
   installAgentBrowser: boolean;
+  /** xvfb + x11vnc + websockify around the agent browser, for the Browser
+   * panel (spec 23). Only meaningful with `installAgentBrowser`. */
+  installBrowserSession?: boolean;
   installCloudflared: boolean;
   /** Install tailscale and join the tailnet with the saved auth key. */
   installTailscale?: boolean;

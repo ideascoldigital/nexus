@@ -226,7 +226,11 @@ export async function GET(_req: NextRequest, { params }: Params) {
 }
 
 const configSchema = z.object({
-  provider: z.enum(["civo", "aws"]).default("civo"),
+  // "local" belongs here as much as the cloud providers: launchSandbox reads
+  // `sandboxConfig.provider === "local"` to pick the container path, so a
+  // schema that refuses the value leaves that branch reachable only through a
+  // per-launch override and the drawer's choice never survives a save.
+  provider: z.enum(["civo", "aws", "local"]).default("civo"),
   credentialId: z.string().nullable().optional(),
   githubCredentialId: z.string().nullable().optional(),
   claudeCredentialId: z.string().nullable().optional(),
@@ -239,6 +243,7 @@ const configSchema = z.object({
   installNode: z.boolean(),
   installClaudeCode: z.boolean(),
   installAgentBrowser: z.boolean(),
+  installBrowserSession: z.boolean().optional(),
   installCloudflared: z.boolean(),
   installTailscale: z.boolean().optional(),
   tailscaleCredentialId: z.string().nullable().optional(),
@@ -332,6 +337,7 @@ export async function PUT(req: NextRequest, { params }: Params) {
       installNode: config.installNode,
       installClaudeCode: config.installClaudeCode,
       installAgentBrowser: config.installAgentBrowser,
+      installBrowserSession: Boolean(config.installBrowserSession),
       installCloudflared: config.installCloudflared,
       installTailscale: Boolean(config.installTailscale),
       tailscaleCredentialId,

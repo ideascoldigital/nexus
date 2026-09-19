@@ -25,6 +25,7 @@ import { getConfig } from "@nexux/config";
 import { prisma, type BrowserSession } from "@nexux/db";
 import {
   BROWSER_LOG,
+  browserWsPort,
   execRemote,
   parseBrowserStart,
   renderBrowserStartScript,
@@ -187,26 +188,49 @@ export async function reapForwards(): Promise<void> {
   }
 }
 
+/**
+ * Where a local sandbox's session is served from: the host port docker bound
+ * to the container's bridge. Null for a cloud sandbox (it uses a forward), and
+ * null for a container created before the port was published — those keep
+ * running, they just have no panel.
+ */
+async function publishedPortFor(sandbox: {
+  provider: string;
+  instanceId: string | null;
+}): Promise<number | null> {
+  if (sandbox.provider !== "local" || !sandbox.instanceId) return null;
+  return browserWsPort(sandbox.instanceId).catch(() => null);
+}
+
 /** The row for a sandbox, with what this host knows about serving it. */
 export async function getBrowserSession(
   projectId: string,
   sandboxId: string,
 ): Promise<BrowserSessionView | null> {
-  await loadSandbox(projectId, sandboxId);
+  const sandbox = await loadSandbox(projectId, sandboxId);
   const row = await prisma.browserSession.findUnique({ where: { sandboxId } });
   if (!row) return null;
-  return toView(row);
+  return toView(row, await publishedPortFor(sandbox));
 }
 
-function toView(row: BrowserSession): BrowserSessionView {
+function toView(
+  row: BrowserSession,
+  /** For a local sandbox: the host port docker published, in place of a forward. */
+  publishedPort?: number | null,
+): BrowserSessionView {
   const fwd = forwards.get(row.sandboxId);
-  const live = row.status === "running" && Boolean(fwd);
+  // Two transports, one shape. A cloud sandbox is reached through a forward
+  // this process owns; a container has no sshd, so docker publishes the port
+  // instead and there is no child to own. Either way the session is only
+  // serveable when something on this machine answers for it.
+  const port = fwd?.localPort ?? publishedPort ?? null;
+  const live = row.status === "running" && port !== null;
   return {
     ...row,
     // The password only travels once the session is actually up: a stored
     // secret handed out for a stopped session is a secret leaked for nothing.
     token: live ? row.token : null,
-    localUrl: live ? `http://127.0.0.1:${fwd!.localPort}` : null,
+    localUrl: live ? `http://127.0.0.1:${port}` : null,
   };
 }
 
@@ -261,6 +285,11 @@ export async function startBrowserSession(
     cdpPort: row.cdpPort,
     width: row.width,
     height: row.height,
+    // A container's published port forwards to its own interface, which a
+    // loopback-only bridge never answers. There the privacy boundary is
+    // docker's `-p 127.0.0.1::` binding, not the bind address inside; on a
+    // cloud instance the bind address is the whole boundary, so it stays.
+    wsAllInterfaces: sandbox.provider === "local",
   });
 
   const fail = async (message: string) => {
@@ -303,11 +332,18 @@ export async function startBrowserSession(
   // docker publishes the port instead and the container is already reachable
   // from this machine.
   if (sandbox.provider === "local") {
+    const published = await publishedPortFor(sandbox);
+    if (published === null) {
+      return fail(
+        "This container publishes no browser port. It was created before the " +
+          "browser session shipped — destroy it and launch a new sandbox.",
+      );
+    }
     const updated = await prisma.browserSession.update({
       where: { id: row.id },
       data: { status: "running", error: null, startedAt: new Date() },
     });
-    return toView(updated);
+    return toView(updated, published);
   }
 
   if (!sandbox.publicIp) return fail("The sandbox has no address to reach");

@@ -272,7 +272,7 @@ function VncScreen({ url, password }: { url: string; password: string }) {
 
     // noVNC touches `document` when constructed, so it cannot be imported at
     // module scope in a server-rendered tree.
-    void import("@novnc/novnc/core/rfb.js")
+    void import("@novnc/novnc")
       .then(({ default: RFB }) => {
         if (cancelled || !containerRef.current) return;
         const wsUrl = url.replace(/^http/, "ws") + "/websockify";

@@ -1,7 +1,7 @@
 // @novnc/novnc ships no types (1.7.0, MPL-2.0). Only the surface the browser
 // tab uses is declared — a hand-written .d.ts that claimed the whole API would
 // drift from the package without anything catching it.
-declare module "@novnc/novnc/core/rfb.js" {
+declare module "@novnc/novnc" {
   export interface RFBOptions {
     /** VNC password. The protocol truncates it to 8 bytes. */
     credentials?: { username?: string; password?: string; target?: string };

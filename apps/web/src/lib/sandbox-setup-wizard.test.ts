@@ -31,8 +31,8 @@ test("cloud destinations get the Machine step, local does not", () => {
 // ---- destination ----
 
 test("a destination in the URL is restored over the saved provider", () => {
-  // Regression: "local" cannot be stored on SandboxConfig (provider is
-  // civo | aws), so without the URL a reload flipped a local wizard to cloud.
+  // The URL records what the user last picked in this drawer, which is not
+  // necessarily what the project has saved.
   assert.equal(resolveDestination("local", "civo"), "local");
   assert.equal(resolveDestination("local", "aws"), "local");
   assert.equal(resolveDestination("aws", "civo"), "aws");
@@ -42,6 +42,10 @@ test("a destination in the URL is restored over the saved provider", () => {
 test("without a URL destination it falls back to the saved provider", () => {
   assert.equal(resolveDestination(null, "aws"), "aws");
   assert.equal(resolveDestination(null, "civo"), "civo");
+  // SandboxConfig stores "local" now, and launchSandbox branches on it, so a
+  // project that runs in a container must reopen in one — coercing it to Civo
+  // showed a destination the project had not chosen.
+  assert.equal(resolveDestination(null, "local"), "local");
 });
 
 test("an unknown or missing provider falls back to civo", () => {

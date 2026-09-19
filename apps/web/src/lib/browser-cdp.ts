@@ -42,9 +42,14 @@ export function isLocalTarget(raw: string): boolean {
  * option (RemoteExecOpts is host/user/key/container/cwd/onLog/timeout/signal),
  * so a variable would expand to nothing and the navigate would silently open
  * about:blank.
+ *
+ * The target is the *whole* query string, not a `url=` parameter. Chrome
+ * accepts `/json/new?<url>` and ignores `/json/new?url=<url>`, which opens a
+ * tab on about:blank and still answers 200 — so the named form failed by
+ * piling up blank tabs while every call looked successful.
  */
 export function renderNavigateScript(cdpPort: number, url: string): string {
-  return `curl -fs -X PUT "http://127.0.0.1:${cdpPort}/json/new?url=$(printf '%s' ${shq(url)} | sed -e 's/%/%25/g' -e 's/&/%26/g' -e 's/#/%23/g' -e 's/ /%20/g')"`;
+  return `curl -fs -X PUT "http://127.0.0.1:${cdpPort}/json/new?$(printf '%s' ${shq(url)} | sed -e 's/%/%25/g' -e 's/&/%26/g' -e 's/#/%23/g' -e 's/ /%20/g')"`;
 }
 
 /**

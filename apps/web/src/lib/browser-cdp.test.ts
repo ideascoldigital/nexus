@@ -46,6 +46,15 @@ test("the CDP call stays on loopback", () => {
   assert.ok(!script.includes("0.0.0.0"));
 });
 
+test("the target is the query string, not a url= parameter", () => {
+  // Chrome opens `/json/new?<url>` and ignores `/json/new?url=<url>` — it
+  // answers 200 either way and lands the tab on about:blank, so the named
+  // form failed silently, one blank tab per click.
+  const script = renderNavigateScript(9222, "http://localhost:3000");
+  assert.match(script, /\/json\/new\?\$\(/);
+  assert.doesNotMatch(script, /\/json\/new\?url=/);
+});
+
 test("a URL with shell metacharacters cannot break out", () => {
   const nasty = "http://localhost:3000/'; touch /tmp/pwned; echo '";
   const script = renderNavigateScript(9222, nasty);
