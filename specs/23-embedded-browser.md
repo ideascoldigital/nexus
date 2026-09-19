@@ -1,7 +1,8 @@
 # Spec 23 — Embedded browser: testing an app from inside its own network
 
-Status: **shipped** (2026-09-12, D-69) — bootstrap, model, manager, routes and
-the Browser panel. The idle TTL and the CDP screenshot route remain open; see
+Status: **shipped** (2026-09-12, D-69) and **verified end to end on a local
+Docker sandbox** (2026-09-18, D-70) — bootstrap, model, manager, routes and the
+Browser panel. The idle TTL and the CDP screenshot route remain open; see
 Remaining at the end.
 
 ## Goal
@@ -226,9 +227,15 @@ sites. That is a different problem, and this spec does not foreclose it.
   because the address bar is unusable without it; screenshots are what would
   let task runs reuse the session, and `renderScreenshotSection` is where they
   would land.
-- **Local sandboxes.** `provider === "local"` skips the forward (the container
-  is already reachable from this machine) but nothing publishes its wsPort yet,
-  so the panel is cloud-only in practice.
+- ~~**Local sandboxes.**~~ Done (D-70). `docker run` publishes the bridge on an
+  ephemeral loopback port (`-p 127.0.0.1::6080` — ephemeral because a fixed
+  6080 collides as soon as a second local sandbox runs), `browserWsPort` reads
+  it back with `docker port`, and `toView` serves `localUrl` from it in place
+  of a forward. One deliberate loosening: docker forwards a published port to
+  the container's own interface, which a loopback-only listener never answers,
+  so websockify binds `0.0.0.0` under an explicit `wsAllInterfaces` flag set
+  only for `provider === "local"`. There the boundary is docker's `127.0.0.1::`
+  binding, which never leaves the host's loopback. VNC and CDP are untouched.
 
 ## Open questions
 
