@@ -1253,7 +1253,7 @@ fi`;
   // not here: a browser idling on every sandbox would cost memory on instances
   // nobody is looking at. Chromium already arrived with installAgentBrowser.
   if (spec.installBrowserSession) {
-    sections.push(renderBrowserInstallSection());
+    sections.push(renderBrowserInstallSection(AGENT_USER));
   }
 
   // The completion marker is what the host polls to call a sandbox ready, so a

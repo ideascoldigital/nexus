@@ -37,14 +37,28 @@ export type BrowserSessionSpec = {
   vncPort?: number;
   /** websockify port the SSH forward lands on — loopback only. */
   wsPort?: number;
+  /**
+   * Bind the WebSocket bridge to every interface instead of loopback.
+   *
+   * Only for a container, and only because docker's port publishing cannot
+   * reach a loopback-only listener: the forwarded packet arrives on the
+   * container's own interface, so a bridge bound to 127.0.0.1 answers nobody.
+   * What keeps it private there is the published binding itself
+   * (`-p 127.0.0.1::6080`), which never leaves the host's loopback.
+   *
+   * On a cloud instance this must stay false: the boundary there is the bind
+   * address, and "every interface" means the public one.
+   */
+  wsAllInterfaces?: boolean;
   /** Chrome DevTools Protocol port — loopback only. */
   cdpPort?: number;
   width?: number;
   height?: number;
   /**
-   * VNC password. Written to a 0600 file with `x11vnc -storepasswd`, never
-   * passed on a command line: /proc/<pid>/cmdline is world-readable, so
-   * `-passwd <secret>` would publish it to every user on the instance.
+   * VNC password. Written to a 0600 file and handed to x11vnc as
+   * `-passwdfile`, never passed on a command line: /proc/<pid>/cmdline is
+   * world-readable, so `-passwd <secret>` would publish it to every user on
+   * the instance.
    */
   token: string;
 };
@@ -72,10 +86,17 @@ export function isValidDimension(value: number): boolean {
  * for the agents' screenshots. Installing a second browser would mean two
  * builds to keep current and two paths to get wrong.
  */
-export function renderBrowserInstallSection(): string {
+export function renderBrowserInstallSection(agentUser: string): string {
+  // The bootstrap runs as root; the session script runs as the agent user, and
+  // everything it writes — the log, the VNC password, the pid files — lands
+  // here. A root-owned 0700 directory makes every one of those fail with
+  // EACCES, which surfaces as "the virtual display did not start" with an
+  // empty log: the script cannot even record why. Same `mkdir` + `chown` the
+  // checkout dirs get, and for the same reason.
   return `echo "[nexux] installing the browser session (xvfb, x11vnc, websockify)"
 nexus_apt install -y xvfb x11vnc websockify || echo "[nexux] WARN: browser session install failed"
 mkdir -p ${BROWSER_DIR}
+chown ${shq(agentUser)}:${shq(agentUser)} ${BROWSER_DIR}
 chmod 700 ${BROWSER_DIR}`;
 }
 
@@ -93,6 +114,9 @@ export function renderBrowserStartScript(spec: BrowserSessionSpec): string {
   const display = spec.display ?? DEFAULT_DISPLAY;
   const vncPort = spec.vncPort ?? DEFAULT_VNC_PORT;
   const wsPort = spec.wsPort ?? DEFAULT_WS_PORT;
+  // VNC and CDP are never widened: the VNC server is reached through this
+  // bridge, and an open CDP port is remote code execution with extra steps.
+  const wsBind = spec.wsAllInterfaces ? "0.0.0.0" : "127.0.0.1";
   const cdpPort = spec.cdpPort ?? DEFAULT_CDP_PORT;
   const width = spec.width ?? DEFAULT_WIDTH;
   const height = spec.height ?? DEFAULT_HEIGHT;
@@ -120,9 +144,9 @@ export function renderBrowserStartScript(spec: BrowserSessionSpec): string {
 
   const passwdFile = `${BROWSER_DIR}/vncpasswd`;
 
-  // The token reaches the shell exactly once, quoted, piped straight into
-  // x11vnc -storepasswd. `set +x` around it keeps it out of the bootstrap's
-  // xtrace, which is on for the rest of the run.
+  // The token reaches the shell exactly once, quoted, written straight to the
+  // passwd file. `set +x` around it keeps it out of the bootstrap's xtrace,
+  // which is on for the rest of the run.
   return `set -u
 mkdir -p ${BROWSER_DIR}
 chmod 700 ${BROWSER_DIR}
@@ -139,8 +163,16 @@ chmod 600 ${BROWSER_LOG}
 
 # The password never appears in a command line (/proc/<pid>/cmdline is
 # world-readable) and never in the trace.
+#
+# -passwdfile reads the plaintext from the file's first line, which is exactly
+# what it exists for. The form this replaced looked
+# like "read the password from stdin" and is not: x11vnc takes the literal "-"
+# as the password, obfuscates that, and never reads stdin — so every session
+# authenticated against a dash while the panel was handed a token that could
+# never work.
 set +x
-printf '%s' ${shq(spec.token)} | x11vnc -storepasswd - ${passwdFile} >/dev/null 2>&1
+umask 077
+echo ${shq(spec.token)} > ${passwdFile}
 set -x
 chmod 600 ${passwdFile}
 
@@ -176,20 +208,29 @@ echo $! > ${BROWSER_DIR}/chromium.pid
 # -localhost: the dashboard arrives over an SSH forward, so the VNC server
 # must never answer on the public interface.
 setsid x11vnc -display ${display} -rfbport ${vncPort} -localhost \\
-  -rfbauth ${passwdFile} -forever -shared -noxdamage \\
+  -passwdfile ${passwdFile} -forever -shared -noxdamage \\
   >> ${BROWSER_LOG} 2>&1 < /dev/null &
 echo $! > ${BROWSER_DIR}/x11vnc.pid
 
-setsid websockify 127.0.0.1:${wsPort} 127.0.0.1:${vncPort} \\
+setsid websockify ${wsBind}:${wsPort} 127.0.0.1:${vncPort} \\
   >> ${BROWSER_LOG} 2>&1 < /dev/null &
 echo $! > ${BROWSER_DIR}/websockify.pid
 
 # Report ready only once the port the forward lands on actually answers.
+#
+# Any HTTP status counts, which is the whole point: websockify answers a plain
+# GET with 405, so curl -f (which fails on 4xx) reports exit 22 against a
+# perfectly healthy bridge and the session is declared dead every time. What
+# is being tested here is that something is listening and speaking HTTP, not
+# that it likes this particular request — the upgrade handshake is noVNC's job.
+ws_answers() {
+  curl -s -o /dev/null -m 3 "http://127.0.0.1:${wsPort}" 2>/dev/null
+}
 for i in $(seq 1 30); do
-  curl -fs -o /dev/null "http://127.0.0.1:${wsPort}" 2>/dev/null && break
+  ws_answers && break
   sleep 1
 done
-if curl -fs -o /dev/null "http://127.0.0.1:${wsPort}" 2>/dev/null; then
+if ws_answers; then
   touch ${BROWSER_READY_MARKER}
   echo "READY:${wsPort}:${cdpPort}"
 else

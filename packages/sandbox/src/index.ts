@@ -145,6 +145,7 @@ export {
   type WorkspaceFolder,
 } from "./workspace";
 export {
+  browserWsPort,
   dockerAvailable,
   launchLocalSandbox,
   localBootstrapComplete,
