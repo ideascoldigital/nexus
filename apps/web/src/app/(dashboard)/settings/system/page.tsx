@@ -18,6 +18,9 @@ import type { Metric, SystemMetrics } from "@/lib/system-metrics";
 
 type MetricsResponse = { system: SystemMetrics; sandboxes: SandboxMetric[] };
 
+/** Shared by the header and every row, so the columns cannot drift apart. */
+const SANDBOX_COLS = "grid-cols-[1fr_4rem_9rem_4rem]";
+
 function formatBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -186,7 +189,14 @@ export default function SystemStatsPage() {
             </p>
           ) : (
             <div className="space-y-1">
-              <div className="grid grid-cols-[1fr_auto_auto_auto] gap-4 border-b pb-1 font-mono text-[10px] uppercase text-muted-foreground">
+              {/* One shared column definition, in fixed widths rather than
+                  `auto`: the header and each row are separate grids, so `auto`
+                  sizes every one of them to its own content and the columns
+                  drift apart. Memory is the widest because it carries a pair
+                  ("336 MB / 10 GB"); the rest are short percentages. */}
+              <div
+                className={`grid ${SANDBOX_COLS} gap-4 border-b pb-1 font-mono text-[10px] uppercase text-muted-foreground`}
+              >
                 <span>name</span>
                 <span className="text-right">cpu</span>
                 <span className="text-right">memory</span>
@@ -195,7 +205,7 @@ export default function SystemStatsPage() {
               {data.sandboxes.map((s) => (
                 <div
                   key={s.name}
-                  className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 py-1 font-mono text-xs"
+                  className={`grid ${SANDBOX_COLS} items-center gap-4 py-1 font-mono text-xs`}
                 >
                   <span className="truncate">{s.name}</span>
                   <span className="text-right text-muted-foreground">
