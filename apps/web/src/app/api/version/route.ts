@@ -12,12 +12,11 @@
  * first.
  */
 
-import { execFile } from "child_process";
 import fs from "fs/promises";
-import { promisify } from "util";
 
 import { NextResponse } from "next/server";
 
+import { buildGitSha } from "@/lib/build-sha";
 import { buildVersion, releaseOf } from "@/lib/build-version";
 import { REPO_URL } from "@/lib/repo";
 
@@ -38,19 +37,6 @@ export type AppVersion = {
   native: boolean;
 };
 
-const execFileP = promisify(execFile);
-
-// Dev-checkout fallback, resolved once per server process. CI builds always
-// have NEXUX_GIT_SHA baked in; only `pnpm dev` reaches the git call.
-let devShaPromise: Promise<string | null> | undefined;
-
-function devGitSha(): Promise<string | null> {
-  devShaPromise ??= execFileP("git", ["rev-parse", "HEAD"])
-    .then(({ stdout }) => stdout.trim() || null)
-    .catch(() => null);
-  return devShaPromise;
-}
-
 export async function GET() {
   // Written by the Dockerfile on every image build, CI or local — the one
   // marker that distinguishes two builds even when neither arg was passed.
@@ -61,7 +47,7 @@ export async function GET() {
       .then((s) => s.trim() || null)
       .catch(() => null));
 
-  const gitSha = process.env.NEXUX_GIT_SHA || (await devGitSha());
+  const gitSha = await buildGitSha();
   const version = await buildVersion();
 
   const body: AppVersion = {
