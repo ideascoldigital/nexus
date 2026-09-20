@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 
 import { ArrowUpCircle, Check, Loader2 } from "lucide-react";
 
+import { SystemMeters } from "@/components/layout/system-meters";
 import { getVersion, type AppVersion } from "@/services/hosts";
 import {
   checkUpdates,
@@ -191,7 +192,11 @@ export function StatusBar() {
   useExternalLinkBridge(native);
 
   return (
-    <footer className="flex h-6 shrink-0 items-center justify-end gap-3 border-t bg-background px-3 text-[11px] text-muted-foreground">
+    <footer className="flex h-6 shrink-0 items-center gap-3 border-t bg-background px-3 text-[11px] text-muted-foreground">
+      {/* Resources sit left, build identity right: the numbers are glanced at
+          constantly and the version is looked up deliberately. */}
+      <SystemMeters />
+      <span className="ml-auto" />
       <UpdateBadge native={native} />
       {version && (
         <span
