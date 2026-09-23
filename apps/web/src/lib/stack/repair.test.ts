@@ -145,7 +145,23 @@ test("describePatch is readable enough to review a round by", () => {
   // legible without opening the database.
   assert.equal(
     describePatch({ installCommand: "pnpm install", ports: [{ host: 1, container: 1 }] }),
-    "installCommand: pnpm install, ports: 1 entry",
+    "installCommand: pnpm install, ports: 1:1",
   );
+  // The values, not a count: a reviewer who has to open the node to see what
+  // changed is doing the review this line exists to save them.
+  assert.equal(
+    describePatch({ ports: [{ host: 3001, container: 3000 }] }),
+    "ports: 3001:3000",
+  );
+  assert.equal(
+    describePatch({ env: [{ key: "PORT", value: "3001" }] }),
+    "env: PORT=3001",
+  );
+  assert.match(
+    describePatch({ ports: [1, 2, 3, 4].map((n) => ({ host: n, container: n })) }),
+    /\+1 more$/,
+  );
+  // An emptied array reads as what it is, not as "0 entries".
+  assert.equal(describePatch({ ports: [] }), "ports: cleared");
   assert.match(describePatch({ localCommand: null }), /cleared/);
 });

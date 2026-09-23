@@ -330,3 +330,36 @@ export type StackValidation = {
   findings: ValidationFinding[];
   observed: ObservedRun | null;
 };
+
+
+/**
+ * One pass of the repair loop (spec 25 piece 2), as the UI reads it.
+ *
+ * Declared here rather than beside the service that produces it: that module
+ * reaches Prisma and the agent SDK, and the toolbar rendering this must not
+ * drag either into the browser bundle.
+ */
+export type RepairRound = {
+  round: number;
+  /** What validation reported, verbatim — the input the agent was given. */
+  problem: string;
+  applied: Array<{
+    nodeId: string;
+    nodeName: string;
+    /** One line: which fields changed to what. */
+    change: string;
+    /** The agent's own justification. */
+    reason: string;
+  }>;
+  /** Proposals the applier would not carry out, and why. */
+  refused: Array<{ reason: string; suggestion: string }>;
+  /** Did validation pass after this round's patches? */
+  ok: boolean;
+};
+
+export type RepairResult = {
+  rounds: RepairRound[];
+  ok: boolean;
+  /** Why the loop stopped, when it did not end clean. */
+  stoppedBecause?: string;
+};

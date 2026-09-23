@@ -17,7 +17,13 @@
 import { prisma } from "@nexux/db";
 
 import { describePatch, reviewRepairs } from "@/lib/stack/repair";
-import type { StackSuggestion } from "@/lib/stack/types";
+import type {
+  RepairResult,
+  RepairRound,
+  StackSuggestion,
+} from "@/lib/stack/types";
+
+export type { RepairResult, RepairRound };
 import { runStackAssistantTurn } from "./stack-assistant-agent";
 import { validateProject } from "./stack-validation";
 
@@ -32,23 +38,6 @@ import { validateProject } from "./stack-validation";
  */
 export const MAX_REPAIR_ROUNDS = 3;
 
-export type RepairRound = {
-  round: number;
-  /** The failing steps and findings this round was given. */
-  problem: string;
-  applied: Array<{ nodeId: string; nodeName: string; change: string; reason: string }>;
-  refused: Array<{ reason: string; suggestion: string }>;
-  /** Did validation pass after this round's patches? */
-  ok: boolean;
-};
-
-export type RepairResult = {
-  rounds: RepairRound[];
-  /** True when validation ends clean. */
-  ok: boolean;
-  /** Why the loop stopped, when it did not end clean. */
-  stoppedBecause?: string;
-};
 
 const REPAIR_INSTRUCTIONS = `You are repairing a Nexus project's stack definition so the project actually runs.
 

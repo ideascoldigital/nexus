@@ -8,6 +8,7 @@ import {
   Info,
   Loader2,
   ShieldCheck,
+  Wrench,
   XCircle,
 } from "lucide-react";
 
@@ -24,11 +25,13 @@ import {
   generateComposeFile,
   stackDown,
   stackPrepare,
+  repairStack,
   stackUp,
   validateStack,
 } from "@/services/stack";
 import type {
   ComposeResult,
+  RepairResult,
   StackStatus,
   StackValidation,
 } from "@/lib/stack/types";
@@ -57,6 +60,7 @@ export function StackToolbar({
   const { toast } = useToast();
   const [preview, setPreview] = useState<ComposeResult | null>(null);
   const [validation, setValidation] = useState<StackValidation | null>(null);
+  const [repair, setRepair] = useState<RepairResult | null>(null);
 
   const running = status?.running ?? false;
 
@@ -86,6 +90,26 @@ export function StackToolbar({
     onError: (err: Error) =>
       toast({
         title: "Validation failed",
+        description: err.message,
+        variant: "destructive",
+      }),
+  });
+
+  const repairMutation = useMutation({
+    // Saving first, like every other action here: the loop reads the canvas as
+    // persisted, so repairing a draft would patch nodes the user cannot see.
+    mutationFn: async () => {
+      if (dirty) await onSave();
+      return repairStack(projectId);
+    },
+    onSuccess: (res) => {
+      setRepair(res);
+      // It writes: whatever it changed is on the canvas now.
+      onStatusChanged();
+    },
+    onError: (err: Error) =>
+      toast({
+        title: "Repair failed",
         description: err.message,
         variant: "destructive",
       }),
@@ -196,6 +220,20 @@ export function StackToolbar({
         <Button
           size="sm"
           variant="outline"
+          title="Let an agent read the failures and patch the definition"
+          onClick={() => repairMutation.mutate()}
+          disabled={repairMutation.isPending}
+        >
+          {repairMutation.isPending ? (
+            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+          ) : (
+            <Wrench className="h-3.5 w-3.5 mr-1.5" />
+          )}
+          Repair
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
           title="Run the install and build phases on the canvas"
           onClick={() => prepareMutation.mutate()}
           disabled={prepareMutation.isPending}
@@ -232,6 +270,106 @@ export function StackToolbar({
           Save
         </Button>
       </div>
+
+      <Dialog open={!!repair} onOpenChange={(o) => !o && setRepair(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-sm flex items-center gap-2">
+              {repair?.ok ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              ) : (
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+              )}
+              {repair?.ok
+                ? "Repaired — validation passes"
+                : "Could not finish the repair"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 max-h-[60vh] overflow-auto">
+            {repair?.stoppedBecause ? (
+              <div className="text-xs text-muted-foreground">
+                Stopped: {repair.stoppedBecause}.
+              </div>
+            ) : null}
+
+            {repair?.rounds.length === 0 ? (
+              <div className="text-xs text-muted-foreground">
+                Nothing needed fixing.
+              </div>
+            ) : null}
+
+            {repair?.rounds.map((round) => (
+              <div key={round.round} className="rounded-md border p-3 space-y-2">
+                <div className="flex items-center gap-2 text-xs font-medium">
+                  <span>Round {round.round}</span>
+                  {round.ok ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                  ) : null}
+                </div>
+
+                {/* What the agent was given. Without it a patch reads as a
+                    decision out of nowhere. */}
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-muted-foreground">
+                    What validation reported
+                  </summary>
+                  <pre className="mt-1 max-h-32 overflow-auto rounded border bg-black/40 p-2 text-[11px] font-mono whitespace-pre-wrap">
+                    {round.problem || "(nothing)"}
+                  </pre>
+                </details>
+
+                {round.applied.length ? (
+                  <div className="space-y-1.5">
+                    {round.applied.map((a) => (
+                      <div key={a.nodeId} className="text-xs">
+                        <div className="flex items-start gap-1.5">
+                          <Wrench className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                          <div>
+                            <span className="font-medium">{a.nodeName}</span>
+                            <span className="font-mono"> · {a.change}</span>
+                            {/* The agent's own words: a change the user cannot
+                                interrogate is one they have to undo to trust. */}
+                            <div className="text-muted-foreground">{a.reason}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted-foreground">
+                    Nothing was applied.
+                  </div>
+                )}
+
+                {round.refused.length ? (
+                  <div className="space-y-1.5 border-t pt-2">
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                      Refused
+                    </div>
+                    {round.refused.map((r, i) => (
+                      <div key={i} className="flex items-start gap-1.5 text-xs">
+                        <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
+                        <div>
+                          <div>{r.reason}</div>
+                          <div className="text-muted-foreground">
+                            It proposed: {r.suggestion}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+
+            <p className="text-xs text-muted-foreground">
+              Changes are already on the canvas. Undo one by editing the node —
+              nothing here is staged.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={!!validation}

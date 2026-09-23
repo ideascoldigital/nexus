@@ -162,8 +162,25 @@ export function describePatch(patch: StackSuggestionPatch): string {
   return Object.entries(patch)
     .map(([key, value]) => {
       if (value === null || value === undefined) return `${key}: cleared`;
-      if (Array.isArray(value)) return `${key}: ${value.length} entr${value.length === 1 ? "y" : "ies"}`;
+      if (Array.isArray(value)) {
+        // The values, not a count. "ports: 1 entry" tells a reviewer that
+        // something changed and nothing about whether to accept it — which
+        // makes them open the node, which is the review this line exists to
+        // save them.
+        const shown = value.slice(0, 3).map(describeEntry).join(", ");
+        const rest = value.length > 3 ? `, +${value.length - 3} more` : "";
+        return value.length ? `${key}: ${shown}${rest}` : `${key}: cleared`;
+      }
       return `${key}: ${String(value)}`;
     })
     .join(", ");
+}
+
+/** One element of a ports/env/volumes array, in its own idiom. */
+function describeEntry(entry: unknown): string {
+  if (entry === null || typeof entry !== "object") return String(entry);
+  const e = entry as Record<string, unknown>;
+  if ("host" in e && "container" in e) return `${e.host}:${e.container}`;
+  if ("key" in e) return `${e.key}=${e.value ?? ""}`;
+  return JSON.stringify(entry);
 }
