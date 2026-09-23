@@ -36,6 +36,7 @@ import { ClickUpAccountsSection } from "@/components/clickup/clickup-accounts-se
 import { GitLabServersSection } from "@/components/gitlab/gitlab-servers-section";
 import { ApiTokensSection } from "@/components/settings/api-tokens";
 import { BackupMigrationSection } from "@/components/settings/backup-migration";
+import { HostModelSection } from "@/components/settings/host-model";
 import { NexusHostsSection } from "@/components/settings/nexus-hosts";
 import { SandboxNamingSection } from "@/components/settings/sandbox-naming";
 import { TerminalShellSection } from "@/components/settings/terminal-shell";
@@ -779,6 +780,10 @@ function SettingsPageContent() {
                   )}
                   <ClaudeCredentialsSection />
                   <LlmCredentialsSection />
+                  {/* Which of the credentials above drives the agents that run
+                      on this machine. Right below them, because the choice is
+                      meaningless until at least one exists. */}
+                  <HostModelSection />
                   <p className="flex items-start gap-2 px-1 text-xs text-muted-foreground">
                     <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     Keys live in your local database and never leave this

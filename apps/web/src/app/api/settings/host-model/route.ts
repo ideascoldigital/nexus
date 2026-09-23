@@ -9,6 +9,29 @@ import {
   HOST_MODEL_NAME_SETTING,
 } from "@/lib/host-model";
 
+/**
+ * What the user explicitly chose, as opposed to what got resolved.
+ *
+ * The two differ whenever nothing was chosen (the resolver picks one anyway)
+ * or a chosen credential stopped being usable (it falls through). A picker fed
+ * only the resolved answer cannot tell "automatic, which happens to be this"
+ * from "I chose this", and would reset itself to Automatic after every save.
+ */
+async function readChoice() {
+  const [credential, model] = await Promise.all([
+    prisma.settings.findFirst({
+      where: { key: HOST_MODEL_SETTING, isActive: true },
+    }),
+    prisma.settings.findFirst({
+      where: { key: HOST_MODEL_NAME_SETTING, isActive: true },
+    }),
+  ]);
+  return {
+    credentialId: credential?.value?.trim() || null,
+    modelName: model?.value?.trim() || null,
+  };
+}
+
 export const dynamic = "force-dynamic";
 
 /**
@@ -22,8 +45,9 @@ export const dynamic = "force-dynamic";
  * second look like the first.
  */
 export async function GET() {
-  const [current, credentials] = await Promise.all([
+  const [current, chosen, credentials] = await Promise.all([
     resolveHostModel(),
+    readChoice(),
     prisma.cloudCredential.findMany({
       where: { provider: { in: Object.keys(HOST_MODEL_PROVIDERS) } },
       orderBy: { createdAt: "asc" },
@@ -32,6 +56,7 @@ export async function GET() {
   ]);
 
   return NextResponse.json({
+    chosen,
     current: current
       ? {
           provider: current.provider,
@@ -84,8 +109,9 @@ export async function PUT(req: NextRequest) {
   // Answer with what the choice actually resolved to, rather than echoing the
   // request: a credential that turns out to be unusable falls through, and the
   // user should see which model they really got.
-  const current = await resolveHostModel();
+  const [current, chosen] = await Promise.all([resolveHostModel(), readChoice()]);
   return NextResponse.json({
+    chosen,
     current: current && {
       provider: current.provider,
       modelName: current.modelName,
