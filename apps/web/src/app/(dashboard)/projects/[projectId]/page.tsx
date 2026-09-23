@@ -488,7 +488,16 @@ export default function ProjectDetailPage({
           {/* Tab bar attached under the topbar (prototype): tabs left,
               index status + project actions right. */}
           <Tabs value={activeProjectTab} onValueChange={setProjectTab}>
-            <div className="flex items-center gap-1 border-b border-border/60 bg-sidebar/60 px-5 pt-2">
+            {/* Scrolls on its own, so the row's natural width cannot widen the
+                panel. Without this the tabs plus the action buttons measure
+                ~610px, the page's scroller inherits that, and reaching Delete
+                on a phone drags the whole tab's content sideways with it —
+                you gain the buttons and lose the view you came for.
+
+                `min-w-0` is the half that makes it work: a flex child defaults
+                to min-width:auto, so it refuses to shrink below its content
+                and the overflow never becomes this element's to scroll. */}
+            <div className="flex min-w-0 items-center gap-1 overflow-x-auto border-b border-border/60 bg-sidebar/60 px-5 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <TabsList variant="line" className="border-b-0">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
                 <TabsTrigger value="features">
@@ -500,7 +509,7 @@ export default function ProjectDetailPage({
                   Terminal
                 </TabsTrigger>
               </TabsList>
-              <div className="ml-auto flex items-center gap-2 pb-1.5">
+              <div className="ml-auto flex shrink-0 items-center gap-2 pb-1.5">
                 <ProjectIndexStatus projectId={projectId} />
                 <ExportProjectDialog
                   projectId={project.id}
