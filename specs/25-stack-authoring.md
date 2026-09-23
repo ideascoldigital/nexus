@@ -1,8 +1,9 @@
 # 25 — "Here are my repos, make it work"
 
-Status: **piece 1 shipped** (2026-09-23, D-75) — units, seeding, inferred
+Status: **pieces 1–2 shipped** (2026-09-23) — the seed (D-75: units, inferred
 services and edges, plus the migration that let a repository own more than one
-node. Pieces 2 (the repair loop) and 3 (the lockfile) remain design.
+node) and the repair loop (D-76: validate → patch → re-validate, with the rules
+in the applier rather than the prompt). Piece 3, the lockfile, remains design.
 Depends on [spec 24](24-definition-validation.md), which is complete.
 
 ## Goal

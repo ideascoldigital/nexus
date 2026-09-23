@@ -627,3 +627,26 @@ Two repos with one app each, and one monorepo with two apps, now produce **the s
 **One bug only the real monorepo revealed.** A workspace member does not declare its own package manager — the root does, and detection scans each unit in isolation. The first real seed gave every app in a pnpm monorepo `npm install`, which at best ignores the workspace and at worst writes a package-lock.json beside pnpm-lock.yaml. Members now inherit the root's manager, unless they detected their own (a lockfile of their own is better information than the root's).
 
 **Walked end to end** on a monorepo with two apps and a library: two run nodes, postgres and redis inferred from the API's `.env.example` with the connection strings as evidence, edges only from the unit that named them, the library reported as a library — and `validate` then answered clean on the result.
+
+## D-76 — The repair loop's rules live in the applier, not the prompt (2026-09-23)
+
+**Context:** Spec 24 made a failure readable — a `boot:api` step carrying `Cannot find module '@/generated/prisma'` in its tail. A human reads that and knows the install is missing a codegen step; the system did not, so the developer was still the one closing the loop. Spec 25 piece 2.
+
+**Decision:** Validate → read the failures → the stack assistant proposes patches → apply → re-validate, up to three rounds. The agent is the existing assistant with a different prompt and caller: its suggestion format is already an applied patch with a reason, and its tools are already the right three. A second agent would be a second definition of what a stack patch is.
+
+**The split that matters.** A prompt is a *request*. "Never remove a run command" in an instruction block is a sentence a model may ignore, misread, or reason its way out of when a failure is stubborn. So every rule the loop must not break lives in `lib/stack/repair.ts`, which is the only thing that writes:
+
+- **Never weaken the check.** Blanking a `localCommand` or a `ports` array makes validation pass by *not running* — the node stops being started, or the boot probe is skipped and "the app failed" becomes "nothing was probed". Refused, with the field named. Changing a command to a different one is fine; the rule is about removal.
+- **Never touch a node the user wrote.** This needed a fact the database did not record and that cannot be recovered afterwards, so `StackNode.seededBy` is new, defaulting to `"user"` — every node that exists today was put there by a person, and the safe direction for a rule protecting hand edits is to assume the edit was one. The seed writes `"detect"`, a repair writes `"agent"`, and a later round may revise its own work.
+- **Never create a node.** Adding a service the project never asked for is a guess with a container attached. Inference belongs to the seed, where it is driven by the repos' own evidence.
+- **Never patch a node that does not exist** — the ordinary failure of a model reading a truncated tool result.
+
+Good and bad suggestions in one reply are separated rather than rejected together: the fix lands and the weakening does not.
+
+**Three rounds, and a round that proposes nothing stops immediately.** Each round costs a validation — a container, and real money on a cloud provider. Re-validating after changing nothing would ask the same question and get the same answer, so the loop returns rather than spending it.
+
+**No separate "propose" mode.** `POST /stack/validate` already is one: it reports what is wrong and changes nothing. A second endpoint that ran the agent without applying would spend a validation to produce advice the user cannot act on without re-running everything anyway.
+
+**Every round records what changed and why**, plus what was refused. The safety story is that nothing happens silently — an agent that rewrote three nodes over two rounds has to be reviewable without reading the database.
+
+**Verified end to end against a real port collision**, where it behaved correctly for a reason worth recording: the run stopped at the agent (no OpenAI key configured) and the canvas was untouched — and both nodes were marked `user`, so even a working agent's patches would have been refused. The rule held without the model's cooperation, which is the whole point of putting it in the applier.

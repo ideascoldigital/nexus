@@ -101,6 +101,14 @@ export type NexuxContext = {
   validateStack(projectId: string): Promise<StackValidationSummary>;
   /** The stack graph, for a caller deciding what to change. */
   describeStack(projectId: string): Promise<unknown>;
+  /**
+   * Spec 25 piece 2 — validate, patch, re-validate, up to a few rounds.
+   *
+   * Writes: it changes the project's stack definition and runs validations
+   * that may provision a container. Hence the write scope, unlike the read
+   * pair above.
+   */
+  repairStack(projectId: string, maxRounds?: number): Promise<unknown>;
 };
 
 /** One thing wrong with a stack definition (spec 24 piece 4). */

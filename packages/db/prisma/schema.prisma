@@ -127,6 +127,11 @@ model StackNode {
   /// Set when kind = "repo". NOT unique: a monorepo contributes one node per
   /// runnable unit, all pointing at the same repository (spec 25 piece 1).
   repositoryId String?
+  /// Who put this node here: "detect" (the seed), "agent" (a repair), or
+  /// "user". The repair loop may rewrite the first two and never the last —
+  /// an agent silently overwriting a hand edit is the worst outcome available,
+  /// and "who wrote this" cannot be re-derived after the fact (spec 25 p2).
+  seededBy     String  @default("user")
   name         String // display + compose service name (slugified at generation)
   runMode      String  @default("docker") // "docker" | "local"
 

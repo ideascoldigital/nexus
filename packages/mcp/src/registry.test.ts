@@ -27,6 +27,7 @@ function stubContext(over: Partial<NexuxContext> = {}): {
     powerSandbox: unexpected("powerSandbox"),
     validateStack: unexpected("validateStack"),
     describeStack: unexpected("describeStack"),
+    repairStack: unexpected("repairStack"),
     ...over,
   } as NexuxContext;
   return { ctx, calls };
@@ -291,4 +292,42 @@ test("the validation tools are listed for a read-only token", async () => {
   const names = toolsFor(["projects:read"]).map((t) => t.name);
   assert.ok(names.includes("nexux_validate_stack"));
   assert.ok(names.includes("nexux_describe_stack"));
+});
+
+
+test("repairing a stack is a write, and an expensive one", async () => {
+  // It edits the definition and runs validations that may provision
+  // containers. A read scope here would let a token issued as "read only"
+  // rewrite how a project runs.
+  assert.equal(toolByName("nexux_repair_stack")?.scope, "sandboxes:write");
+
+  const { ctx, calls } = stubContext({
+    repairStack: async (projectId: string, maxRounds?: number) => {
+      calls.push(`repairStack:${projectId}:${maxRounds ?? "default"}`);
+      return { rounds: [], ok: true };
+    },
+  });
+  const res = await callTool(ctx, ["sandboxes:write"], "nexux_repair_stack", {
+    projectId: "p1",
+    maxRounds: 2,
+  });
+  assert.equal(res.ok, true);
+  assert.ok(calls.includes("repairStack:p1:2"));
+});
+
+test("a read-only token cannot repair", async () => {
+  const { ctx } = stubContext();
+  const res = await callTool(ctx, ["projects:read"], "nexux_repair_stack", {
+    projectId: "p1",
+  });
+  assert.equal(res.ok, false);
+});
+
+test("an absurd round count is refused before it spends anything", async () => {
+  const { ctx } = stubContext();
+  const res = await callTool(ctx, ["sandboxes:write"], "nexux_repair_stack", {
+    projectId: "p1",
+    maxRounds: 50,
+  });
+  assert.equal(res.ok, false);
 });

@@ -36,6 +36,7 @@ Keep new pure helpers in the left column — the assistant panel re-parses persi
 | `sandbox-compose.ts` | Docker **service** nodes → compose YAML for a sandbox. Never touches local paths; repo nodes run bare on the instance via `RepositorySetup` |
 | `units.ts` | Spec 25 p1: `findRunnableUnits` — the workspace declaration expanded into directories, so a monorepo contributes one unit per app. No declaration = one unit at the root |
 | `seed.ts` | Spec 25 p1: `seedStack` — units + detection → nodes, inferred services, edges. Pure; the evidence for every inference is attached to the node |
+| `repair.ts` | Spec 25 p2: `reviewRepairs` — what a repair may and may not do. The rules live here, not in the prompt: a prompt is a request, this is the only thing that writes |
 | `validate.ts` | Spec 24 p4: the static checks behind the Validate action |
 | `service-catalog.ts` | `SERVICE_CATALOG` of common infra images + default ports/env/volumes |
 | `suggestions.ts` | Parses and sanitizes the assistant's trailing ```json suggestion block |

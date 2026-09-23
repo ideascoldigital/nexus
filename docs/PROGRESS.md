@@ -15,13 +15,15 @@ _Last updated: 2026-09-23._
 | `harness` | 🟡 P0 done · compose healthchecks (spec 24 p2) | P1 warm pool · P2 tool adapters (Claude tool/MCP) · P3 artifacts (spec 13) |
 | `llm` | 🔴 nascent | provider abstraction; only Codex client |
 | `mcp` | ✅ tools + scopes · stack validation (spec 24 p4) | answering a blocked run (own spec) · per-workspace/project tokens |
-| `sandbox` | ✅ complete | — (multi-cloud Civo/AWS + local DinD) · spec 24 complete (p1–p4) · prebuilt base image |
+| `sandbox` | ✅ complete | — (multi-cloud Civo/AWS + local DinD) · spec 24 complete · spec 25 p1–p2 (seed + repair loop) |
 | `storage` | ✅ local complete | `server` adapter (stub) |
 | `terminal` | 🟡 mixed | sidecar-server + types = Phase 0 stubs (Tools/MCP) |
 | `apps/web` | ✅ active | see "In progress" · browser session works on local docker (D-70); idle TTL + CDP screenshot route still open (spec 23) |
 | `apps/native` | ✅ functional | — (sidecar :3030, kill on exit) |
 
 ## Milestones (timeline by PR)
+
+- **2026-09-23** — The repair loop closes the loop spec 24 opened (spec 25 piece 2, D-76). Validate → read the failing step's own output → the stack assistant proposes patches → apply → re-validate, three rounds at most. The rules live in the applier rather than the prompt, because a prompt is a request and the applier is the only thing that writes: it refuses to blank a run command or a port (making the check not run is not making it pass), to touch a node marked `seededBy: "user"`, to create a service, or to patch a node that does not exist. `seededBy` is a new column defaulting to "user" — "who wrote this" cannot be recovered after the fact. Walked against a real port collision, where the run stopped at the agent for a missing API key and the canvas was untouched; both nodes were the user's, so the patches would have been refused anyway. 1360 web + 37 mcp tests.
 
 - **2026-09-23** — "Here are my repos" now produces a canvas (spec 25 piece 1, D-75). Detection was good and unused: it fired only on a drag and prefilled one node, so every project started blank. Now `findRunnableUnits` reads the workspace declaration and `detectRepo` scans each member, so two repos with one app each and one monorepo with two apps produce the same graph. Services are inferred from `.env.example` — scheme first (`postgres://` is proof, `POSTGRES_HOST` is a labelled guess), one per project rather than per unit, and not at all when a repo ships its own compose file. Unit-to-unit edges are never inferred. The first real monorepo found two things the spec had not: `StackNode.repositoryId` was `@unique`, which is "one repo, one node" enforced by the database (migrated), and a workspace member inherits no package manager, so every app in a pnpm monorepo was getting `npm install`. 1334 web + 339 sandbox + 15 db tests.
 

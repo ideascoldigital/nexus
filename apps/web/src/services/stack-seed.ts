@@ -121,6 +121,9 @@ export async function seedProjectStack(
           volumes: node.volumes ?? undefined,
           command: node.command,
           phases: node.phases,
+          // A repair may rewrite what the seed created; it may never touch a
+          // node the user wrote (spec 25 piece 2).
+          seededBy: "detect",
           posX: node.posX,
           posY: node.posY,
         },

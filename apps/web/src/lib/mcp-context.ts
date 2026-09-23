@@ -19,6 +19,7 @@ import {
   resumeSandbox,
 } from "@/lib/sandbox-manager";
 import { describeStack, validateProject } from "@/services/stack-validation";
+import { repairProjectStack } from "@/services/stack-repair";
 import { DEFAULT_WORKSPACE_ID } from "@/lib/workspace";
 
 /**
@@ -292,6 +293,11 @@ export function createMcpContext(): NexuxContext {
     async describeStack(projectId: string): Promise<unknown> {
       await assertProject(projectId);
       return describeStack(projectId);
+    },
+
+    async repairStack(projectId: string, maxRounds?: number): Promise<unknown> {
+      await assertProject(projectId);
+      return repairProjectStack(projectId, { maxRounds });
     },
 
     async powerSandbox(
