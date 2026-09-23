@@ -14,6 +14,9 @@ The package provisions **two kinds of machine** from the same Terraform module. 
 |---|---|
 | `src/types.ts` | `SandboxSpec`, `SandboxRepoSpec`, `SandboxProvider` (`civo` / `aws` / `local`), `SandboxBrain` (`claude` / `opencode`), provision outputs |
 | `src/template.ts` | The heart: `renderMainTf` (embedded Civo & AWS Terraform), `renderCloudInit` (bootstrap: agent user, SSH keys, Node/Docker/Claude Code/cloudflared/Tailscale (optional tailnet join — `--login-server` for a self-hosted control plane, `--accept-routes`, keyless registration via the shared `renderTailscaleLogin`)/gh install, stack compose, repo clone/mount + install inference), `renderTfVars`, `AGENT_USER`, `safeSlug`; `renderRepoSetup` (clone+install+build, shared with the UI's Retry setup — adopts an existing checkout) |
+| `src/bootstrap-report.ts` | Spec 24 piece 1: `renderStepHelpers` (the `nexus_step` / `nexus_step_run` bash) + `parseBootstrapReport` / `failedSteps`. One JSON line per step into `/opt/nexus/bootstrap-report.jsonl` — what replaced scraping WARNs out of the log |
+| `src/base-image.ts` | Spec 24 piece 3: `renderBaseDockerfile` (the tooling half of the bootstrap, baked once) + `dryRunSpec` (drops agent CLIs, Chromium, tunnel, tailnet). Version pinned by an image **label**, not the tag |
+| `src/boot-probe.ts` | Spec 24 piece 2: `renderBootProbe` / `renderBootProbeHelper` — start the app, wait for its port, kill the process group, record `boot:<repo>`. Plus `renderStepTailHelper`, which attaches a JSON-escaped log tail to a failure |
 | `src/terraform.ts` | `runTerraform` / `terraformAvailable` — creds passed via env, never written to disk |
 | `src/provisioner.ts` | `applySandbox` / `destroySandbox` / `readOutputs` / `readInitialPassword` / `prepareWorkDir` (writes tf module + cloud-init; enforces EC2 16KB user_data limit) |
 | `src/local.ts` | Local fallback: privileged Ubuntu container + DinD volume, same cloud-init in "container" mode; URL-less repos bind-mount their local folder at `/opt/nexus/<slug>` |
@@ -44,6 +47,41 @@ It reads `/opt/nexus/nexus.json`, written at bootstrap and refreshable from the 
 Start/stop mirror `sandbox-process-manager.ts` exactly: same `/tmp/nexus-proc-<key>.{sh,pid,log}` paths, `setsid` for a fresh process group, kill by recorded PID (never `pkill -f` — the launcher's own command line would match). A process started in the terminal is therefore the same one the UI lists and stops.
 
 Two constraints on the generated script: the banner is guarded on an interactive shell, because `execRemote` sources profile.d through `bash -lc` and the host parses that stdout for `PID:` / `PREVIEW:` markers; and parsing uses `python3`, not `jq`, which `ubuntu:22.04` does not ship. In `src/nexus-cli.ts` the script body is a `String.raw` template where `@@{` stands in for bash's `${` — `String.raw` still interpolates `${}`, so the placeholder is substituted back at the end. Backticks in that body must be quotes for the same reason.
+
+## Step results
+
+Every step worth reporting on — clone, install, build, `stack:up`, the docker
+install, each launcher — runs through `nexus_step_run` and appends a line to
+`/opt/nexus/bootstrap-report.jsonl`. The two markers are unchanged
+(`.bootstrap-complete` / `.bootstrap-failed`): the report is a third file, not
+a new contract for the pollers that already depend on them.
+
+Severity is passed per call site, not derived from the exit code — a failed
+main clone and a failed tailscale install both exit non-zero and only one of
+them means the box is useless. `renderRepoSetup` re-emits the helpers because
+the retry action runs that block on its own, where the preamble is not in
+scope. See D-71.
+
+## Does it boot?
+
+Each repo with a run command *and* a port is probed at the end of the
+bootstrap: started, waited for, then stopped. A repo without a port is not
+probed — a process surviving three seconds is not evidence the app works.
+
+The kill targets the process group (`set -m`, not `setsid` — absent on macOS,
+where the helpers are tested), because a package manager spawns the real
+server as a child and killing the recorded PID alone leaves the port held.
+See D-72.
+
+## Fast dry runs
+
+`local.ts` starts from `nexux/sandbox-base:v<N>` when one is built and current,
+falling back to `ubuntu:22.04` otherwise — it **never builds inline**, since a
+launch that quietly spent minutes building is the surprise this removes.
+`buildSandboxBaseImage` is the explicit action.
+
+Measured with a real repo (install + build + boot probe): 52s → 23s. See D-74,
+including why `installDocker` is the one toggle a dry run keeps.
 
 ## Security posture
 
