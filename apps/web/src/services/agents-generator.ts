@@ -6,38 +6,24 @@
  */
 
 import { AgentClient, type InlineMessage } from '@ideascol/agents-generator-sdk';
-import { prisma } from "@nexux/db";
 import { getConfig } from "@nexux/config";
 
-/**
- * Get OpenAI API key from settings
- */
-async function getOpenAIKey(workspaceId?: string): Promise<string | null> {
-  if (workspaceId) {
-    const { getWorkspaceSetting } = await import("@/lib/workspace");
-    const row = await getWorkspaceSetting(workspaceId, "openai_api_key");
-    return row?.value ?? null;
-  }
-  const setting = await prisma.settings.findUnique({
-    where: { key: 'openai_api_key' },
-  });
-
-  if (!setting || !setting.isActive) {
-    return null;
-  }
-
-  // TODO: Decrypt the key if encryption is implemented
-  return setting.value;
-}
+import { noHostModelMessage, resolveHostModel } from "@/lib/host-model";
 
 /**
- * Create an inline agent client
+ * Create an inline agent client, with whichever model the install is
+ * configured for.
+ *
+ * `provider` and `modelName` come back alongside the key because they travel
+ * together: a key is only usable with the provider it belongs to, and every
+ * caller passes all three to `defineAgent`. Returning them separately is what
+ * let seven call sites hardcode "openai" beside a key that might be anyone's.
  */
 export async function createAgentClient(workspaceId?: string) {
-  const apiKey = await getOpenAIKey(workspaceId);
-  
-  if (!apiKey) {
-    throw new Error('OpenAI API key not configured. Please add it in Settings.');
+  const model = await resolveHostModel(workspaceId);
+
+  if (!model) {
+    throw new Error(noHostModelMessage());
   }
 
   const client = new AgentClient({
@@ -45,7 +31,12 @@ export async function createAgentClient(workspaceId?: string) {
     // No apiToken → anonymous mode with inline agents
   });
 
-  return { client, apiKey };
+  return {
+    client,
+    apiKey: model.apiKey,
+    modelProvider: model.provider,
+    modelName: model.modelName,
+  };
 }
 
 /**
@@ -53,7 +44,7 @@ export async function createAgentClient(workspaceId?: string) {
  * Helps users create and configure custom agents
  */
 export async function createAgentAssistant() {
-  const { client, apiKey } = await createAgentClient();
+  const { client, apiKey, modelProvider, modelName } = await createAgentClient();
 
   const agent = client.defineAgent({
     name: 'agent-config-assistant',
@@ -75,8 +66,8 @@ Agent configuration format:
 When the user is satisfied with the configuration, generate a complete agent config in JSON format.
 
 Be conversational, ask clarifying questions, and provide helpful suggestions.`,
-    modelProvider: 'openai',
-    modelName: 'gpt-5.4',
+    modelProvider,
+    modelName,
     apiKey,
     maxToolIterations: 5,
   });
@@ -89,7 +80,7 @@ Be conversational, ask clarifying questions, and provide helpful suggestions.`,
  * Helps users create and configure custom skills
  */
 export async function createSkillAssistant() {
-  const { client, apiKey } = await createAgentClient();
+  const { client, apiKey, modelProvider, modelName } = await createAgentClient();
 
   const agent = client.defineAgent({
     name: 'skill-config-assistant',
@@ -117,8 +108,8 @@ Final config JSON shape (emit when ready):
 \`\`\`
 
 Always include the full markdown body inside the JSON \`body\` field. Be conversational and ask clarifying questions before emitting JSON.`,
-    modelProvider: 'openai',
-    modelName: 'gpt-5.4',
+    modelProvider,
+    modelName,
     apiKey,
     maxToolIterations: 5,
   });
@@ -131,7 +122,7 @@ Always include the full markdown body inside the JSON \`body\` field. Be convers
  * Helps generate code snippets for agents and skills
  */
 export async function createCodeGeneratorAssistant() {
-  const { client, apiKey } = await createAgentClient();
+  const { client, apiKey, modelProvider, modelName } = await createAgentClient();
 
   const agent = client.defineAgent({
     name: 'code-generator',
@@ -156,8 +147,8 @@ When generating skill code:
 - Provide usage examples
 
 Always format code with proper syntax highlighting and structure.`,
-    modelProvider: 'openai',
-    modelName: 'gpt-4o',
+    modelProvider,
+    modelName,
     apiKey,
     maxToolIterations: 5,
   });

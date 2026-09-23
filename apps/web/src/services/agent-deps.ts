@@ -55,18 +55,21 @@ export type AgentDeps = {
   workspaceIdOfProject(projectId: string): Promise<string | undefined>;
 };
 
-const MODEL_NAME = "gpt-5.4";
+// The model is resolved per call from the install's configured credential
+// (lib/host-model.ts) rather than pinned here — a host agent runs on whatever
+// LLM the user actually has a key for.
 
 /** Real implementations — the agents SDK, the embeddings index, prisma. */
 export function defaultAgentDeps(): AgentDeps {
   return {
     defineAgent: async ({ name, instructions, workspaceId }) => {
-      const { client, apiKey } = await createAgentClient(workspaceId);
+      const { client, apiKey, modelProvider, modelName } =
+        await createAgentClient(workspaceId);
       return client.defineAgent({
         name,
         instructions,
-        modelProvider: "openai",
-        modelName: MODEL_NAME,
+        modelProvider,
+        modelName,
         apiKey,
         maxToolIterations: 1,
       });

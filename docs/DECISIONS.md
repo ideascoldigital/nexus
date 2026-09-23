@@ -650,3 +650,21 @@ Good and bad suggestions in one reply are separated rather than rejected togethe
 **Every round records what changed and why**, plus what was refused. The safety story is that nothing happens silently — an agent that rewrote three nodes over two rounds has to be reviewable without reading the database.
 
 **Verified end to end against a real port collision**, where it behaved correctly for a reason worth recording: the run stopped at the agent (no OpenAI key configured) and the canvas was untouched — and both nodes were marked `user`, so even a working agent's patches would have been refused. The rule held without the model's cooperation, which is the whole point of putting it in the applier.
+
+## D-77 — Host agents run on whichever LLM you actually have a key for (2026-09-23)
+
+**Context:** Nexus has been multi-provider everywhere except the one place it mattered most. Sandboxes fan six LLM credentials out as env vars (`LLM_CREDENTIAL_ENV`), the brain picker offers Claude or OpenCode — and every agent running *on the host* (the stack assistant, the repair loop, the roadmap generator, the definer, the skill recommender) hardcoded `modelProvider: "openai"` across seven call sites and read a single `openai_api_key` setting. A user holding an Anthropic key and no OpenAI one was told to "add it in Settings", which reads as a missing configuration and was really a default nobody had parameterised.
+
+**The SDK was never the constraint.** `@ideascol/agents-generator-sdk` takes provider, model and key per `defineAgent` call and ships **75 providers** — including every one Nexus already stores. Checked rather than assumed, which also caught a default model name (`zai/glm-4-plus`) that does not exist; the real list has `zai/glm-4.5`.
+
+**Decision:** `resolveHostModel` reads the same `CloudCredential` rows the rest of the product does, mapping our provider names to the SDK's (`anthropic-key` → `anthropic`, `xai-llm` → `xai`, `google` → `gemini`). Precedence: the credential the user chose → any usable saved one, oldest first → the legacy `openai_api_key` setting.
+
+**Three judgements in that ordering:**
+
+- **The legacy setting stays.** Every install that exists today is configured that way, and breaking them to introduce a choice is a poor trade.
+- **A chosen credential that has since been deleted, or had its key emptied, falls through rather than failing.** The user's intent was "use a model"; serving that with a different key beats doing nothing.
+- **`claude` is deliberately not in the map.** It holds an OAuth token for the Claude Code CLI, which is not an API key this SDK can send — a project with only that is still unconfigured, and pretending otherwise would fail at the API with a confusing error.
+
+The error message now names every provider that would work, instead of sending people after an OpenAI key they may have had no reason to own. `GET/PUT /api/settings/host-model` exposes the choice, and lists a credential with an empty key as *unusable* rather than hiding it — "I added that key" and "that key is empty" are different problems, and a hidden row makes the second look like the first.
+
+Found while the repair loop (D-76) stopped on a missing key and the honest answer to "why can't I pick another token?" turned out to be: you could have, nobody wired it.

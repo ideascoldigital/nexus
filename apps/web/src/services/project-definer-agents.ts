@@ -65,7 +65,7 @@ When you have content worth persisting to the project planning document, end you
 Only emit sectionUpdates for sections you actually authored or revised this turn. Omit the JSON block if you have nothing to persist. Prefer concise structured markdown.
 `;
 
-function defineProjectManager(client: AgentClient, apiKey: string) {
+function defineProjectManager(client: AgentClient, apiKey: string, model: HostModelChoice) {
   return client.defineAgent({
     name: SUB_AGENT_NAMES['project-manager'],
     instructions: `You are the Project Manager specialist for a project-definition workflow.
@@ -81,14 +81,14 @@ Be concrete: specific milestones, named stakeholders/roles, explicit scope bound
 
 Relevant section keys: overview, problem, stakeholders, scope-in, scope-out, timeline, milestones, open-questions.
 ${SECTION_TAIL}`,
-    modelProvider: 'openai',
-    modelName: 'gpt-5.4',
+    modelProvider: model.modelProvider,
+    modelName: model.modelName,
     apiKey,
     maxToolIterations: 3,
   });
 }
 
-function defineFinanceManager(client: AgentClient, apiKey: string) {
+function defineFinanceManager(client: AgentClient, apiKey: string, model: HostModelChoice) {
   return client.defineAgent({
     name: SUB_AGENT_NAMES['finance-manager'],
     instructions: `You are the Finance Manager specialist for a project-definition workflow.
@@ -103,14 +103,14 @@ Show numbers in structured tables/lists with assumptions stated. Mark figures as
 
 Relevant section keys: budget, roi.
 ${SECTION_TAIL}`,
-    modelProvider: 'openai',
-    modelName: 'gpt-5.4',
+    modelProvider: model.modelProvider,
+    modelName: model.modelName,
     apiKey,
     maxToolIterations: 3,
   });
 }
 
-function defineTechnicalArchitect(client: AgentClient, apiKey: string) {
+function defineTechnicalArchitect(client: AgentClient, apiKey: string, model: HostModelChoice) {
   return client.defineAgent({
     name: SUB_AGENT_NAMES['technical-architect'],
     instructions: `You are the Technical Architect specialist for a project-definition workflow.
@@ -126,14 +126,14 @@ Prefer pragmatic boring choices unless the user has a reason to deviate. Call ou
 
 Relevant section keys: tech-stack, architecture, integrations, data-model, non-functional-requirements.
 ${SECTION_TAIL}`,
-    modelProvider: 'openai',
-    modelName: 'gpt-5.4',
+    modelProvider: model.modelProvider,
+    modelName: model.modelName,
     apiKey,
     maxToolIterations: 3,
   });
 }
 
-function defineProductUX(client: AgentClient, apiKey: string) {
+function defineProductUX(client: AgentClient, apiKey: string, model: HostModelChoice) {
   return client.defineAgent({
     name: SUB_AGENT_NAMES['product-ux'],
     instructions: `You are the Product/UX specialist for a project-definition workflow.
@@ -149,14 +149,14 @@ Phrase requirements testably. Keep user stories short and outcome-oriented.
 
 Relevant section keys: functional-requirements, user-stories, ux-flows, success-metrics.
 ${SECTION_TAIL}`,
-    modelProvider: 'openai',
-    modelName: 'gpt-5.4',
+    modelProvider: model.modelProvider,
+    modelName: model.modelName,
     apiKey,
     maxToolIterations: 3,
   });
 }
 
-function defineDetractor(client: AgentClient, apiKey: string) {
+function defineDetractor(client: AgentClient, apiKey: string, model: HostModelChoice) {
   return client.defineAgent({
     name: SUB_AGENT_NAMES.detractor,
     instructions: `You are the Detractor specialist for a project-definition workflow. You are the skeptic, the devil's advocate.
@@ -172,8 +172,8 @@ Be specific, not generic. Cite the artifact you're challenging. End each critiqu
 
 Relevant section keys: risks, open-questions.
 ${SECTION_TAIL}`,
-    modelProvider: 'openai',
-    modelName: 'gpt-5.4',
+    modelProvider: model.modelProvider,
+    modelName: model.modelName,
     apiKey,
     maxToolIterations: 3,
   });
@@ -181,14 +181,18 @@ ${SECTION_TAIL}`,
 
 type AgentClient = Awaited<ReturnType<typeof createAgentClient>>['client'];
 
-export async function buildDefinerTriage() {
-  const { client, apiKey } = await createAgentClient();
+/** The model every definer agent runs on — resolved once, passed down. */
+type HostModelChoice = { modelProvider: string; modelName: string };
 
-  const pm = defineProjectManager(client, apiKey);
-  const finance = defineFinanceManager(client, apiKey);
-  const arch = defineTechnicalArchitect(client, apiKey);
-  const ux = defineProductUX(client, apiKey);
-  const detractor = defineDetractor(client, apiKey);
+export async function buildDefinerTriage() {
+  const { client, apiKey, modelProvider, modelName } = await createAgentClient();
+  const model: HostModelChoice = { modelProvider, modelName };
+
+  const pm = defineProjectManager(client, apiKey, model);
+  const finance = defineFinanceManager(client, apiKey, model);
+  const arch = defineTechnicalArchitect(client, apiKey, model);
+  const ux = defineProductUX(client, apiKey, model);
+  const detractor = defineDetractor(client, apiKey, model);
 
   const triage = client.defineAgent({
     name: 'definer-triage',
@@ -202,8 +206,8 @@ Specialists:
 - definer-detractor: adversarial review — assumptions, weak spots, missing scenarios, failure modes
 
 Route to one specialist. If the message clearly invites a stress-test or challenges the plan, prefer the detractor. If unrelated to project definition, default to the project manager.`,
-    modelProvider: 'openai',
-    modelName: 'gpt-5.4',
+    modelProvider: model.modelProvider,
+    modelName: model.modelName,
     apiKey,
     subAgents: [pm, finance, arch, ux, detractor],
     maxToolIterations: 5,

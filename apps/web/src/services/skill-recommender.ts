@@ -122,12 +122,12 @@ export async function recommendSkills(projectId: string): Promise<{
     registryCandidates,
   );
 
-  const { client, apiKey } = await createAgentClient(workspaceId);
+  const { client, apiKey, modelProvider, modelName } = await createAgentClient(workspaceId);
   const agent = client.defineAgent({
     name: "skill-recommender",
     instructions: INSTRUCTIONS,
-    modelProvider: "openai",
-    modelName: "gpt-5.4",
+    modelProvider,
+    modelName,
     apiKey,
     maxToolIterations: 1,
   });
@@ -210,12 +210,12 @@ export async function recommendAgents(projectId: string): Promise<{
     registryCandidates,
   );
 
-  const { client, apiKey } = await createAgentClient(workspaceId);
+  const { client, apiKey, modelProvider, modelName } = await createAgentClient(workspaceId);
   const agent = client.defineAgent({
     name: "agent-recommender",
     instructions: AGENT_INSTRUCTIONS,
-    modelProvider: "openai",
-    modelName: "gpt-5.4",
+    modelProvider,
+    modelName,
     apiKey,
     maxToolIterations: 1,
   });
