@@ -525,3 +525,128 @@ Answering a blocked run is deliberately *not* in the surface. `nexux_activity` r
 **Decision:** …
 **Consequences:** …
 ```
+
+## D-71 — A bootstrap step records what it did, instead of being read back out of its own prose (2026-09-21)
+
+**Context:** The bootstrap has always *logged* what it did and never *recorded* it. Only two things were ever fatal — the main repo's clone, and its missing mount; every apt install, the docker install, `docker compose up` for the stack services, every non-main clone and **every install and build for every repo** degraded to `|| echo "[nexux] WARN: …"`, and the completion marker was written anyway. The only structured consumer of that was `retrySandboxSetup`, which recovered the failed steps by running `/^\[nexux\] WARN: (?:clone|install|build) failed for (.+?)$/gm` over the setup log. A failed stack `up` matched nothing, so a sandbox whose database never came up reported a successful retry. Spec 24 piece 1.
+
+**Decision:** Keep the policy, fix the reporting. Every step that mattered now runs through `nexus_step` / `nexus_step_run` (`packages/sandbox/src/bootstrap-report.ts`) and appends one JSON line to `/opt/nexus/bootstrap-report.jsonl`: step name, severity, exit code, duration, timestamp. The `echo` stays beside it — the log is still the live surface the UI tails, and a WARN vanishing from it would be a regression for anyone reading along.
+
+**Why JSONL and not a document:** the writer is bash on a box that may be killed mid-run — a provider timeout, a reboot, the OOM killer. A half-written array is unparseable; a half-written JSONL file is merely shorter, and whatever ran is still readable. That is the case the format exists for, so the parser treats a truncated final line as expected rather than exceptional, and keeps it in `malformed` so a recorder bug stays visible.
+
+**Why severity is an argument:** "fatal" and "warn" were already the policy, encoded as *which function the call site called*. Deriving it from the exit code would collapse the distinction — a failed main clone and a failed tailscale install both exit non-zero, and only one of them means the box is useless. Passing it makes the same policy readable by a machine.
+
+**Three things the implementation forced, each a bug found by running the generated shell rather than matching its text:**
+
+- `renderRepoSetup` is also run standalone by the retry action, where the bootstrap preamble is not in scope — so it re-emits the helpers, and declares a `nexus_bootstrap_fatal` fallback only `if ! declare -f`, so the bootstrap's own version (which writes the marker the host polls) is never replaced.
+- `date +%s%3N` is GNU-only. BSD `date` does not expand `%N` and returns the seconds with a literal `3N` glued on — a string that is not a number, which every arithmetic use of it then fails on. `nexus_millis` falls back to whole seconds: coarse, not wrong.
+- Timing variables are `local` inside the helper rather than assigned at the call site. The sites nest (a repo section runs inside the repo setup block), and a bare global would be overwritten by an inner step before the outer one read it — producing a *plausible* duration rather than an error.
+
+**Two defects fixed in passing.** `parseBootstrapLog` derived `complete` from `/bootstrap finished/` over the tail, but the failing branch prints `bootstrap FAILED`, which does not match — so a bootstrap that had already failed read as still running and the log viewer polled forever, while the health strip (reading the markers) already knew. Completion now comes from the marker files, with `failed` as a separate field: *finished* and *succeeded* are two questions, and the old field answered neither reliably. The log is untrusted text anyway — a repo's own build output can print "bootstrap finished", and used to be believed. The marker query also needed `|| true`: a missing marker is the normal case mid-run, and `test -f` failing would otherwise become the exit status of the whole command, so `execRemote` would report a failed read and hide the log behind an error about a file that is absent on purpose.
+
+## D-72 — The sandbox now starts the app before calling itself ready (2026-09-21)
+
+**Context:** A sandbox has always been declared ready without ever starting the app it exists to run. `runCommand` reached `/opt/nexus/nexus.json` and the process plans, but no bootstrap section invoked it — so "provisioned successfully" meant "the tooling installed", and whether the project compiles, binds and serves was discovered by a human clicking Start, minutes later. The health strip reinforced it: five pills answering *is claude installed*, none answering *does the app respond*. Spec 24 piece 2.
+
+**Decision:** Two changes, one per half of the lie.
+
+**Healthchecks, derived from the image.** The bootstrap has always run `docker compose up -d --wait --wait-timeout 180`, which reads as "wait until they are ready". Without a `healthcheck` block it is not: compose waits for *running*, and for postgres that is true several seconds before it accepts a connection — the race a repo's install loses when it runs migrations. `healthcheckFor(image)` (`packages/harness/src/healthcheck.ts`) now supplies one for the families we recognize, and `depends_on` became long-form so a dependency with a healthcheck is waited *for* rather than merely started before.
+
+Derived from the image rather than carried on the node, deliberately: a `StackNode` persists its image but not which catalog entry it came from, and a user may type `postgres:16-alpine` themselves. Matching the image means a hand-typed database gets the same guarantee as a catalog one. An unrecognized image gets **null**, which is a real answer — a generic port probe tells us no more than `--wait` already does, and a guessed probe can mark a healthy service unhealthy and block the whole `up`. `service_started` is used for those dependencies, since demanding health from something with no healthcheck hangs forever.
+
+**The boot probe.** Each repo that declares both a run command and a port is now started, waited for, and **stopped again**, as a `boot:<repo>` step. A test, not a launch: leaving it running would make every provision also a deploy, and would race the user's own Start, which kills by its own recorded PID and knows nothing about this one. A repo without a port is skipped rather than probed loosely — "the process stayed alive for three seconds" is not evidence anything works, and reporting that as a pass would be the same lie in a new place.
+
+**Three things the implementation forced:**
+
+- **`set -m`, not `setsid`.** The kill has to reach the process *group*: `pnpm dev` spawns the real server as a child, so killing the recorded PID alone leaves the port held by an orphan and the user's later Start fails with EADDRINUSE on a box that had just passed its probe. `setsid` is util-linux and absent on macOS, where these helpers are unit-tested — a kill that is only correct on the platform the tests cannot exercise is a kill nothing verifies. Bash's own job control puts the job in its own group on every platform.
+- **`curl -s`, not `curl -f`.** `-f` fails on 4xx, and an app whose `/` legitimately answers 401 or 404 is nonetheless up. The question is "does something serve HTTP here", not "is the root route happy" — the second is the app's business.
+- **The failure carries a log tail**, JSON-escaped through python3 (`nexus_step_tail`). "Did not answer on port 3000" is not actionable on its own, and a build error routinely contains quotes, backslashes and newlines — any one of which, unescaped, produces a report line the parser drops.
+
+**A false green worth recording.** The two tests that assert the app is stopped afterwards initially passed for the wrong reason: `setsid` was missing on macOS, so the server never started, and "the port is free" is trivially true of a server that never ran. Both now assert the app came up *before* asserting it went down. A test that cannot fail for the right reason is not covering anything.
+
+## D-73 — Validation answers two questions, and says which is which (2026-09-21)
+
+**Context:** Pieces 1 and 2 made a bootstrap record what it did and prove the app boots. Nothing surfaced either: the report sat on the sandbox, and the only pre-flight a definition ever got was `generateCompose`'s four structural warnings — which only ever described the YAML it was about to emit. Spec 24 piece 4.
+
+**Decision:** A **Validate** action, between Preview compose and Up, and two read-only MCP tools. Its answer has two halves that are never merged:
+
+- **static** — definition checks (`lib/stack/validate.ts`): dependency cycles *naming the nodes in them*, port collisions, services with no image, docker repos with nothing to build, placeholder env values, and dependencies nothing can probe. Pure: no filesystem, no docker, no network.
+- **observed** — the `boot:*` / `install:*` / `stack:up` steps the project's most recent sandbox actually recorded, read back over SSH.
+
+**Why they stay apart.** Merging them into one verdict forces a choice between two lies: claiming a definition boots because it passed a lint, or calling it unvalidated because nobody has provisioned it yet. The static half cannot prove anything runs; the observed half is the only evidence that does, and it may be absent, stale or unreachable. The UI says which it has, and `booted` is **null** — not false — when no app declared a port, because "nothing was probed" and "the app failed to start" are different answers.
+
+**Most recent sandbox, not a healthy one.** A sandbox that failed to provision is the most informative evidence available; preferring an older green one would report a stack as working *because* its latest attempt broke.
+
+**What validation does not do.** It does not resolve a port collision for you — picking one changes the URL you expect, and which node should move depends on which is "the" app. It does not gate the wizard. And it does not provision: both MCP tools are `projects:read`, because the static half is pure and the observed half reads a report off a machine that already exists. A token that can look at a project can ask whether its stack holds together.
+
+**Verified against a real sandbox**, not only in tests: a three-day-old box, provisioned before the recorder existed, answered "That sandbox recorded no steps — it predates step reporting", which is the fallback path behaving exactly as designed rather than an error.
+
+**Note on scope.** Piece 3 (the fast dry-run sandbox) is not built, so `validate` reports on the last *real* provision rather than running one on demand. That is the honest version of the feature at this stage — it never claims to have run something it did not.
+
+## D-74 — A dry run starts where the validation does (2026-09-23)
+
+**Context:** Pieces 1, 2 and 4 made a bootstrap record its steps, prove the app boots, and surface both. They did not make asking cheap. A local sandbox is byte-identical to a cloud one — `local.ts` calls the same `renderCloudInit`, only in container mode — so every run paid apt update, build-essential, the NodeSource curl|bash, `get.docker.com`, a global `npm i -g` for the agent CLIs, the gh keyring, a glab `.deb` and, longest of all, `playwright install --with-deps chromium`, into a bare `ubuntu:22.04` with no layer cache. With spec 25's repair loop running up to three rounds, that is an hour to answer one question. Spec 24 piece 3.
+
+**Decision:** Two levers, both already latent in the code.
+
+**A prebuilt base image**, `nexux/sandbox-base:v<N>`, holding the tooling half of the bootstrap. It is generated from `base-image.ts` rather than hand-written, and a test asserts the same install markers appear in both it and `renderCloudInit` — a parallel definition is one that drifts, and the drift here produces the worst possible failure: a dry run passing against tooling the real sandbox does not have.
+
+**A trimmed spec** (`dryRunSpec`) that drops the agent CLIs, Chromium, the tunnel and the tailnet. Each is either tooling a validation does not use or reachability it does not need — a dry run works off bind-mounted checkouts, so there is nothing behind a tailnet to clone. `installDocker` is deliberately *not* dropped: the caller may have forced it on because the canvas has compose services, and a dry run that quietly removed Docker would report a stack as broken for a reason the real provision would not have.
+
+**Measured, not asserted.** With a real repo (pnpm install, a build, an express server on :3000): **52s → 23s**, all three steps recorded green. The image itself builds in ~45s and is cached after that.
+
+**Never builds inline.** `resolveBaseImage` falls back to `ubuntu:22.04` when the image is absent or its version label is stale, and the bootstrap then installs what it needs exactly as before. A launch that quietly spent five minutes building would be the same twenty-minute surprise this piece exists to remove, with a different cause — so building is an explicit action the caller pays for knowingly.
+
+**The version is a label, not a tag.** `baseImageIsCurrent` reads `org.nexux.base-version` off the image, because a tag can be retagged and an image claiming v1 while holding v0's tooling is precisely the silent wrong answer the whole spec is about.
+
+**One thing the first build got wrong**, caught by running the image rather than trusting it: `corepack prepare --activate` writes a *shim*, not the binary — the real pnpm downloads on first use ("Downloading the pnpm 12.6.0 binary for linux-arm64"). The image had baked a package manager that still needed the network before it could install anything. Invoking `pnpm --version` and `yarn --version` in the same layer pulls the binaries in; v2 answers instantly.
+
+**End to end on a deliberately broken app**, to check the loop reports what a repair agent would need: 24 seconds from launch to `install=0 build=0 boot=1`, with the boot step carrying `Error: Cannot find module '@acme/does-not-exist'` in its tail. That is the actionable failure spec 25's repair loop reads.
+
+## D-75 — A repository is not a node, in the schema as well as the model (2026-09-23)
+
+**Context:** Detection has always been good and always been unused: `detectRepo` finds the Dockerfile, the compose file, the package manager, the scripts, the env keys and the ports, and parses each Makefile target's recipe so a `make dev` that is secretly `docker compose up -d postgres` is recorded as such. All of it fired only when a human dragged a repo onto the canvas, and prefilled exactly one node. Nothing turned it into a graph, so every project started blank. Spec 25 piece 1.
+
+**Decision:** Discovery in two passes. `findRunnableUnits` reads the workspace declaration (`pnpm-workspace.yaml`, `workspaces` in package.json) and expands it into directories; `detectRepo` then scans each one, unchanged — it already took an arbitrary path. `seedStack` turns the results into nodes, inferred services and edges.
+
+Two repos with one app each, and one monorepo with two apps, now produce **the same graph**. Only discovery differs, which is the point: the stack describes what boots, and a git is how the code arrived.
+
+**The schema said otherwise.** `StackNode.repositoryId` was `@unique` — "one repo, one node", enforced by the database. The seed hit it on the first real monorepo. Nothing depended on the uniqueness (every read is by `id`; the one query filtering on the column already used `findMany`), so the migration replaces the unique index with a plain one and the `Repository` back-relation becomes a list. Worth recording because the spec treated this as a matter of inference and it was also a constraint.
+
+**What the inference will and will not claim:**
+
+- **Scheme first, name second.** `DATABASE_URL=postgres://…` names its engine and is conclusive. `POSTGRES_HOST` alone is suggestive: the node is still created, flagged low confidence with the evidence attached. Silence would leave the blank canvas this piece removes; an unlabelled guess would be worse.
+- **One service per project, not per unit.** Three units naming a database want one postgres between them. Three containers racing for 5432 is a boot failure nobody asked for.
+- **A repo that ships its own compose file suppresses inference entirely** — it has declared its services, and duplicating them starts a second postgres fighting the first.
+- **Unit-to-unit edges are never inferred.** A front end's `API_URL` pointing at a back end's port is suggestive, not conclusive, and a wrong edge changes boot order in a way that is hard to debug. Two apps in one git are no more related than two gits; treating co-location as evidence is exactly the wrong inference.
+- **A library is not a node.** A unit earns one only if it has something to run — a dev/start script, a Dockerfile, or a flagged make target. A workspace of nine libraries and two apps is two nodes.
+- **Port collisions are flagged, not resolved.** Two apps defaulting to 3000 is common; picking one for the user changes the URL they expect.
+
+**Seeding refuses a non-empty canvas.** A merge cannot tell a deliberate edit from a stale one, and silently reverting a hand-written fix is the worst outcome available. Re-seeding is explicit, and then it replaces.
+
+**One bug only the real monorepo revealed.** A workspace member does not declare its own package manager — the root does, and detection scans each unit in isolation. The first real seed gave every app in a pnpm monorepo `npm install`, which at best ignores the workspace and at worst writes a package-lock.json beside pnpm-lock.yaml. Members now inherit the root's manager, unless they detected their own (a lockfile of their own is better information than the root's).
+
+**Walked end to end** on a monorepo with two apps and a library: two run nodes, postgres and redis inferred from the API's `.env.example` with the connection strings as evidence, edges only from the unit that named them, the library reported as a library — and `validate` then answered clean on the result.
+
+## D-76 — The repair loop's rules live in the applier, not the prompt (2026-09-23)
+
+**Context:** Spec 24 made a failure readable — a `boot:api` step carrying `Cannot find module '@/generated/prisma'` in its tail. A human reads that and knows the install is missing a codegen step; the system did not, so the developer was still the one closing the loop. Spec 25 piece 2.
+
+**Decision:** Validate → read the failures → the stack assistant proposes patches → apply → re-validate, up to three rounds. The agent is the existing assistant with a different prompt and caller: its suggestion format is already an applied patch with a reason, and its tools are already the right three. A second agent would be a second definition of what a stack patch is.
+
+**The split that matters.** A prompt is a *request*. "Never remove a run command" in an instruction block is a sentence a model may ignore, misread, or reason its way out of when a failure is stubborn. So every rule the loop must not break lives in `lib/stack/repair.ts`, which is the only thing that writes:
+
+- **Never weaken the check.** Blanking a `localCommand` or a `ports` array makes validation pass by *not running* — the node stops being started, or the boot probe is skipped and "the app failed" becomes "nothing was probed". Refused, with the field named. Changing a command to a different one is fine; the rule is about removal.
+- **Never touch a node the user wrote.** This needed a fact the database did not record and that cannot be recovered afterwards, so `StackNode.seededBy` is new, defaulting to `"user"` — every node that exists today was put there by a person, and the safe direction for a rule protecting hand edits is to assume the edit was one. The seed writes `"detect"`, a repair writes `"agent"`, and a later round may revise its own work.
+- **Never create a node.** Adding a service the project never asked for is a guess with a container attached. Inference belongs to the seed, where it is driven by the repos' own evidence.
+- **Never patch a node that does not exist** — the ordinary failure of a model reading a truncated tool result.
+
+Good and bad suggestions in one reply are separated rather than rejected together: the fix lands and the weakening does not.
+
+**Three rounds, and a round that proposes nothing stops immediately.** Each round costs a validation — a container, and real money on a cloud provider. Re-validating after changing nothing would ask the same question and get the same answer, so the loop returns rather than spending it.
+
+**No separate "propose" mode.** `POST /stack/validate` already is one: it reports what is wrong and changes nothing. A second endpoint that ran the agent without applying would spend a validation to produce advice the user cannot act on without re-running everything anyway.
+
+**Every round records what changed and why**, plus what was refused. The safety story is that nothing happens silently — an agent that rewrote three nodes over two rounds has to be reviewable without reading the database.
+
+**Verified end to end against a real port collision**, where it behaved correctly for a reason worth recording: the run stopped at the agent (no OpenAI key configured) and the canvas was untouched — and both nodes were marked `user`, so even a working agent's patches would have been refused. The rule held without the model's cooperation, which is the whole point of putting it in the applier.

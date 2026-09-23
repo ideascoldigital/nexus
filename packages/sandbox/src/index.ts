@@ -1,4 +1,26 @@
 export * from "./types";
+// Spec 24 piece 1 — structured per-step bootstrap results.
+export {
+  assertStepName,
+  bootstrapReportCommand,
+  failedSteps,
+  parseBootstrapReport,
+  renderStepHelpers,
+  stepChain,
+  BOOTSTRAP_REPORT_PATH,
+  type BootstrapReport,
+  type BootstrapStep,
+  type StepSeverity,
+} from "./bootstrap-report";
+// Spec 24 piece 2 — does the app actually boot?
+export {
+  renderBootProbe,
+  renderBootProbeHelper,
+  renderStepTailHelper,
+  bootProbeLogPath,
+  BOOT_PROBE_TIMEOUT_SECONDS,
+  type BootProbeSpec,
+} from "./boot-probe";
 export {
   renderMainTf,
   renderCloudInit,
@@ -144,8 +166,19 @@ export {
   type MainRepoCandidate,
   type WorkspaceFolder,
 } from "./workspace";
+// Spec 24 piece 3 — the prebuilt base that makes a dry run affordable.
+export {
+  baseImageIsCurrent,
+  dryRunSpec,
+  renderBaseDockerfile,
+  BASE_IMAGE_TAG,
+  BASE_IMAGE_VERSION,
+  DRY_RUN_SKIPS,
+} from "./base-image";
 export {
   browserWsPort,
+  buildSandboxBaseImage,
+  resolveBaseImage,
   dockerAvailable,
   launchLocalSandbox,
   localBootstrapComplete,

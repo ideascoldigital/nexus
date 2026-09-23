@@ -74,7 +74,8 @@ model Repository {
   project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   setup         RepositorySetup?
   envVars       ProjectEnvVar[]
-  stackNode     StackNode?
+  /// One per runnable unit: a monorepo contributes several (spec 25 piece 1).
+  stackNodes    StackNode[]
   // SetNull, not Cascade: deleting a credential must never delete the repo row
   // — it just returns this repo to the provider-wide fallback.
   gitCredential CloudCredential? @relation("RepositoryGitCredential", fields: [gitCredentialId], references: [id], onDelete: SetNull)
@@ -123,7 +124,14 @@ model StackNode {
   id           String  @id @default(cuid())
   projectId    String
   kind         String // "repo" | "service"
-  repositoryId String? @unique // set when kind = "repo"
+  /// Set when kind = "repo". NOT unique: a monorepo contributes one node per
+  /// runnable unit, all pointing at the same repository (spec 25 piece 1).
+  repositoryId String?
+  /// Who put this node here: "detect" (the seed), "agent" (a repair), or
+  /// "user". The repair loop may rewrite the first two and never the last —
+  /// an agent silently overwriting a hand edit is the worst outcome available,
+  /// and "who wrote this" cannot be re-derived after the fact (spec 25 p2).
+  seededBy     String  @default("user")
   name         String // display + compose service name (slugified at generation)
   runMode      String  @default("docker") // "docker" | "local"
 
@@ -166,6 +174,7 @@ model StackNode {
   edgesTo    StackEdge[] @relation("StackEdgeTarget")
 
   @@index([projectId])
+  @@index([repositoryId])
 }
 
 // StackEdge - dependency between stack nodes. source depends_on target
