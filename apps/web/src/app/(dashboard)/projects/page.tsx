@@ -74,10 +74,40 @@ type RecentTask = {
   projectName: string;
 };
 
-async function getMetrics(): Promise<WorkspaceMetrics> {
+async function getMetrics(): Promise<WorkspaceMetrics | null> {
   const res = await fetch("/api/metrics");
   if (!res.ok) throw new Error("Failed to load metrics");
-  return res.json();
+  return asWorkspaceMetrics(await res.json());
+}
+
+/**
+ * The workspace pulse, or null when the response is not it.
+ *
+ * `/api/metrics` used to serve these numbers and now serves the machine's own
+ * (memory, CPU, disk — D-?, PR #8); this page was never moved off it. The
+ * mismatch did not show up as a blank tile: `spend7d` came back undefined,
+ * `.toFixed(2)` threw *during render*, and React unmounted the whole route —
+ * so the entire projects page read "This page couldn't load" because four
+ * decorative tiles could not find their numbers.
+ *
+ * Hence a shape check rather than a `?? 0` per field: a missing number renders
+ * nothing, and the tiles can never again take the page down with them. The
+ * real fix is a route that serves this shape again, which nothing does today —
+ * `getWorkspaceMetrics()` in lib/metrics.ts is orphaned.
+ */
+function asWorkspaceMetrics(raw: unknown): WorkspaceMetrics | null {
+  const m = raw as Partial<WorkspaceMetrics> | null;
+  if (!m || typeof m !== "object") return null;
+  const complete =
+    typeof m.spend7d === "number" &&
+    typeof m.spendToday === "number" &&
+    Array.isArray(m.spendSeries14d) &&
+    typeof m.prs7d === "number" &&
+    typeof m.runs7d?.completed === "number" &&
+    typeof m.runs7d?.failed === "number" &&
+    typeof m.sandboxes?.cloud === "number" &&
+    typeof m.sandboxes?.local === "number";
+  return complete ? (m as WorkspaceMetrics) : null;
 }
 
 async function getRecentTasks(): Promise<RecentTask[]> {
