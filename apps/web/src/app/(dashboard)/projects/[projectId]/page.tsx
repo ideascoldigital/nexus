@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LG_BREAKPOINT, useBelowBreakpoint } from "@/hooks/use-breakpoint";
 import {
   ResizableGroup,
   ResizableHandle,
@@ -357,6 +358,11 @@ export default function ProjectDetailPage({
     return { tab, section: null };
   };
   const [initial] = useState(readState);
+  // Below lg the overview stacks. That has to be a render decision rather than
+  // a class: react-resizable-panels writes pixel widths inline, so `lg:flex-col`
+  // leaves the rail at ~108px on a phone with its content shredded.
+  const stacked = useBelowBreakpoint(LG_BREAKPOINT);
+
   const [activeProjectTab, setActiveProjectTab] = useState<ProjectTab>(
     initial.tab,
   );
@@ -530,13 +536,22 @@ export default function ProjectDetailPage({
               {/* Resizable on lg+ so the Stack canvas can borrow width from
                   the checklist rail; stacked (and non-resizable) below that. */}
               <ResizableGroup
-                persistId="project-overview"
-                className="mt-4 h-auto flex-col gap-4 lg:flex-row lg:gap-0 lg:items-stretch"
+                // Below lg this is a plain stacked div, not a split: the
+                // library sizes panels inline, so classes cannot stack them,
+                // and a vertical group divides a fixed height — which
+                // collapses growing content to zero.
+                plain={stacked}
+                // Only the horizontal layout is worth remembering. A stacked
+                // one has nothing to drag, and sharing the key would let a
+                // phone visit overwrite the split a desktop user set.
+                persistId={stacked ? undefined : "project-overview"}
+                className="mt-4 h-auto gap-4 lg:gap-0 lg:items-stretch"
               >
                 <ResizablePanel
+                  plain={stacked}
                   id="main"
-                  defaultSize="66%"
-                  minSize="35%"
+                  defaultSize={stacked ? undefined : "66%"}
+                  minSize={stacked ? undefined : "35%"}
                   className="space-y-4 lg:pr-4"
                 >
                   {/* Definition — live multi-agent panel, collapsible hero */}
@@ -577,12 +592,16 @@ export default function ProjectDetailPage({
                   />
                 </ResizablePanel>
 
-                <ResizableHandle className="hidden lg:block" />
+                {/* Not rendered at all when stacked, rather than hidden with
+                    a class: a Separator outside a Group throws, and `hidden`
+                    still mounts it. */}
+                {!stacked && <ResizableHandle />}
 
                 <ResizablePanel
+                  plain={stacked}
                   id="rail"
-                  defaultSize="34%"
-                  minSize="18%"
+                  defaultSize={stacked ? undefined : "34%"}
+                  minSize={stacked ? undefined : "18%"}
                   className="space-y-4 lg:pl-4"
                 >
                   <ProjectSetupChecklist

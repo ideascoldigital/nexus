@@ -52,8 +52,13 @@ export function ResizableGroup({
   className,
   orientation = "horizontal",
   persistId,
+  plain,
   ...props
-}: ComponentProps<typeof Group> & { persistId?: string }) {
+}: ComponentProps<typeof Group> & {
+  persistId?: string;
+  /** Render a plain flex container — see `ResizablePanel`'s `plain`. */
+  plain?: boolean;
+}) {
   // Hook order is stable: `persistId` is a constant per call site.
   const persisted = useDefaultLayout({
     id: persistId ?? "unpersisted",
@@ -65,6 +70,14 @@ export function ResizableGroup({
         onLayoutChanged: persisted.onLayoutChanged,
       }
     : {};
+
+  if (plain) {
+    const { defaultLayout, onLayoutChanged, ...rest } =
+      props as Record<string, unknown>;
+    void defaultLayout;
+    void onLayoutChanged;
+    return <div className={cn("flex w-full flex-col", className)} {...rest} />;
+  }
 
   return (
     <Group
@@ -82,8 +95,29 @@ export function ResizableGroup({
 
 export function ResizablePanel({
   className,
+  plain,
   ...props
-}: ComponentProps<typeof Panel>) {
+}: ComponentProps<typeof Panel> & {
+  /**
+   * Render a plain div instead of a resizable panel.
+   *
+   * For the narrow layout, where a split makes no sense. It has to be a
+   * different *element*, not different classes: the library writes pixel sizes
+   * inline, so `lg:flex-col` leaves a rail 108px wide with its content
+   * shredded — and a vertical group is worse, because it divides a fixed
+   * height and collapses growing content to zero.
+   */
+  plain?: boolean;
+}) {
+  if (plain) {
+    const { defaultSize, minSize, maxSize, id, ...rest } =
+      props as Record<string, unknown>;
+    void defaultSize;
+    void minSize;
+    void maxSize;
+    void id;
+    return <div className={cn("min-w-0", className)} {...rest} />;
+  }
   return <Panel className={cn("min-h-0 min-w-0", className)} {...props} />;
 }
 

@@ -10,6 +10,7 @@ import { ActivityIndicator } from "@/components/layout/activity-indicator";
 import { CommandPalette } from "@/components/layout/command-palette";
 import { NotificationBell } from "@/components/layout/notification-bell";
 import { NexusLogoTile } from "@/components/brand/nexus-mark";
+import { MobileNav } from "@/components/layout/mobile-nav";
 
 export function AppHeader({ title }: { title?: string }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -30,6 +31,9 @@ export function AppHeader({ title }: { title?: string }) {
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-3.5 border-b border-border/60 bg-sidebar px-5">
+      {/* The only way to reach another page below md, where the sidebar is
+          hidden. */}
+      <MobileNav />
       <Link
         href="/"
         className="flex items-center gap-2.5 hover:opacity-85 transition-opacity"

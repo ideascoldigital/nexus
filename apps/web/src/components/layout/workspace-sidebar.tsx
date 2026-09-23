@@ -24,13 +24,8 @@ import {
   Settings,
 } from "lucide-react";
 
-const NAV = [
-  { icon: LayoutDashboard, label: "Dashboard", href: "/" },
-  { icon: FolderKanban, label: "Projects", href: "/projects" },
-  { icon: Bot, label: "Agents", href: "/agents" },
-  { icon: Hash, label: "Skills", href: "/skills" },
-  { icon: Settings, label: "Settings", href: "/settings" },
-];
+
+import { NAV_ITEMS as NAV } from "@/components/layout/nav-items";
 
 const STORAGE_KEY = "nexux:sidebar-collapsed";
 
