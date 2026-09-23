@@ -28,10 +28,20 @@ const realBash = {
  * bug this covers — an unquoted sentinel that bash read as a here-string, so it
  * aborted after line one and returned a tail that looked entirely normal.
  */
-function run(logPath: string): string {
-  return execFileSync("bash", ["-lc", bootstrapLogCommand(logPath)], {
+function run(
+  logPath: string,
+  markers: { complete?: string; failed?: string } = {},
+): string {
+  return execFileSync("bash", ["-lc", bootstrapLogCommand(logPath, markers)], {
     encoding: "utf8",
   });
+}
+
+/** A marker path that exists, in the same temp dir as the log. */
+function marker(logPath: string, name: string): string {
+  const file = path.join(path.dirname(logPath), name);
+  fs.writeFileSync(file, "");
+  return file;
 }
 
 function fixture(lines: string): string {
@@ -58,9 +68,42 @@ test("the command survives bash in one piece", realBash, () => {
     ),
   );
   const view = parseBootstrapLog(out);
-  assert.equal(view.complete, true);
   assert.ok(view.log.includes("Setting up some-package"));
   assert.deepEqual(view.warnings, ["[nexux] WARN: tailscale install failed"]);
+});
+
+test("completion comes from the marker, not from the log text", realBash, () => {
+  // The bug this replaces: `complete` was /bootstrap finished/ over the tail,
+  // so a run that printed "bootstrap FAILED" read as still running and the
+  // viewer polled forever — while the health strip, reading the same markers
+  // this now reads, already knew it had ended.
+  const log = fixture("[nexux] bootstrap FAILED 2026-09-21: clone failed\n");
+
+  const running = parseBootstrapLog(run(log, { complete: "/nope/a", failed: "/nope/b" }));
+  assert.equal(running.complete, false);
+  assert.equal(running.failed, false);
+
+  const failed = parseBootstrapLog(
+    run(log, { complete: "/nope/a", failed: marker(log, ".bootstrap-failed") }),
+  );
+  // Finished, and finished badly — two different questions.
+  assert.equal(failed.complete, true);
+  assert.equal(failed.failed, true);
+
+  const ok = parseBootstrapLog(
+    run(log, { complete: marker(log, ".bootstrap-complete"), failed: "/nope/b" }),
+  );
+  assert.equal(ok.complete, true);
+  assert.equal(ok.failed, false);
+});
+
+test("a log claiming to be finished is not believed without the marker", realBash, () => {
+  // The log is untrusted text: a repo's own build output can print this.
+  const log = fixture("[nexux] bootstrap finished 2026-09-21\n");
+  const view = parseBootstrapLog(
+    run(log, { complete: "/nope/a", failed: "/nope/b" }),
+  );
+  assert.equal(view.complete, false);
 });
 
 test("a WARN above the tail window still comes back", realBash, () => {

@@ -27,6 +27,15 @@ export type SandboxRepoSpec = {
   installCommand?: string | null;
   buildCommand?: string | null;
   runCommand?: string | null;
+  /**
+   * The port `runCommand` serves on, when the stack declares one.
+   *
+   * Only used to *verify* the app boots (spec 24 piece 2): the bootstrap
+   * starts it, waits for this port, and stops it again. Without a port there
+   * is nothing to wait for, so a repo that declares none is not probed —
+   * "the process stayed alive for three seconds" is not evidence the app works.
+   */
+  runPort?: number | null;
   /** Written to <repo>/.env after clone. */
   envVars?: Record<string, string>;
 };

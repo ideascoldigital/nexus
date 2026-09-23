@@ -11,9 +11,12 @@ import {
   destroySandbox,
   GLOBAL_ENV_SETTINGS,
   destroyLocalSandbox,
+  bootstrapReportCommand,
   dockerAvailable,
   ensureSandboxKeypair,
   execRemote,
+  failedSteps,
+  parseBootstrapReport,
   launchLocalSandbox,
   localBootstrapComplete,
   localBootstrapFailure,
@@ -296,6 +299,19 @@ export async function refreshTailscaleSession(sandboxId: string): Promise<{
  * It renders through `renderRepoSetup`, the same function the bootstrap uses,
  * so there is no second definition of what "set up" means.
  */
+/**
+ * The pre-spec-24 failure signal: WARN lines in the setup log.
+ *
+ * Kept as a fallback for sandboxes provisioned before the step recorder
+ * existed, which have no report file to read. It sees only clone/install/build
+ * — that blindness is why the report replaced it.
+ */
+function scrapeFailuresFromLog(log: string): string[] {
+  return [
+    ...log.matchAll(/^\[nexux\] WARN: (?:clone|install|build) failed for (.+?)\r?$/gm),
+  ].map((m) => m[1]);
+}
+
 export async function retrySandboxSetup(sandboxId: string): Promise<{
   ok: boolean;
   failed: string[];
@@ -333,9 +349,28 @@ export async function retrySandboxSetup(sandboxId: string): Promise<{
     timeoutMs: 20 * 60_000,
   });
   const log = `${res.stdout}\n${res.stderr}`.trim();
-  const failed = [
-    ...log.matchAll(/^\[nexux\] WARN: (?:clone|install|build) failed for (.+?)\r?$/gm),
-  ].map((m) => m[1]);
+
+  // Read the structured report the steps just appended, rather than scraping
+  // the log for `[nexux] WARN: … failed for <name>` (spec 24 piece 1). The
+  // regex only ever matched clone/install/build, so a failed stack `up` or a
+  // failed launcher was invisible here and the retry reported success while
+  // the sandbox was still missing its database.
+  //
+  // The log stays the fallback: an older sandbox — provisioned before the
+  // recorder existed — has no report file, and its WARNs are all there is.
+  let failed: string[];
+  try {
+    const out = await execRemote(bootstrapReportCommand(), {
+      ...sandboxTarget(sandbox, "/", "root"),
+      timeoutMs: 30_000,
+    });
+    const report = parseBootstrapReport(out.stdout);
+    failed = report.steps.length
+      ? failedSteps(report).map((s) => s.step)
+      : scrapeFailuresFromLog(log);
+  } catch {
+    failed = scrapeFailuresFromLog(log);
+  }
 
   return { ok: failed.length === 0, failed: [...new Set(failed)], log };
 }
@@ -781,6 +816,13 @@ async function buildSpec(
           r.setup?.runCommand?.trim() ||
           stackFor(r.id)?.runCommand ||
           r.setup?.runCommand,
+        // Only the canvas knows this — there is no per-repo port in
+        // RepositorySetup. The main repo falls back to the resolved preview
+        // port, which is the same number the UI previews and the user's own
+        // Start waits on, so a green probe means the Start will work too.
+        runPort:
+          stackFor(r.id)?.runPort ??
+          (mainRepo?.id === r.id ? previewPort : null),
         envVars: envVarsToRecord(r.envVars),
       })),
   };
@@ -1051,6 +1093,13 @@ async function runLocalProvision(
       name: spec.name,
       spec,
       onLog: log.sink.bind(log),
+      // Start from the prebuilt base when one is current (spec 24 piece 3).
+      // Never builds inline — an absent or stale base falls back to
+      // ubuntu:22.04 and the bootstrap installs what it needs, exactly as
+      // before. Building is an explicit action, because a launch that quietly
+      // spent five minutes on it would be the same slow surprise this piece
+      // exists to remove.
+      preferPrebuilt: true,
     });
     await prisma.sandbox.update({
       where: { id: sandboxId },

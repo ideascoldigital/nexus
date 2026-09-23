@@ -88,6 +88,12 @@ export type DetectionResult = {
     start?: string;
   };
   envExampleKeys: string[];
+  /**
+   * The example file's values, keyed by name. Read by the seed to tell which
+   * engine a `DATABASE_URL` names (spec 25 piece 1) — the key alone cannot.
+   * Placeholder config from a committed file; a real `.env` is never read.
+   */
+  envExampleValues?: Record<string, string>;
   suggestedPorts: number[];
 };
 
@@ -260,9 +266,67 @@ export type StackInheritance = {
     installCommand: string | null;
     buildCommand: string | null;
     runCommand: string | null;
+    /**
+     * The port `runCommand` serves on, when the node declares one or the
+     * command reveals it. Drives the sandbox's boot probe (spec 24 piece 2);
+     * null means the probe is skipped rather than pointed at a guess.
+     */
+    runPort: number | null;
     /** True when the command launches containers rather than the app. */
     managesServices: boolean;
   }>;
   /** Human-readable notes for the sandbox UI. */
   notes: string[];
+};
+
+
+/**
+ * Spec 24 piece 4 — the Validate action's answer.
+ *
+ * Declared here rather than beside the service that builds it: the service
+ * reaches Prisma and SSH, and the toolbar that renders this must not drag
+ * either into the browser bundle. Same reason `api-scopes.ts` exists apart
+ * from `api-token.ts`.
+ */
+export type ValidationSeverity = "error" | "warning" | "info";
+
+export type ValidationFinding = {
+  /** Stable rule id, so the UI can group and the tests can pin. */
+  rule: string;
+  severity: ValidationSeverity;
+  nodeId: string | null;
+  nodeName: string | null;
+  message: string;
+  /** What to do about it. Absent when the message already says. */
+  fix?: string;
+};
+
+/** One step a real bootstrap recorded (spec 24 piece 1). */
+export type ObservedStep = {
+  step: string;
+  severity: "fatal" | "warn";
+  exitCode: number;
+  durationMs: number;
+  at: string;
+  tail?: string;
+};
+
+export type ObservedRun = {
+  sandboxId: string;
+  sandboxName: string;
+  sandboxStatus: string;
+  provisionedAt: string;
+  steps: ObservedStep[];
+  failed: ObservedStep[];
+  /** Null when no app declared a port — not the same as "it failed". */
+  booted: boolean | null;
+  /** Why there is no evidence, when there is none. */
+  unavailable?: string;
+};
+
+export type StackValidation = {
+  /** The static checks passed. Says nothing about whether anything booted. */
+  ok: boolean;
+  findings: ValidationFinding[];
+  observed: ObservedRun | null;
 };
