@@ -8,6 +8,7 @@ import type {
   StackLogLine,
   StackSaveInput,
   StackStatus,
+  StackValidation,
 } from "@/lib/stack/types";
 
 export async function getStack(projectId: string): Promise<StackGraph> {
@@ -216,5 +217,25 @@ export async function getStackInheritance(
 ): Promise<StackInheritance> {
   const res = await fetch(`/api/projects/${projectId}/stack/inheritance`);
   if (!res.ok) throw new Error("Failed to load stack inheritance");
+  return res.json();
+}
+
+/**
+ * Spec 24 piece 4 — would this stack come up?
+ *
+ * POST because reading the observed half opens an SSH connection to the
+ * project's sandbox: too expensive to sit behind something a browser may
+ * prefetch.
+ */
+export async function validateStack(
+  projectId: string
+): Promise<StackValidation> {
+  const res = await fetch(`/api/projects/${projectId}/stack/validate`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Validation failed");
+  }
   return res.json();
 }

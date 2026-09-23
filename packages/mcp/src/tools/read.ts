@@ -102,10 +102,66 @@ export const taskLogs: ToolDefinition<{ taskId: string; tailLines?: number }> = 
   },
 };
 
+/**
+ * Spec 24 piece 4. Read-only and free: the static checks are pure, and the
+ * observed half reads a report off a sandbox that already exists. Nothing here
+ * provisions anything, which is why it is `projects:read` rather than a write
+ * scope — a token that can look at a project can ask whether its stack holds
+ * together.
+ */
+export const validateStack: ToolDefinition<{ projectId: string }> = {
+  name: "nexux_validate_stack",
+  description:
+    "Check whether a project's stack definition would come up: unreachable " +
+    "nodes, dependency cycles, port collisions, services nothing can probe, " +
+    "placeholder env values — plus what the project's most recent sandbox " +
+    "actually recorded when it was provisioned, including whether each app " +
+    "answered on its port. `ok` covers only the static checks; `observed` is " +
+    "the half that proves anything really booted, and may be absent or stale.",
+  scope: "projects:read",
+  inputSchema: {
+    type: "object",
+    properties: {
+      projectId: { type: "string", description: "From nexux_list_projects." },
+    },
+    required: ["projectId"],
+    additionalProperties: false,
+  },
+  parse: (raw) => ({
+    projectId: requiredString(asObject(raw), "projectId"),
+  }),
+  run: (ctx, args) => ctx.validateStack(args.projectId),
+};
+
+export const describeStack: ToolDefinition<{ projectId: string }> = {
+  name: "nexux_describe_stack",
+  description:
+    "The project's stack graph: every node with its run mode, image, ports, " +
+    "env and ordered phases, plus the dependency edges. Read this before " +
+    "proposing a change to how a project runs — the phases are the source of " +
+    "truth, not the legacy command columns.",
+  scope: "projects:read",
+  inputSchema: {
+    type: "object",
+    properties: {
+      projectId: { type: "string", description: "From nexux_list_projects." },
+    },
+    required: ["projectId"],
+    additionalProperties: false,
+  },
+  parse: (raw) => ({
+    projectId: requiredString(asObject(raw), "projectId"),
+  }),
+  run: (ctx, args) => ctx.describeStack(args.projectId),
+};
+
+
 export const READ_TOOLS = [
   listProjects,
   activity,
   listSandboxes,
   taskStatus,
   taskLogs,
+  validateStack,
+  describeStack,
 ] as const;

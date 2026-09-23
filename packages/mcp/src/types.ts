@@ -97,6 +97,47 @@ export type NexuxContext = {
   createTask(input: CreateTaskInput): Promise<TaskSummary>;
   launchSandbox(input: LaunchSandboxInput): Promise<SandboxSummary>;
   powerSandbox(sandboxId: string, action: PowerAction): Promise<SandboxSummary>;
+  /** Spec 24 piece 4 — would this project's stack boot, and did it last time? */
+  validateStack(projectId: string): Promise<StackValidationSummary>;
+  /** The stack graph, for a caller deciding what to change. */
+  describeStack(projectId: string): Promise<unknown>;
+};
+
+/** One thing wrong with a stack definition (spec 24 piece 4). */
+export type StackFinding = {
+  rule: string;
+  severity: "error" | "warning" | "info";
+  nodeId: string | null;
+  nodeName: string | null;
+  message: string;
+  fix?: string;
+};
+
+/** One step a real bootstrap recorded. */
+export type StackStep = {
+  step: string;
+  exitCode: number;
+  durationMs: number;
+  /** Last lines of the step's own output, on a failure that carries them. */
+  tail?: string;
+};
+
+export type StackValidationSummary = {
+  /** The static checks passed — no errors. Says nothing about booting. */
+  ok: boolean;
+  findings: StackFinding[];
+  /**
+   * What the project's most recent sandbox actually recorded, when one is
+   * reachable. `booted` is null when no app declared a port to probe, which is
+   * a different answer from "the app failed to start".
+   */
+  observed: {
+    sandboxName: string;
+    provisionedAt: string;
+    booted: boolean | null;
+    failed: StackStep[];
+    unavailable?: string;
+  } | null;
 };
 
 /** JSON Schema for a tool's arguments, as MCP sends it to the client. */

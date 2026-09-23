@@ -7,6 +7,7 @@ import type {
   PowerAction,
   ProjectSummary,
   SandboxSummary,
+  StackValidationSummary,
   TaskSummary,
 } from "@nexux/mcp";
 
@@ -17,6 +18,7 @@ import {
   reconcileLocalSandboxStatuses,
   resumeSandbox,
 } from "@/lib/sandbox-manager";
+import { describeStack, validateProject } from "@/services/stack-validation";
 import { DEFAULT_WORKSPACE_ID } from "@/lib/workspace";
 
 /**
@@ -122,6 +124,19 @@ const SANDBOX_FIELDS = {
 const RECENT_LIMIT = 12;
 
 export function createMcpContext(): NexuxContext {
+  /**
+   * Refuses a project outside this workspace, the same way every other method
+   * here scopes its query. A read tool that skipped it would answer questions
+   * about a project the token cannot otherwise see.
+   */
+  const assertProject = async (projectId: string) => {
+    const project = await prisma.project.findFirst({
+      where: { id: projectId, workspaceId },
+      select: { id: true },
+    });
+    if (!project) throw new Error("Project not found");
+  };
+
   return {
     async listProjects(): Promise<ProjectSummary[]> {
       const projects = await prisma.project.findMany({
@@ -244,6 +259,39 @@ export function createMcpContext(): NexuxContext {
         input.name,
       );
       return toSandbox(sandbox);
+    },
+
+    async validateStack(projectId: string): Promise<StackValidationSummary> {
+      await assertProject(projectId);
+      const result = await validateProject(projectId);
+      return {
+        ok: result.ok,
+        findings: result.findings,
+        // Trimmed to what a caller can act on: the whole step list is mostly
+        // green apt installs, and a tool answer that has to be paged through
+        // is one nobody reads to the end of.
+        observed: result.observed
+          ? {
+              sandboxName: result.observed.sandboxName,
+              provisionedAt: result.observed.provisionedAt,
+              booted: result.observed.booted,
+              failed: result.observed.failed.map((s) => ({
+                step: s.step,
+                exitCode: s.exitCode,
+                durationMs: s.durationMs,
+                ...(s.tail ? { tail: s.tail } : {}),
+              })),
+              ...(result.observed.unavailable
+                ? { unavailable: result.observed.unavailable }
+                : {}),
+            }
+          : null,
+      };
+    },
+
+    async describeStack(projectId: string): Promise<unknown> {
+      await assertProject(projectId);
+      return describeStack(projectId);
     },
 
     async powerSandbox(

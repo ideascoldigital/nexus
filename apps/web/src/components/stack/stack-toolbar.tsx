@@ -4,7 +4,11 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  CheckCircle2,
+  Info,
   Loader2,
+  ShieldCheck,
+  XCircle,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -21,8 +25,13 @@ import {
   stackDown,
   stackPrepare,
   stackUp,
+  validateStack,
 } from "@/services/stack";
-import type { ComposeResult, StackStatus } from "@/lib/stack/types";
+import type {
+  ComposeResult,
+  StackStatus,
+  StackValidation,
+} from "@/lib/stack/types";
 
 type Props = {
   projectId: string;
@@ -47,6 +56,7 @@ export function StackToolbar({
 }: Props) {
   const { toast } = useToast();
   const [preview, setPreview] = useState<ComposeResult | null>(null);
+  const [validation, setValidation] = useState<StackValidation | null>(null);
 
   const running = status?.running ?? false;
 
@@ -59,6 +69,23 @@ export function StackToolbar({
     onError: (err: Error) =>
       toast({
         title: "Compose generation failed",
+        description: err.message,
+        variant: "destructive",
+      }),
+  });
+
+  const validateMutation = useMutation({
+    // Saving first, like every other action here: validating the canvas as
+    // persisted rather than as drawn is the only way the answer describes what
+    // a provision would actually read.
+    mutationFn: async () => {
+      if (dirty) await onSave();
+      return validateStack(projectId);
+    },
+    onSuccess: setValidation,
+    onError: (err: Error) =>
+      toast({
+        title: "Validation failed",
         description: err.message,
         variant: "destructive",
       }),
@@ -155,6 +182,20 @@ export function StackToolbar({
         <Button
           size="sm"
           variant="outline"
+          title="Check the definition, and what the last sandbox recorded"
+          onClick={() => validateMutation.mutate()}
+          disabled={validateMutation.isPending}
+        >
+          {validateMutation.isPending ? (
+            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+          ) : (
+            <ShieldCheck className="h-3.5 w-3.5 mr-1.5" />
+          )}
+          Validate
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
           title="Run the install and build phases on the canvas"
           onClick={() => prepareMutation.mutate()}
           disabled={prepareMutation.isPending}
@@ -191,6 +232,124 @@ export function StackToolbar({
           Save
         </Button>
       </div>
+
+      <Dialog
+        open={!!validation}
+        onOpenChange={(o) => !o && setValidation(null)}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-sm flex items-center gap-2">
+              {validation?.ok ? (
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              ) : (
+                <XCircle className="h-4 w-4 text-red-500" />
+              )}
+              {validation?.ok
+                ? "The definition holds together"
+                : "The definition has problems"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 max-h-[60vh] overflow-auto">
+            {validation?.findings.length ? (
+              <div className="space-y-2">
+                {validation.findings.map((f, i) => (
+                  <div key={i} className="flex items-start gap-2 text-xs">
+                    {f.severity === "error" ? (
+                      <XCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-red-500" />
+                    ) : f.severity === "warning" ? (
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-amber-500" />
+                    ) : (
+                      <Info className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground" />
+                    )}
+                    <div className="space-y-0.5">
+                      <div>{f.message}</div>
+                      {f.fix ? (
+                        <div className="text-muted-foreground">{f.fix}</div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">
+                No problems found in the definition.
+              </div>
+            )}
+
+            {/*
+              The observed half, kept visibly apart. A definition passing its
+              static checks is not evidence that anything booted — only a real
+              provision is, and it may be absent or stale.
+            */}
+            <div className="rounded-md border p-3 space-y-2">
+              <div className="text-xs font-medium">Last provisioned run</div>
+              {!validation?.observed ? (
+                <div className="text-xs text-muted-foreground">
+                  This project has never been provisioned, so nothing has
+                  proven it boots.
+                </div>
+              ) : validation.observed.unavailable ? (
+                <div className="text-xs text-muted-foreground">
+                  {validation.observed.unavailable}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="text-xs text-muted-foreground">
+                    {validation.observed.sandboxName} ·{" "}
+                    {new Date(
+                      validation.observed.provisionedAt,
+                    ).toLocaleString()}
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs">
+                    {validation.observed.booted === true ? (
+                      <>
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
+                        Every app answered on its port.
+                      </>
+                    ) : validation.observed.booted === false ? (
+                      <>
+                        <XCircle className="h-3.5 w-3.5 text-red-500" />
+                        An app did not answer on its port.
+                      </>
+                    ) : (
+                      <>
+                        <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                        No app declared a port, so nothing was probed.
+                      </>
+                    )}
+                  </div>
+                  {validation.observed.failed.length ? (
+                    <div className="space-y-1.5">
+                      {validation.observed.failed.map((step) => (
+                        <div key={step.step} className="text-xs">
+                          <div className="flex items-center gap-1.5">
+                            <XCircle className="h-3.5 w-3.5 shrink-0 text-red-500" />
+                            <span className="font-mono">{step.step}</span>
+                            <span className="text-muted-foreground">
+                              exit {step.exitCode}
+                            </span>
+                          </div>
+                          {step.tail ? (
+                            <pre className="mt-1 ml-5 max-h-32 overflow-auto rounded border bg-black/40 p-2 text-[11px] font-mono whitespace-pre-wrap">
+                              {step.tail.trimEnd()}
+                            </pre>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-muted-foreground">
+                      Every recorded step succeeded.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!preview} onOpenChange={(o) => !o && setPreview(null)}>
         <DialogContent className="max-w-2xl">

@@ -19,6 +19,9 @@ export {
   type ProjectSummary,
   type SandboxSummary,
   type Scope,
+  type StackFinding,
+  type StackStep,
+  type StackValidationSummary,
   type TaskSummary,
   type ToolDefinition,
 } from "./types";

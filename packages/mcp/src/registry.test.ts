@@ -25,6 +25,8 @@ function stubContext(over: Partial<NexuxContext> = {}): {
     createTask: unexpected("createTask"),
     launchSandbox: unexpected("launchSandbox"),
     powerSandbox: unexpected("powerSandbox"),
+    validateStack: unexpected("validateStack"),
+    describeStack: unexpected("describeStack"),
     ...over,
   } as NexuxContext;
   return { ctx, calls };
@@ -248,4 +250,45 @@ test("a power action outside the allowed pair is refused", async () => {
   assert.ok(!res.ok);
   assert.match(res.error, /pause, resume/);
   assert.deepEqual(calls, [], "destroy never reached the host");
+});
+
+
+// --- spec 24 piece 4: validation ---------------------------------------------
+
+test("validating a stack is a read, not a write", async () => {
+  // It provisions nothing: the static checks are pure and the observed half
+  // reads a report off a sandbox that already exists. A write scope here would
+  // mean a read-only token could not ask whether its own project holds
+  // together, which is the question the tool exists for.
+  const tool = toolByName("nexux_validate_stack");
+  assert.equal(tool?.scope, "projects:read");
+  assert.equal(toolByName("nexux_describe_stack")?.scope, "projects:read");
+
+  const { ctx, calls } = stubContext({
+    validateStack: async (projectId: string) => {
+      calls.push(`validateStack:${projectId}`);
+      return { ok: true, findings: [], observed: null };
+    },
+  });
+  const res = await callTool(ctx, ["projects:read"], "nexux_validate_stack", {
+    projectId: "p1",
+  });
+  assert.equal(res.ok, true);
+  assert.ok(calls.includes("validateStack:p1"));
+});
+
+test("validation answers without a projectId are refused", async () => {
+  const { ctx } = stubContext();
+  for (const name of ["nexux_validate_stack", "nexux_describe_stack"]) {
+    const res = await callTool(ctx, ["projects:read"], name, {});
+    assert.equal(res.ok, false, `${name} accepted a missing projectId`);
+  }
+});
+
+test("the validation tools are listed for a read-only token", async () => {
+  // A tool that is refused but advertised invites a client to keep trying it;
+  // one that is usable but hidden is never found.
+  const names = toolsFor(["projects:read"]).map((t) => t.name);
+  assert.ok(names.includes("nexux_validate_stack"));
+  assert.ok(names.includes("nexux_describe_stack"));
 });
