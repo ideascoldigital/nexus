@@ -4,6 +4,15 @@
 // `docker exec` — see remote.ts's container transport.
 
 import { spawn } from "child_process";
+import fs from "fs/promises";
+import os from "os";
+import path from "path";
+import {
+  baseImageIsCurrent,
+  renderBaseDockerfile,
+  BASE_IMAGE_TAG,
+  BASE_IMAGE_VERSION,
+} from "./base-image";
 import type { LogSink, SandboxSpec } from "./types";
 import {
   BOOTSTRAP_COMPLETE_MARKER,
@@ -13,6 +22,12 @@ import {
 } from "./template";
 import { DEFAULT_WS_PORT } from "./template-browser";
 
+/**
+ * What a sandbox container starts from when nothing has been prebuilt.
+ *
+ * The bootstrap installs everything it needs on top of this, which is correct
+ * and slow — see `resolveBaseImage` for the fast path (spec 24 piece 3).
+ */
 const BASE_IMAGE = "ubuntu:22.04";
 export const LOCAL_BOOTSTRAP_LOG = "/var/log/nexus-bootstrap.log";
 
@@ -90,6 +105,98 @@ export async function dockerAvailable(): Promise<boolean> {
 }
 
 /**
+ * The baked version label on a local image, or null when it is not there.
+ *
+ * `docker image inspect` rather than a tag check: a tag can be moved onto an
+ * older image, and one that claims v1 while holding v0's tooling would make a
+ * dry run answer for a machine that no longer exists.
+ */
+async function baseImageVersion(tag: string): Promise<string | null> {
+  try {
+    const res = await run(
+      "docker",
+      [
+        "image",
+        "inspect",
+        tag,
+        "--format",
+        "{{ index .Config.Labels \"org.nexux.base-version\" }}",
+      ],
+      { timeoutMs: 20_000 },
+    );
+    if (res.code !== 0) return null;
+    const label = res.stdout.trim();
+    // `index` on a missing key prints "<no value>" rather than failing.
+    return label && label !== "<no value>" ? label : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build the prebuilt base image (spec 24 piece 3).
+ *
+ * Exported so the UI can offer it as an explicit action: the build takes a few
+ * minutes the first time, and a provision that silently stalled on it would be
+ * indistinguishable from the slow bootstrap it exists to replace.
+ */
+export async function buildSandboxBaseImage(opts: { onLog?: LogSink } = {}): Promise<{
+  tag: string;
+  built: boolean;
+}> {
+  const { onLog } = opts;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nexux-base-"));
+  try {
+    await fs.writeFile(path.join(dir, "Dockerfile"), renderBaseDockerfile());
+    onLog?.(`[nexux] building ${BASE_IMAGE_TAG} (first run takes a few minutes)\n`);
+    const res = await run(
+      "docker",
+      ["build", "-t", BASE_IMAGE_TAG, "--label", `org.nexux.base-version=${BASE_IMAGE_VERSION}`, dir],
+      { onLog, timeoutMs: 20 * 60_000 },
+    );
+    if (res.code !== 0) {
+      throw new Error(
+        `base image build failed: ${res.stderr.trim().slice(-400) || res.stdout.trim().slice(-400)}`,
+      );
+    }
+    return { tag: BASE_IMAGE_TAG, built: true };
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Which image this launch should start from.
+ *
+ * Never builds on its own. A launch that quietly spent five minutes building
+ * an image would be the same twenty-minute surprise this piece removes, only
+ * with a different cause — so an absent or stale base falls back to
+ * `ubuntu:22.04` and the bootstrap installs what it needs, exactly as before.
+ * The caller decides when to pay for the build.
+ */
+export async function resolveBaseImage(
+  opts: { preferPrebuilt?: boolean; onLog?: LogSink } = {},
+): Promise<{ image: string; prebuilt: boolean }> {
+  if (!opts.preferPrebuilt) return { image: BASE_IMAGE, prebuilt: false };
+
+  const version = await baseImageVersion(BASE_IMAGE_TAG);
+  if (version === null) {
+    opts.onLog?.(
+      `[nexux] no prebuilt base image — using ${BASE_IMAGE} (build one to make dry runs fast)\n`,
+    );
+    return { image: BASE_IMAGE, prebuilt: false };
+  }
+  if (!baseImageIsCurrent(version)) {
+    opts.onLog?.(
+      `[nexux] prebuilt base is v${version}, this build expects v${BASE_IMAGE_VERSION} — using ${BASE_IMAGE}\n`,
+    );
+    return { image: BASE_IMAGE, prebuilt: false };
+  }
+  opts.onLog?.(`[nexux] using prebuilt base ${BASE_IMAGE_TAG}\n`);
+  return { image: BASE_IMAGE_TAG, prebuilt: true };
+}
+
+/**
  * Create the sandbox container and kick off the bootstrap inside it.
  * Resolves once the container exists and the bootstrap is running detached;
  * poll `localBootstrapComplete` for readiness.
@@ -98,11 +205,24 @@ export async function launchLocalSandbox(opts: {
   name: string;
   spec: SandboxSpec;
   onLog?: LogSink;
-}): Promise<{ containerName: string }> {
+  /**
+   * Start from the prebuilt base when one is current (spec 24 piece 3). Falls
+   * back to ubuntu:22.04 when it is absent or stale — never builds inline.
+   */
+  preferPrebuilt?: boolean;
+}): Promise<{ containerName: string; prebuilt: boolean }> {
   const { name, spec, onLog } = opts;
 
-  onLog?.(`[nexux] pulling ${BASE_IMAGE}\n`);
-  await run("docker", ["pull", BASE_IMAGE], { onLog, timeoutMs: 300_000 });
+  const base = await resolveBaseImage({
+    preferPrebuilt: opts.preferPrebuilt,
+    onLog,
+  });
+  // Only the upstream image is pullable: the prebuilt one is local-only, and
+  // `docker pull` on it fails against Docker Hub.
+  if (!base.prebuilt) {
+    onLog?.(`[nexux] pulling ${base.image}\n`);
+    await run("docker", ["pull", base.image], { onLog, timeoutMs: 300_000 });
+  }
 
   // Repos without a clone URL link the local folder straight into the
   // container (devcontainer-style): the sandbox works on the real files, no
@@ -153,7 +273,7 @@ export async function launchLocalSandbox(opts: {
       name,
       "--label",
       "nexux-sandbox=1",
-      BASE_IMAGE,
+      base.image,
       "sleep",
       "infinity",
     ],
@@ -198,7 +318,7 @@ export async function launchLocalSandbox(opts: {
     );
   }
 
-  return { containerName: name };
+  return { containerName: name, prebuilt: base.prebuilt };
 }
 
 function shellQuote(value: string): string {
