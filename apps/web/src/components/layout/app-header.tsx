@@ -51,7 +51,9 @@ export function AppHeader({ title }: { title?: string }) {
         <button
           type="button"
           onClick={() => setPaletteOpen(true)}
-          className="flex w-[21rem] max-w-[40vw] items-center gap-2 rounded-lg border border-border/70 px-3 py-1.5 font-mono text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-accent-foreground"
+          // h-9 below sm so the one control every screen carries is a real
+          // target; py-1.5 (31px) is fine for a cursor and thin for a thumb.
+          className="flex h-9 w-[21rem] max-w-[40vw] items-center gap-2 rounded-lg border border-border/70 px-3 font-mono text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-accent-foreground sm:h-auto sm:py-1.5"
           title="Search everything"
         >
           ⌕ search

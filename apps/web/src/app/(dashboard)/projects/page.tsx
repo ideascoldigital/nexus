@@ -364,7 +364,10 @@ export default function ProjectsPage() {
       type="button"
       onClick={() => setState(id)}
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+        // Real height on a phone rather than a `tap-target` pseudo: these sit
+        // in a row, and overlapping hit areas would make the pill you meant to
+        // tap depend on which one React painted last.
+        "flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[11px] transition-colors sm:h-auto sm:px-2.5 sm:py-1",
         state === id
           ? id === "up"
             ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
