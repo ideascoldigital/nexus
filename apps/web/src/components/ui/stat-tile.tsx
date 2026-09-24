@@ -32,8 +32,11 @@ export function StatTile({
         <div className="mt-1 font-mono text-xl leading-none font-semibold tabular-nums">
           {value}
         </div>
+        {/* The sub-line wraps below md — at two tiles per row a phone gives it
+            ~132px, and "features · 0 plans awaiting approval" needs 185. A
+            count you cannot read is not a stat. */}
         {sub && (
-          <div className="mt-1.5 truncate text-[11px] text-muted-foreground">
+          <div className="mt-1.5 text-[11px] text-muted-foreground md:truncate">
             {sub}
           </div>
         )}
