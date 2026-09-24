@@ -20,7 +20,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle, Loader2, Sparkles } from "lucide-react";
 
 import { useToast } from "@/hooks/use-toast";
 import { getProject } from "@/services/projects";
@@ -53,6 +53,7 @@ import { StackNodeList } from "./stack-node-list";
 import { StackLogsPanel } from "./stack-logs-panel";
 import { StackAssistantPanel } from "./stack-assistant-panel";
 import { StackProposalPanel } from "./stack-proposal-panel";
+import { FloatingPanel } from "./floating-panel";
 import {
   ResizableGroup,
   ResizableHandle,
@@ -844,22 +845,6 @@ function CanvasInner({
                 />
               </ResizablePanel>
             </>
-          ) : rightPanel === "propose" ? (
-            <>
-              <ResizableHandle />
-              <ResizablePanel
-                id="right"
-                defaultSize="28rem"
-                minSize="18rem"
-                maxSize="50%"
-              >
-                <StackProposalPanel
-                  projectId={projectId}
-                  onApplySuggestion={applySuggestion}
-                  onClose={() => setRightPanel(null)}
-                />
-              </ResizablePanel>
-            </>
           ) : null}
         </ResizableGroup>
         </ResizablePanel>
@@ -884,6 +869,24 @@ function CanvasInner({
         </ResizablePanel>
       </ResizableGroup>
       )}
+
+      {/* Outside the split: a chat about the canvas should not take width from
+          the canvas you are describing to it. FloatingPanel lets the user dock
+          it beside the board when a conversation gets long enough to want a
+          column of its own. */}
+      {rightPanel === "propose" ? (
+        <FloatingPanel
+          id="stack-propose"
+          title="What do you need?"
+          icon={<Sparkles className="h-4 w-4 shrink-0 text-primary" />}
+          onClose={() => setRightPanel(null)}
+        >
+          <StackProposalPanel
+            projectId={projectId}
+            onApplySuggestion={applySuggestion}
+          />
+        </FloatingPanel>
+      ) : null}
     </div>
   );
 }

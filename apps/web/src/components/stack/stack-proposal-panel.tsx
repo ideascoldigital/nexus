@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Loader2, Send, Sparkles, X } from "lucide-react";
+import { Loader2, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,11 +39,9 @@ const EXAMPLES = [
 export function StackProposalPanel({
   projectId,
   onApplySuggestion,
-  onClose,
 }: {
   projectId: string;
   onApplySuggestion: (s: StackSuggestion) => boolean;
-  onClose: () => void;
 }) {
   const { toast } = useToast();
   const [input, setInput] = useState("");
@@ -92,20 +90,9 @@ export function StackProposalPanel({
   };
 
   return (
-    <div className="flex h-full flex-col border-l border-border/60 bg-sidebar/40">
-      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2.5">
-        <Sparkles className="h-4 w-4 text-primary" />
-        <span className="text-sm font-medium">What do you need?</span>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="tap-target ml-auto rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
+    // No header or border of its own: FloatingPanel owns the chrome, so this
+    // renders the same whether it is floating or docked.
+    <div className="flex h-full flex-col">
       <div className="flex-1 space-y-4 overflow-auto p-3">
         {turns.length === 0 && !propose.isPending ? (
           <div className="space-y-3">
