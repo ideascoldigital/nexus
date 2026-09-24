@@ -27,7 +27,11 @@ const buttonVariants = cva(
           // above sm. This is the size a form's Cancel/Submit pair uses, which
           // is exactly where a missed tap costs the most.
           "h-9 gap-1.5 px-3 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 sm:h-8 sm:px-2.5",
-        xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
+        // The smallest variant, used for inline actions like Clear and Edit.
+        // h-8 below sm is a compromise rather than a full 36: these sit inside
+        // dense rows, and growing them further would push the row's own layout
+        // around. With the gap between rows it is comfortably tappable.
+        xs: "h-8 sm:h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2.5 sm:px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
         // h-9 below sm, h-7 above: 28px is the density this dashboard was
         // designed at and is half a comfortable thumb target. Fixing it here
         // rather than per call site means every small button in the app gets a
