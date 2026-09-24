@@ -168,7 +168,10 @@ export default function AgentsPage() {
       type="button"
       onClick={() => setOrigin(id)}
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+        // Real height below sm rather than a tap-target pseudo: these sit in a
+        // row, and overlapping hit areas would make which filter you tapped
+        // depend on paint order.
+        "flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[11px] transition-colors sm:h-auto sm:px-2.5 sm:py-1",
         origin === id
           ? "border-primary/40 bg-primary/10 text-foreground"
           : "border-border/60 text-muted-foreground hover:border-border hover:text-foreground",

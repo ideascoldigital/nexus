@@ -168,3 +168,26 @@
     }
   }
 }
+
+/* iOS zooms into any focused field whose text is under 16px, then leaves the
+ * page scaled — the single most disruptive thing a phone does to a form. The
+ * app's fields are 12px on purpose (it is a dense dashboard), and the ui/
+ * primitives already guard this with `text-base md:text-sm`; call sites that
+ * pass their own `text-xs` quietly undo it.
+ *
+ * So the floor is enforced here, for every field, below the breakpoint where
+ * the density matters. 16px is not a preference — it is the threshold Safari
+ * checks.
+ */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+    /* And a floor on height, for the same reason the buttons have one: several
+     * forms use a bare <input> rather than the ui/ primitive, so fixing the
+     * primitive alone leaves them at 28px. min-height, not height, so a
+     * textarea still grows with its content. */
+    min-height: 2.25rem;
+  }
+}
