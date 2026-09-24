@@ -4065,7 +4065,7 @@ function SandboxRow({
         <button
           type="button"
           onClick={copyName}
-          className="cursor-pointer rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="tap-target cursor-pointer rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           aria-label="Copy sandbox name"
           title="Copy sandbox name"
         >
@@ -4186,7 +4186,7 @@ function SandboxRow({
         {sandbox.status !== "destroyed" && (
           <DropdownMenu>
             <DropdownMenuTrigger
-              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="tap-target rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               aria-label="Sandbox actions"
             >
               <MoreHorizontal className="h-4 w-4" />
