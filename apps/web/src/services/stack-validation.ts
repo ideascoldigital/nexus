@@ -25,6 +25,8 @@ import {
 import { sandboxTarget } from "@/lib/agent-core";
 import { nodePhases } from "@/lib/stack/phases";
 import { validateStack, type ValidationFinding } from "@/lib/stack/validate";
+import { describeLock, diffLocks, type LockChange } from "@/lib/stack/lock";
+import { collectLock, recentLocks, recordLock } from "@/services/stack-lock";
 import type { StackNodeDTO } from "@/lib/stack/types";
 
 export type StackValidation = {
@@ -32,6 +34,17 @@ export type StackValidation = {
   findings: ValidationFinding[];
   /** What a real bootstrap recorded, when one is reachable. */
   observed: ObservedRun | null;
+  /**
+   * The lock this run recorded, when it recorded one (spec 25 piece 3), plus
+   * what changed since the previous green run. Null when nothing was locked —
+   * which is most runs, because locking needs proof of a boot.
+   */
+  lock: {
+    id: string;
+    createdAt: string;
+    summary: string;
+    changes: LockChange[];
+  } | null;
 };
 
 export type ObservedRun = {
@@ -154,6 +167,27 @@ export async function readObservedRun(
   };
 }
 
+/**
+ * Whether this run earned a lock.
+ *
+ * Deliberately strict: `observed.booted === true` and nothing failed. The
+ * static half passing is not proof of a boot — it is proof that the definition
+ * lints, which is the distinction this whole service exists to preserve.
+ * Locking on a static pass would put "booted against these commits" on a stack
+ * nobody has ever run.
+ */
+function earnedLock(v: {
+  ok: boolean;
+  observed: ObservedRun | null;
+}): boolean {
+  return (
+    v.ok &&
+    v.observed !== null &&
+    v.observed.booted === true &&
+    v.observed.failed.length === 0
+  );
+}
+
 /** Both halves, for the Validate action. */
 export async function validateProject(
   projectId: string,
@@ -162,7 +196,41 @@ export async function validateProject(
     validateProjectStack(projectId),
     readObservedRun(projectId).catch(() => null),
   ]);
-  return { ...stat, observed };
+  const result = { ...stat, observed };
+  if (!earnedLock(result)) return { ...result, lock: null };
+
+  // A lock is a bonus record, never the verdict. If collecting it fails — git
+  // missing, docker down, the database busy — the validation still answers the
+  // question it was asked.
+  try {
+    const previous = (await recentLocks(projectId, 1))[0] ?? null;
+    const data = await collectLock(projectId, {
+      // The sandbox that produced the evidence decides the provider; its
+      // absence is already excluded by earnedLock.
+      provider: await providerOfSandbox(observed!.sandboxId),
+      sandboxId: observed!.sandboxId,
+    });
+    const saved = await recordLock(projectId, data);
+    return {
+      ...result,
+      lock: {
+        id: saved.id,
+        createdAt: saved.createdAt.toISOString(),
+        summary: describeLock(data),
+        changes: previous ? diffLocks(previous, data) : [],
+      },
+    };
+  } catch {
+    return { ...result, lock: null };
+  }
+}
+
+async function providerOfSandbox(sandboxId: string): Promise<string> {
+  const sandbox = await prisma.sandbox.findUnique({
+    where: { id: sandboxId },
+    select: { provider: true },
+  });
+  return sandbox?.provider ?? "local";
 }
 
 /**

@@ -333,11 +333,32 @@ export type ObservedRun = {
   unavailable?: string;
 };
 
+/** One thing that changed between two locks (spec 25 piece 3). */
+export type LockChange = {
+  kind: "repo" | "service" | "tooling";
+  name: string;
+  field: string;
+  before: string | null;
+  after: string | null;
+};
+
 export type StackValidation = {
   /** The static checks passed. Says nothing about whether anything booted. */
   ok: boolean;
   findings: ValidationFinding[];
   observed: ObservedRun | null;
+  /**
+   * The lock this run recorded, when it earned one: the static half passing is
+   * not enough, an actual boot has to have been observed. Null on most runs.
+   */
+  lock: {
+    id: string;
+    createdAt: string;
+    /** What this lock can honestly claim, in one sentence. */
+    summary: string;
+    /** Empty on the first lock — there is nothing to diff against. */
+    changes: LockChange[];
+  } | null;
 };
 
 

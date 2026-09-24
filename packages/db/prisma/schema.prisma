@@ -51,6 +51,7 @@ model Project {
   sandboxes     Sandbox[]
   stackNodes    StackNode[]
   stackEdges    StackEdge[]
+  stackLocks    StackLock[]
   taskSchedules TaskSchedule[]
 }
 
@@ -1094,4 +1095,43 @@ model TaskSchedule {
 
   @@index([projectId])
   @@index([enabled, nextRunAt])
+}
+
+// StackLock - what a green validation passed against (spec 25 piece 3).
+//
+// Not a pin. Nothing reads this back to force a digest: pinning an image the
+// user did not pin is a decision with real consequences (a postgres that never
+// gets a security patch) and it is theirs to make. This *describes* — so that
+// "it was green on Tuesday and red today" has an answer, which today it does
+// not.
+//
+// One row per green validation rather than one per project: the whole point is
+// to diff two of them, and a single overwritten row can only ever say what is
+// true now. Red validations are not recorded — a lock is a statement that
+// something booted, and there is nothing to reproduce about a failure.
+model StackLock {
+  id          String   @id @default(cuid())
+  projectId   String
+  lockVersion Int      @default(1)
+  /// "local" | "civo" | "aws" — which provider produced the evidence.
+  provider    String
+  /// "mount" (a local sandbox bind-mounts your working tree) or "clone" (a
+  /// cloud sandbox clones by URL). The single most important field here: a
+  /// stack validated by mount was validated against uncommitted files, and
+  /// saying so is the whole of what "reproducible" can honestly mean before a
+  /// cloud run.
+  source      String
+  /// The sandbox whose bootstrap report backed this, when there was one.
+  sandboxId   String?
+  /// [{ name, repositoryId, commit, dirty, lockfile, lockfileSha256 }]
+  repos       Json
+  /// [{ name, image, digest, healthcheck }]
+  services    Json
+  /// { node, pnpm, docker, ... } — whatever the host could report.
+  tooling     Json
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
 }

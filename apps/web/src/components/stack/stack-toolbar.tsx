@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Info,
   Loader2,
+  Lock,
   ShieldCheck,
   Sparkles,
   Wrench,
@@ -509,6 +510,45 @@ export function StackToolbar({
                 </div>
               )}
             </div>
+
+            {/*
+              The lock, shown only when this run earned one. Its job is to be
+              honest about what the green actually covers: a local sandbox
+              bind-mounts your working tree, so "it booted" can mean "it booted
+              against files that exist on one machine". Saying that is the whole
+              of what reproducible can mean before a cloud run.
+            */}
+            {validation?.lock ? (
+              <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2">
+                <div className="flex items-center gap-1.5 text-xs font-medium">
+                  <Lock className="h-3.5 w-3.5 text-emerald-500" />
+                  Locked
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {validation.lock.summary}
+                </div>
+                {validation.lock.changes.length ? (
+                  <div className="space-y-1 border-t border-border/40 pt-2">
+                    {/* The answer to "it worked on Tuesday". */}
+                    <div className="text-xs">Changed since the last green run:</div>
+                    {validation.lock.changes.map((c, i) => (
+                      <div
+                        key={i}
+                        className="flex items-baseline gap-1.5 font-mono text-[11px] text-muted-foreground"
+                      >
+                        <span className="text-foreground">{c.name}</span>
+                        <span>{c.field}</span>
+                        {c.before !== null && c.after !== null ? (
+                          <span>
+                            {c.before} → {c.after}
+                          </span>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>

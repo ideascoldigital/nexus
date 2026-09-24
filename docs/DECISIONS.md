@@ -668,3 +668,51 @@ Good and bad suggestions in one reply are separated rather than rejected togethe
 The error message now names every provider that would work, instead of sending people after an OpenAI key they may have had no reason to own. `GET/PUT /api/settings/host-model` exposes the choice, and lists a credential with an empty key as *unusable* rather than hiding it — "I added that key" and "that key is empty" are different problems, and a hidden row makes the second look like the first.
 
 Found while the repair loop (D-76) stopped on a missing key and the honest answer to "why can't I pick another token?" turned out to be: you could have, nobody wired it.
+
+## D-78 — A lock describes a boot; it does not pin one (2026-09-23)
+
+"Reproducible" had no definition in this codebase, and the largest source of
+drift was structural and invisible: a local sandbox bind-mounts repo folders
+([local.ts:231](../packages/sandbox/src/local.ts:231)) while a cloud sandbox
+clones by URL. A stack validated locally was validated against someone's working
+tree — uncommitted files included — and nothing anywhere said so.
+
+`StackLock` records what a green validation passed against: commits, dirty
+flags, lockfile hashes, image digests, tooling versions, and how the code
+arrived. Spec 25 piece 3.
+
+- **It is not a pin.** Nothing reads a lock back to force a digest. Pinning an
+  image the user did not pin has real consequences — a postgres that never gets
+  a security patch — and that choice is theirs. The lock *describes*; if pinning
+  is wanted later, this is the data to generate it from.
+- **A lock needs proof of a boot, not a passing lint.** It is written only when
+  `observed.booted === true` and no step failed. Spec 24 spent its fourth piece
+  keeping "the definition is well-formed" apart from "it runs"; locking on a
+  static pass would have collapsed that distinction from the other side, by
+  stamping "booted against these commits" on a stack nobody ever ran.
+- **`source` comes from the repos, not the provider.** `local.ts` mounts only
+  repos with no clone URL, so a local sandbox whose repos all have remotes
+  clones exactly like a cloud one. Reading it off the provider would have
+  labelled those runs `mount` and told the user their green was weaker than it
+  was. Mixed reports `mount`: if any repo was mounted, the run saw a working
+  tree, which is the weaker of the two claims.
+- **Digests come from the local daemon only.** Resolving a tag against a
+  registry turns a validation into something that fails when the network does,
+  for a field that is a nice-to-have. An unpulled image records `null`, read as
+  "we do not know" rather than "it has no digest" — and the diff treats
+  null-to-null as no change rather than as drift.
+- **One row per green run, not one per project.** The whole point is to diff
+  this run against the last one, and a single overwritten row can only ever
+  describe the present.
+
+Committing the lock into the user's repo was the more honest framing of what it
+is, and was rejected for the same reason: one file in a working tree describes
+now, and the question a lock answers — "it was green on Tuesday and red today"
+— is a question about history. It would also have made Nexux the only tool here
+that writes files into someone else's git.
+
+Collection is best-effort throughout. A missing git, a stopped docker, a path
+that is not a checkout: each yields a null field rather than an exception, and
+the lock write is wrapped so that failing to record one never changes the
+verdict of the validation that earned it. A lock with a null digest is worth
+strictly more than no lock.

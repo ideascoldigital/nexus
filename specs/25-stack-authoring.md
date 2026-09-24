@@ -1,9 +1,10 @@
 # 25 — "Here are my repos, make it work"
 
-Status: **pieces 1–2 shipped** (2026-09-23) — the seed (D-75: units, inferred
-services and edges, plus the migration that let a repository own more than one
-node) and the repair loop (D-76: validate → patch → re-validate, with the rules
-in the applier rather than the prompt). Piece 3, the lockfile, remains design.
+Status: **shipped** (2026-09-23) — the seed (D-75: units, inferred services and
+edges, plus the migration that let a repository own more than one node), the
+repair loop (D-76: validate → patch → re-validate, with the rules in the applier
+rather than the prompt) and the lock (D-78: what a green validation passed
+against, and what changed since the last one).
 Depends on [spec 24](24-definition-validation.md), which is complete.
 
 ## Goal
@@ -303,6 +304,34 @@ pinning is wanted later, it has the data to generate it.
 
 ---
 
+### What shipped
+
+Three decisions the design left open:
+
+**A lock needs proof of a boot, not a passing lint.** `validateProject` writes
+one only when `observed.booted === true` and no step failed. The static half
+passing says the definition is well-formed, which is exactly the claim spec 24
+spent its fourth piece keeping separate from "it runs" — and a lock that said
+"booted against these commits" on a stack nobody ever ran would collapse that
+distinction from the other side.
+
+**`source` is derived from the repos, not the provider.** `local.ts` bind-mounts
+only repos with no clone URL, so a local sandbox whose repos all have remotes
+clones exactly like a cloud one. Deriving `source` from the provider would have
+labelled those runs "mount" and told the user their green was weaker than it
+was. Mixed reports `mount`: if any repo was mounted, the run saw a working tree.
+
+**Digests come from the local daemon only.** No registry call — resolving a tag
+over the network turns a validation into something that fails when the network
+does, for a field that is a nice-to-have. An image the host has never pulled
+records `null`, which reads as "we do not know" rather than "it has no digest",
+and the diff treats null-to-null as no change rather than as drift.
+
+Collection is best-effort throughout: a missing git, a stopped docker or a path
+that is not a checkout each yield a null field rather than an exception, and the
+whole lock write is wrapped so that failing to record one never changes the
+verdict of the validation that earned it.
+
 ## Where this lands in the UI
 
 The stack step of the wizard gains a primary action on an empty canvas:
@@ -384,7 +413,11 @@ stack patch is.
    `pyproject.toml` — none are covered, and each would fall back to
    one-unit-at-the-root. The fallback is correct, just coarse; the table of
    markers is the extension point.
-4. **Where the lock lives** — with the validation run, or committed into the
-   repo like a real lockfile? Committed is more honest about what it is, and
-   means the team shares it; it also puts Nexux-generated files in the user's
-   repo, which nothing else here does. Undecided.
+4. ~~**Where the lock lives**~~ — **resolved: a `StackLock` row, append-only.**
+   Committing it into the user's repo was the more honest framing of what it
+   is, and it loses the thing the lock is actually for: the whole point is to
+   diff *this* green run against the *last* one, and one committed file can
+   only ever describe the present. A table keeps the history, and it also keeps
+   Nexux from being the only tool here that writes files into someone else's
+   git. If a committed artefact is wanted later, a row generates one; the
+   reverse does not hold.

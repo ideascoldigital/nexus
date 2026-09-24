@@ -8,7 +8,7 @@ import type { StackValidation } from "@/lib/stack/types";
 
 /** A validation result: clean unless told otherwise. */
 function validation(over: Partial<StackValidation> = {}): StackValidation {
-  return { ok: true, findings: [], observed: null, ...over };
+  return { ok: true, findings: [], observed: null, lock: null, ...over };
 }
 
 /** A validation that failed on a boot probe, with the tail that explains it. */
