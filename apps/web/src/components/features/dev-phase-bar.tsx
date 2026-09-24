@@ -88,7 +88,10 @@ export function DevPhaseBar({
       type="button"
       onClick={onClick}
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors",
+        // Real height below sm rather than a tap-target pseudo: these sit in a
+        // scrollable row, and overlapping hit areas would make which phase you
+        // selected depend on paint order.
+        "flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors sm:h-auto sm:py-1",
         active
           ? "border-primary/50 bg-primary/10 text-foreground"
           : "border-border/50 text-muted-foreground hover:border-border hover:text-foreground"
