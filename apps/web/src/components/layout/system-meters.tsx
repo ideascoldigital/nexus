@@ -91,7 +91,7 @@ export function SystemMeters() {
   return (
     <Link
       href="/settings/system"
-      className="flex items-center gap-2.5 rounded-sm px-1 hover:bg-accent hover:text-foreground"
+      className="tap-target flex items-center gap-2.5 rounded-sm px-1 hover:bg-accent hover:text-foreground"
       title="System and sandbox resources"
     >
       <Meter label="mem" metric={memory} />

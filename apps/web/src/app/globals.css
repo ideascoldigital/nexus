@@ -133,3 +133,38 @@
     @apply font-sans;
   }
 }
+/* Touch targets.
+ *
+ * The interface is dense on purpose — it is a dashboard, and on a desktop a
+ * 28px icon button beside a 27px pill reads as one tidy row. A thumb is not a
+ * mouse: the usual guidance is ~44px, and several of these controls are barely
+ * half that.
+ *
+ * Rather than grow the controls (which would loosen every desktop layout to
+ * fix a phone), this extends the *hit* area past the painted box with a
+ * pseudo-element. The button looks identical; the region that responds to a
+ * tap is bigger. Above md it does nothing at all, so a pointer keeps the
+ * density it was designed with.
+ *
+ * `@utility` rather than `@layer utilities`: this is Tailwind v4, where a
+ * plain layer block is not registered as a utility and silently never applies.
+ */
+@utility tap-target {
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    /* Grows a 28px control to ~44px, the smallest comfortable thumb target. */
+    inset: -8px;
+    /* Rounded so overlapping targets in a row do not steal each other's taps
+       at the corners. */
+    border-radius: 0.75rem;
+  }
+
+  @media (min-width: 768px) {
+    &::before {
+      content: none;
+    }
+  }
+}

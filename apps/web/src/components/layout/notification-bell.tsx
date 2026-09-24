@@ -73,7 +73,7 @@ export function NotificationBell() {
         render={
           <button
             type="button"
-            className="relative flex h-7 w-7 items-center justify-center rounded-lg border border-border/70 text-muted-foreground transition-colors hover:border-primary/40 hover:text-accent-foreground"
+            className="tap-target flex h-7 w-7 items-center justify-center rounded-lg border border-border/70 text-muted-foreground transition-colors hover:border-primary/40 hover:text-accent-foreground"
             title={
               count > 0
                 ? `${count} notification${count === 1 ? "" : "s"}`

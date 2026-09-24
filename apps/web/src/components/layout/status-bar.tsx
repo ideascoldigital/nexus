@@ -77,7 +77,7 @@ function UpdateBadge({ native }: { native: boolean }) {
         href={status.url}
         target="_blank"
         rel="noreferrer"
-        className="flex items-center gap-1 rounded-sm px-1 font-medium text-amber-600 hover:bg-accent dark:text-amber-500"
+        className="tap-target flex items-center gap-1 rounded-sm px-1 font-medium text-amber-600 hover:bg-accent dark:text-amber-500"
         title={`Update from ${status.current} to ${status.latest} — open the release to download.`}
       >
         <ArrowUpCircle className="size-3" aria-hidden />
@@ -120,7 +120,7 @@ function UpdateBadge({ native }: { native: boolean }) {
       type="button"
       onClick={phase === "installing" || phase === "done" ? undefined : run}
       disabled={phase === "installing" || phase === "done"}
-      className={`flex items-center gap-1 rounded-sm px-1 font-medium hover:bg-accent ${
+      className={`tap-target flex items-center gap-1 rounded-sm px-1 font-medium hover:bg-accent ${
         phase === "error"
           ? "text-destructive"
           : phase === "done"
@@ -207,7 +207,7 @@ export function StatusBar() {
             href={version.releaseUrl}
             target="_blank"
             rel="noreferrer"
-            className="rounded-sm px-1 font-medium hover:bg-accent hover:text-foreground"
+            className="tap-target rounded-sm px-1 font-medium hover:bg-accent hover:text-foreground"
             title={`Open release v${version.version} on GitHub`}
           >
             v{version.version}
@@ -217,7 +217,7 @@ export function StatusBar() {
               href={version.commitUrl}
               target="_blank"
               rel="noreferrer"
-              className="rounded-sm px-1 font-mono hover:bg-accent hover:text-foreground"
+              className="tap-target rounded-sm px-1 font-mono hover:bg-accent hover:text-foreground"
               title={`Open commit ${version.gitSha} on GitHub`}
             >
               @{version.gitSha.slice(0, 7)}
