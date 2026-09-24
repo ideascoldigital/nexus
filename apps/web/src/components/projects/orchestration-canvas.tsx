@@ -31,6 +31,7 @@ Loader2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { LG_BREAKPOINT, useBelowBreakpoint } from "@/hooks/use-breakpoint";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
@@ -422,6 +423,10 @@ function CanvasInner({ projectId }: { projectId: string }) {
     queryFn: getSkills,
   });
 
+  // Below lg the canvas is a strip of dots — the graph is unreadable and
+  // dragging, which is the point of it, is not what a phone offers.
+  const narrow = useBelowBreakpoint(LG_BREAKPOINT);
+
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [dirty, setDirty] = useState(false);
@@ -720,6 +725,41 @@ function CanvasInner({ projectId }: { projectId: string }) {
           Save
         </Button>
       </div>
+      {narrow ? (
+        <div className="rounded-lg border bg-background p-3">
+          {nodes.length === 0 ? (
+            <p className="py-6 text-center text-xs text-muted-foreground">
+              No agents or skills wired yet. Open this project on a larger
+              screen to connect them.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {nodes.map((n) => {
+                const label = String(
+                  (n.data as { label?: unknown })?.label ?? n.id,
+                );
+                const edgeCount = edges.filter(
+                  (e) => e.source === n.id || e.target === n.id,
+                ).length;
+                return (
+                  <div
+                    key={n.id}
+                    className="flex items-center gap-2 rounded-lg border border-border/50 bg-card/40 p-3"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-sm">
+                      {label}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {n.type}
+                      {edgeCount ? ` · ${edgeCount} link${edgeCount === 1 ? "" : "s"}` : ""}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="flex h-[700px] rounded-lg border bg-background overflow-hidden">
         <CatalogSidebar
           onRecommend={(kind) => setRecommendKind(kind)}
@@ -759,6 +799,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
           </ReactFlow>
         </div>
       </div>
+      )}
       {recommendKind && (
         <SkillRecommendationsDialog
           projectId={projectId}

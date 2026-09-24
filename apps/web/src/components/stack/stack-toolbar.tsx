@@ -175,10 +175,16 @@ export function StackToolbar({
   const totalCount = (status?.compose.length ?? 0) + (status?.local.length ?? 0);
 
   return (
-    <div className="flex items-center justify-between">
+    // Wraps rather than overflowing: at 375px the seven action buttons ran
+    // from x=347 to x=721, so Validate, Repair, Prepare, Up and Save were all
+    // off-screen with no way to reach them.
+    <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <span>
-          Drag repos & services onto the canvas. Connect app → dependency.
+        {/* The instruction is about dragging, which is not what anyone is
+            doing on a phone — and at 375px it wrapped to one word per line and
+            pushed the actions out of reach. */}
+        <span className="hidden sm:inline">
+          Drag repos &amp; services onto the canvas. Connect app → dependency.
         </span>
         {running ? (
           <Badge className="text-xs bg-emerald-600 hover:bg-emerald-600">
@@ -186,7 +192,7 @@ export function StackToolbar({
           </Badge>
         ) : null}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"
           variant={assistantOpen ? "default" : "outline"}

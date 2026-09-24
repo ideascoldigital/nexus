@@ -45,9 +45,11 @@ import type {
   StackSuggestion,
 } from "@/lib/stack/types";
 import { stackNodeTypes } from "./stack-nodes";
+import { LG_BREAKPOINT, useBelowBreakpoint } from "@/hooks/use-breakpoint";
 import { StackSidebar, STACK_DRAG_MIME, type StackDragPayload } from "./stack-sidebar";
 import { StackInspector } from "./stack-inspector";
 import { StackToolbar } from "./stack-toolbar";
+import { StackNodeList } from "./stack-node-list";
 import { StackLogsPanel } from "./stack-logs-panel";
 import { StackAssistantPanel } from "./stack-assistant-panel";
 import {
@@ -243,6 +245,9 @@ function CanvasInner({
   });
   const status = statusQuery.data;
   const running = status?.running ?? false;
+
+  // A canvas needs width to be a canvas; below lg it becomes a read-only list.
+  const narrow = useBelowBreakpoint(LG_BREAKPOINT);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -692,6 +697,18 @@ function CanvasInner({
           setRightPanel((p) => (p === "assistant" ? null : "assistant"))
         }
       />
+      {/* Below lg the canvas is 180px of viewport — a node graph nobody can
+          read, for an interaction (dragging) a phone does not offer. The list
+          answers what the canvas is for on a small screen: what is in this
+          stack and what depends on what. */}
+      {narrow ? (
+        <div className="rounded-lg border bg-background p-3">
+          <StackNodeList
+            nodes={stackQuery.data?.nodes ?? []}
+            edges={stackQuery.data?.edges ?? []}
+          />
+        </div>
+      ) : (
       <ResizableGroup
         orientation="vertical"
         persistId="stack-shell"
@@ -834,6 +851,7 @@ function CanvasInner({
           />
         </ResizablePanel>
       </ResizableGroup>
+      )}
     </div>
   );
 }
