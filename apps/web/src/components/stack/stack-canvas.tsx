@@ -52,6 +52,7 @@ import { StackToolbar } from "./stack-toolbar";
 import { StackNodeList } from "./stack-node-list";
 import { StackLogsPanel } from "./stack-logs-panel";
 import { StackAssistantPanel } from "./stack-assistant-panel";
+import { StackProposalPanel } from "./stack-proposal-panel";
 import {
   ResizableGroup,
   ResizableHandle,
@@ -254,7 +255,9 @@ function CanvasInner({
   const [dirty, setDirty] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
-  const [rightPanel, setRightPanel] = useState<"inspector" | "assistant" | null>(
+  const [rightPanel, setRightPanel] = useState<
+    "inspector" | "assistant" | "propose" | null
+  >(
     null
   );
 
@@ -702,6 +705,10 @@ function CanvasInner({
         status={status}
         onStatusChanged={() => statusQuery.refetch()}
         assistantOpen={rightPanel === "assistant"}
+        proposeOpen={rightPanel === "propose"}
+        onTogglePropose={() =>
+          setRightPanel((p) => (p === "propose" ? null : "propose"))
+        }
         onToggleAssistant={() =>
           setRightPanel((p) => (p === "assistant" ? null : "assistant"))
         }
@@ -831,6 +838,22 @@ function CanvasInner({
                 maxSize="50%"
               >
                 <StackAssistantPanel
+                  projectId={projectId}
+                  onApplySuggestion={applySuggestion}
+                  onClose={() => setRightPanel(null)}
+                />
+              </ResizablePanel>
+            </>
+          ) : rightPanel === "propose" ? (
+            <>
+              <ResizableHandle />
+              <ResizablePanel
+                id="right"
+                defaultSize="28rem"
+                minSize="18rem"
+                maxSize="50%"
+              >
+                <StackProposalPanel
                   projectId={projectId}
                   onApplySuggestion={applySuggestion}
                   onClose={() => setRightPanel(null)}

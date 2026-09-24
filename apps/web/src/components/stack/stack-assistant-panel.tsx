@@ -54,9 +54,16 @@ const MARKDOWN_COMPONENTS = {
   },
 };
 
-function describePatch(s: StackSuggestion): string {
+export function describePatch(s: StackSuggestion): string {
   const parts: string[] = [];
   const p = s.patch ?? {};
+  // A new repo node carries its name here; without this line a suggestion that
+  // only creates a node (no patch fields) reads as "no changes".
+  if (s.createNode) {
+    parts.push(
+      `new node ${s.createNode.name}${s.createNode.workdir ? ` (${s.createNode.workdir})` : ""}`,
+    );
+  }
   if (s.createService) {
     parts.push(
       `new service ${s.createService.name ?? s.createService.catalogKey ?? s.createService.image}`
@@ -75,7 +82,7 @@ function describePatch(s: StackSuggestion): string {
   return parts.join(" · ") || "no changes";
 }
 
-function SuggestionCard({
+export function SuggestionCard({
   suggestion,
   onApply,
   applied,

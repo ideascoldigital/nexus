@@ -8,6 +8,7 @@ import {
   Info,
   Loader2,
   ShieldCheck,
+  Sparkles,
   Wrench,
   XCircle,
 } from "lucide-react";
@@ -45,6 +46,8 @@ type Props = {
   onStatusChanged: () => void;
   assistantOpen: boolean;
   onToggleAssistant: () => void;
+  proposeOpen: boolean;
+  onTogglePropose: () => void;
 };
 
 export function StackToolbar({
@@ -56,6 +59,8 @@ export function StackToolbar({
   onStatusChanged,
   assistantOpen,
   onToggleAssistant,
+  proposeOpen,
+  onTogglePropose,
 }: Props) {
   const { toast } = useToast();
   const [preview, setPreview] = useState<ComposeResult | null>(null);
@@ -193,6 +198,19 @@ export function StackToolbar({
         ) : null}
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        {/* Two agents, two questions. Assistant reads the repos and explains
+            what is there; this one takes what you need and proposes what is
+            missing. Separate buttons because a single entry point would make
+            the user guess which mode they are in. */}
+        <Button
+          size="sm"
+          variant={proposeOpen ? "default" : "outline"}
+          title="Describe what the project needs; get nodes you can apply"
+          onClick={onTogglePropose}
+        >
+          <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+          Propose
+        </Button>
         <Button
           size="sm"
           variant={assistantOpen ? "default" : "outline"}
