@@ -12,11 +12,14 @@
 // The iframe equivalent is a canvas driven by noVNC over the SSH forward the
 // server opened; nothing here talks to the sandbox directly.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ExternalLink,
   Globe,
   Loader2,
+  Maximize2,
+  Minimize2,
   Play,
   RefreshCw,
   ScrollText,
@@ -24,6 +27,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { VncScreen } from "@/components/projects/vnc-screen";
 import { useToast } from "@/hooks/use-toast";
 import {
   ApiError,
@@ -73,6 +77,10 @@ export function SandboxBrowserPanel({
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [showLog, setShowLog] = useState(false);
+  // Maximize fills the app window rather than the card. The sandbox card is a
+  // few hundred pixels of a column, which is enough to see that a page loaded
+  // and not enough to work in.
+  const [maximized, setMaximized] = useState(false);
   const [log, setLog] = useState("");
   const [url, setUrl] = useState("http://localhost:3000");
 
@@ -134,10 +142,27 @@ export function SandboxBrowserPanel({
     },
   });
 
+  // Escape leaves the maximized view. A layer covering the whole window needs
+  // the exit every other full-screen surface has trained people to reach for.
+  useEffect(() => {
+    if (!maximized) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMaximized(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [maximized]);
+
   const running = session?.status === "running" && session.localUrl;
 
   return (
-    <div className="space-y-2">
+    <div
+      className={
+        maximized
+          ? "fixed inset-0 z-50 flex flex-col gap-2 overflow-auto bg-background p-4"
+          : "space-y-2"
+      }
+    >
       <div className="flex items-center gap-2">
         <Globe className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-xs font-medium">Browser</span>
@@ -147,6 +172,36 @@ export function SandboxBrowserPanel({
           </span>
         )}
         <div className="ml-auto flex items-center gap-1">
+          {running && (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setMaximized((m) => !m)}
+                title={maximized ? "Restore (Esc)" : "Maximize"}
+                aria-label={maximized ? "Restore" : "Maximize"}
+              >
+                {maximized ? (
+                  <Minimize2 className="h-3 w-3" />
+                ) : (
+                  <Maximize2 className="h-3 w-3" />
+                )}
+              </Button>
+              {/* A tab of its own, for working in it beside the editor rather
+                  than inside a card. The route re-fetches the session, so the
+                  VNC password never travels in a URL that lands in history. */}
+              <a
+                href={`/projects/${projectId}/sandboxes/${sandboxId}/browser`}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open in a new tab"
+                aria-label="Open in a new tab"
+                className="tap-target inline-flex h-8 items-center rounded-lg px-2 text-muted-foreground hover:bg-muted hover:text-foreground sm:h-7"
+              >
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </>
+          )}
           {running ? (
             <Button
               size="sm"
@@ -196,7 +251,15 @@ export function SandboxBrowserPanel({
       )}
 
       {running && (
-        <>
+        // Maximized, the canvas takes the leftover height instead of its fixed
+        // 420px — the address bar and the port shortcuts keep their own.
+        <div
+          className={
+            maximized
+              ? "flex min-h-0 flex-1 flex-col gap-2"
+              : "flex flex-col gap-2"
+          }
+        >
           <div className="flex flex-wrap items-center gap-1">
             <input
               value={url}
@@ -240,7 +303,14 @@ export function SandboxBrowserPanel({
               ))}
             </div>
           )}
-          <VncScreen url={session!.localUrl!} password={session!.token ?? ""} />
+          <div className={maximized ? "min-h-0 flex-1" : ""}>
+            <VncScreen
+              url={session!.localUrl!}
+              password={session!.token ?? ""}
+              className={maximized ? "h-full min-h-0 w-full" : "h-[420px] w-full"}
+              fill={maximized}
+            />
+          </div>
           <p className="text-[10px] text-muted-foreground">
             Runs inside the sandbox, so <code>localhost</code> here is the
             sandbox&apos;s own — the app&apos;s API URL resolves without any
@@ -249,73 +319,13 @@ export function SandboxBrowserPanel({
               ? "Reached over a port docker publishes on this machine's loopback, not a public tunnel."
               : "Reached over an SSH forward from this machine, not a public tunnel."}
           </p>
-        </>
+        </div>
       )}
 
       {showLog && (
         <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-[10px]">
           {log || "(empty)"}
         </pre>
-      )}
-    </div>
-  );
-}
-
-/**
- * The noVNC canvas. Connects once per session URL and tears the connection
- * down on unmount — a leaked RFB keeps a WebSocket open against a forward the
- * server may already have dropped.
- */
-function VncScreen({ url, password }: { url: string; password: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const rfbRef = useRef<{ disconnect: () => void } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const container = containerRef.current;
-    if (!container) return;
-
-    // noVNC touches `document` when constructed, so it cannot be imported at
-    // module scope in a server-rendered tree.
-    void import("@novnc/novnc")
-      .then(({ default: RFB }) => {
-        if (cancelled || !containerRef.current) return;
-        const wsUrl = url.replace(/^http/, "ws") + "/websockify";
-        const rfb = new RFB(containerRef.current, wsUrl, {
-          credentials: { password },
-        });
-        rfb.scaleViewport = true;
-        rfb.background = "transparent";
-        rfb.addEventListener("disconnect", () => {
-          if (!cancelled) setError("The session disconnected.");
-        });
-        rfbRef.current = rfb;
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Could not connect");
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      try {
-        rfbRef.current?.disconnect();
-      } catch {
-        // Already gone; nothing to release.
-      }
-      rfbRef.current = null;
-    };
-  }, [url, password]);
-
-  return (
-    <div className="relative overflow-hidden rounded-md border bg-black">
-      <div ref={containerRef} className="h-[420px] w-full" />
-      {error && (
-        <p className="absolute inset-x-0 bottom-0 bg-destructive/90 p-1 text-center text-[10px] text-destructive-foreground">
-          {error}
-        </p>
       )}
     </div>
   );
