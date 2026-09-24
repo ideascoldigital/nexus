@@ -79,13 +79,16 @@ When you have concrete configuration to propose (run mode, commands, ports, env,
         "env": [{ "key": "DATABASE_URL", "value": "..." }],
         "volumes": [{ "host": "pgdata", "container": "/var/lib/postgresql/data" }]
       },
+      "dependsOn": ["postgres"],
       "reason": "One sentence explaining why."
     }
   ]
 }
 \`\`\`
 
-Rules: use ONE of nodeId / repositoryId / createService per suggestion. Service catalog keys: postgres, mysql, redis, mongo, ollama, minio, mailpit. Only include patch fields you want to change. Omit the block when only answering a question. Never mix a tool call and a suggestions block in the same reply.`;
+Rules: use ONE of nodeId / repositoryId / createService per suggestion. Service catalog keys: postgres, mysql, redis, mongo, ollama, minio, mailpit. Only include patch fields you want to change. Omit the block when only answering a question. Never mix a tool call and a suggestions block in the same reply.
+
+\`dependsOn\` lists what that node needs in order to boot, by node name. Always set it when you propose a service something uses: an api you gave a DATABASE_URL depends on the database, a worker depends on the queue. The arrows are not decoration — the harness starts services in that order and waits for the dependency to be healthy, so a missing one is a service that boots before the database it queries, and the user would otherwise have to draw every arrow by hand. Name the node as it appears on the canvas (or as you are naming it in this same reply); a name that matches nothing is dropped. Do not list a dependency that is merely related — only what must be up first.`;
 
 // --- tool implementations ---
 

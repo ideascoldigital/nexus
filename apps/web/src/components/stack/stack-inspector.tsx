@@ -8,7 +8,6 @@ import {
   Plus,
   Trash2,
   Upload,
-  X,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -69,7 +68,6 @@ type Props = {
   onDelete: () => void;
   onRedetect: () => void;
   detecting: boolean;
-  onClose: () => void;
 };
 
 function KeyValueEditor<T extends Record<string, string | number>>({
@@ -218,7 +216,6 @@ export function StackInspector({
   onDelete,
   onRedetect,
   detecting,
-  onClose,
 }: Props) {
   // Phases win on save, so a command field edited here has to re-derive them —
   // otherwise typing a new command would appear to work and then be discarded
@@ -256,14 +253,13 @@ export function StackInspector({
   );
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col border-l bg-card/40">
-      <div className="flex items-center justify-between border-b px-3 py-2">
-        <span className="text-sm font-semibold">
+    // No chrome of its own: FloatingPanel owns the header and the close
+    // button, so this renders identically whether it floats or is docked.
+    <div className="flex h-full w-full min-w-0 flex-col bg-card/40">
+      <div className="border-b px-3 py-2">
+        <span className="text-xs text-muted-foreground">
           {isRepo ? "Repository node" : "Service node"}
         </span>
-        <Button size="sm" variant="ghost" className="h-6 px-1.5" onClick={onClose}>
-          <X className="h-3 w-3" />
-        </Button>
       </div>
 
       <div className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3 space-y-4">

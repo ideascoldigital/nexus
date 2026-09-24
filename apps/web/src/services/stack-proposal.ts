@@ -49,6 +49,8 @@ Use the existing service catalog (postgres, mysql, redis, mongo, ollama, minio, 
 
 To propose a SECOND node from a repository that already has one — a worker beside the API, another app in a monorepo — add \`"createNode": { "name": "api-worker", "workdir": "apps/worker" }\` alongside its repositoryId. Without it a second suggestion for the same repo patches the first instead of adding a node, and the one you meant to add disappears. \`workdir\` is optional; omit it when the unit lives at the repo root.
 
+Draw the dependency arrows with \`dependsOn\`. A proposal that adds a database and the service that uses it should say which needs which — \`"dependsOn": ["postgres"]\` on the api — because the harness boots services in that order and waits for the dependency to be healthy. Proposing the nodes and leaving the user to connect them by hand is half an answer.
+
 End with the suggestions json block, exactly as documented.`;
 
 /**

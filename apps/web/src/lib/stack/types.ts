@@ -222,6 +222,22 @@ export type StackSuggestion = {
   /** Create a new infra service node (catalog key or raw image). */
   createService?: { catalogKey?: string; image?: string; name?: string };
   patch?: StackSuggestionPatch;
+  /**
+   * What this node needs in order to boot — the dependency arrows, by name.
+   *
+   * Without this an agent could propose a postgres and an api and had no way
+   * to say the api needs the postgres, leaving the user to draw every edge by
+   * hand on a canvas they did not lay out. The edges are not decoration: the
+   * harness orders startup by them and spec 24 turns them into
+   * `depends_on: service_healthy`, so a missing arrow is a service that boots
+   * before the database it queries.
+   *
+   * Names rather than ids, because the suggestion that creates a node and the
+   * one that depends on it are usually the same reply — the id does not exist
+   * yet. Resolved against the canvas when applied; a name that matches nothing
+   * is dropped rather than guessed at.
+   */
+  dependsOn?: string[];
   reason: string;
 };
 

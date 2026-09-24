@@ -9,7 +9,6 @@ import {
   Sparkles,
   User,
   Wrench,
-  X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -79,6 +78,9 @@ export function describePatch(s: StackSuggestion): string {
   }
   if (p.env?.length) parts.push(`${p.env.length} env var(s)`);
   if (p.volumes?.length) parts.push(`${p.volumes.length} volume(s)`);
+  // Named, not counted: an arrow to the wrong service is the kind of mistake a
+  // reviewer can only catch if they can see which one.
+  if (s.dependsOn?.length) parts.push(`needs ${s.dependsOn.join(", ")}`);
   return parts.join(" · ") || "no changes";
 }
 
@@ -124,13 +126,11 @@ export function SuggestionCard({
 type Props = {
   projectId: string;
   onApplySuggestion: (s: StackSuggestion) => boolean;
-  onClose: () => void;
 };
 
 export function StackAssistantPanel({
   projectId,
   onApplySuggestion,
-  onClose,
 }: Props) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -190,16 +190,8 @@ export function StackAssistantPanel({
   };
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col border-l bg-card/40">
-      <div className="flex items-center justify-between border-b px-3 py-2">
-        <span className="text-sm font-semibold flex items-center gap-1.5">
-          <Bot className="h-4 w-4 text-primary" />
-          Stack Assistant
-        </span>
-        <Button size="sm" variant="ghost" className="h-6 px-1.5" onClick={onClose}>
-          <X className="h-3 w-3" />
-        </Button>
-      </div>
+    // FloatingPanel owns the header and the close button.
+    <div className="flex h-full w-full min-w-0 flex-col bg-card/40">
 
       {stateQuery.data && !stateQuery.data.indexStatus.indexed ? (
         <div className="border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-500">

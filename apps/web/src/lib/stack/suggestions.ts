@@ -85,11 +85,28 @@ function sanitizeSuggestion(
           },
         }
       : {}),
+    ...(Array.isArray(raw.dependsOn)
+      ? {
+          // Names only, trimmed and de-duplicated. A model that answers with
+          // an object or a null in the list should lose that entry, not the
+          // whole suggestion.
+          dependsOn: [
+            ...new Set(
+              (raw.dependsOn as unknown[])
+                .filter((d): d is string => typeof d === "string")
+                .map((d) => d.trim())
+                .filter(Boolean),
+            ),
+          ],
+        }
+      : {}),
     ...(Object.keys(patch).length > 0
       ? { patch: patch as StackSuggestion["patch"] }
       : {}),
   };
 
+  // Must name something to act on. `dependsOn` alone is not enough: an edge
+  // needs a source, and without a target node there is nothing to attach it to.
   if (
     !suggestion.nodeId &&
     !suggestion.repositoryId &&
