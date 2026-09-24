@@ -51,6 +51,7 @@ function sanitizeSuggestion(
   const createServiceRaw = raw.createService as
     | Record<string, unknown>
     | undefined;
+  const createNodeRaw = raw.createNode as Record<string, unknown> | undefined;
   const suggestion: StackSuggestion = {
     reason: raw.reason,
     ...(typeof raw.nodeId === "string" ? { nodeId: raw.nodeId } : {}),
@@ -70,6 +71,16 @@ function sanitizeSuggestion(
               : {}),
             ...(typeof createServiceRaw.name === "string"
               ? { name: createServiceRaw.name }
+              : {}),
+          },
+        }
+      : {}),
+    ...(createNodeRaw && typeof createNodeRaw.name === "string"
+      ? {
+          createNode: {
+            name: createNodeRaw.name,
+            ...(typeof createNodeRaw.workdir === "string"
+              ? { workdir: createNodeRaw.workdir }
               : {}),
           },
         }

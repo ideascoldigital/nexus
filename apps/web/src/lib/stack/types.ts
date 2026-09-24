@@ -210,6 +210,15 @@ export type StackSuggestion = {
   nodeId?: string;
   /** ...or a project repository (node created if not on canvas). */
   repositoryId?: string;
+  /**
+   * Force a NEW node for `repositoryId`, even when one already exists.
+   *
+   * A repository can hold several runnable units — an API and a queue worker
+   * in one checkout — and without this a second suggestion for the same repo
+   * silently patches the first instead of adding the second. The node that
+   * went missing is the one you asked for.
+   */
+  createNode?: { name: string; workdir?: string | null };
   /** Create a new infra service node (catalog key or raw image). */
   createService?: { catalogKey?: string; image?: string; name?: string };
   patch?: StackSuggestionPatch;

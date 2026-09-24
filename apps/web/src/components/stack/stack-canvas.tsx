@@ -592,11 +592,18 @@ function CanvasInner({
       }
 
       // Patch an existing node (by nodeId or repositoryId)...
-      const target = nodes.find(
-        (n) =>
-          (s.nodeId && n.id === s.nodeId) ||
-          (s.repositoryId && n.data.repositoryId === s.repositoryId)
-      );
+      //
+      // `createNode` opts out: a repository can hold several runnable units —
+      // an API and a queue worker in one checkout — and without it a second
+      // suggestion for the same repo silently patches the first instead of
+      // adding the second, so the node you asked for goes missing.
+      const target = s.createNode
+        ? undefined
+        : nodes.find(
+            (n) =>
+              (s.nodeId && n.id === s.nodeId) ||
+              (s.repositoryId && n.data.repositoryId === s.repositoryId)
+          );
       if (target) {
         if (!s.patch) return true;
         setNodes((nds) =>
@@ -621,7 +628,9 @@ function CanvasInner({
           id: nextTmpId(),
           kind: "repo",
           repositoryId: repo.id,
-          name: repo.name,
+          // The unit's own name when the suggestion names one, so two nodes
+          // from one repo are distinguishable on the canvas.
+          name: s.createNode?.name ?? repo.name,
           runMode:
             s.patch?.runMode ?? (detection?.hasDockerfile ? "docker" : "local"),
           // Derived server-side from the columns on save.
@@ -640,7 +649,7 @@ function CanvasInner({
             s.patch?.localCommand ?? detection?.suggestedCommands.dev ?? null,
           stopCommand: s.patch?.stopCommand ?? null,
           managesServices: s.patch?.managesServices ?? false,
-          workdir: s.patch?.workdir ?? null,
+          workdir: s.patch?.workdir ?? s.createNode?.workdir ?? null,
           ports: s.patch?.ports ?? null,
           env: s.patch?.env ?? null,
           volumes: s.patch?.volumes ?? null,
