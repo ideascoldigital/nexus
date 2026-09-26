@@ -1,6 +1,7 @@
 # 27 — A Nexus host on a machine you already have
 
-Status: **draft** (2026-09-26). Nothing implemented.
+Status: **phase 1 shipped** (2026-09-26) — schema, endpoint-removal guard,
+the endpoint compose stack. Nothing provisions a host on an endpoint yet.
 Depends on [spec 19](19-nexus-host-provisioning.md) (Nexus hosts) and
 [spec 26](26-remote-docker-endpoints.md) (Docker endpoints), both shipped.
 
@@ -212,10 +213,22 @@ hosts.
 
 ## Order
 
-1. Schema (`provider` value, `dockerEndpointId`), endpoint-DELETE guard,
+1. ✅ Schema (`provider` value, `dockerEndpointId`), endpoint-DELETE guard,
    `renderHostCompose` endpoint mode + tests.
 2. `createHost`/provision/poll for endpoints; host form gains the provider;
    registry auth via temp `DOCKER_CONFIG`.
 3. Update and destroy branches; terminal target for endpoint hosts; the host
    dashboard's Update button explains itself.
 4. Manual E2E on a real endpoint.
+
+## As built (phase 1)
+
+- `renderHostCompose({ mode: "endpoint", name })` renders the stack above.
+  The Nexux `environment` block is shared with the VM mode (a test compares
+  the two), and the VM output is byte-identical to before. Validated with
+  `docker compose config`, which also confirmed Nexux still resolves
+  `ollama` while living in the Tailscale container's network namespace — the
+  sidecar sits on the project's default network.
+- Removing an endpoint detaches *destroyed* hosts in the same transaction
+  (their FK restricts), and refuses while a live one exists. The endpoints
+  list shows a host count beside the sandbox count.
