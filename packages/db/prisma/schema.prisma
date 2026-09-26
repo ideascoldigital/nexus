@@ -372,13 +372,42 @@ model Sandbox {
   updatedAt     DateTime  @updatedAt
   destroyedAt   DateTime?
 
-  project    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  credential CloudCredential?  @relation(fields: [credentialId], references: [id], onDelete: SetNull)
-  tasks      SandboxTask[]
+  // Which Docker daemon a local sandbox lives on (spec 26). Null = this
+  // machine's default daemon. A property of where the container runs, not of
+  // what kind of sandbox it is — `provider` stays "local".
+  dockerEndpointId String?
+
+  project        Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  credential     CloudCredential? @relation(fields: [credentialId], references: [id], onDelete: SetNull)
+  dockerEndpoint DockerEndpoint?  @relation(fields: [dockerEndpointId], references: [id], onDelete: SetNull)
+  tasks          SandboxTask[]
   processes  SandboxProcess[]
   browser    BrowserSession?
 
   @@index([projectId])
+}
+
+// DockerEndpoint - another machine's Docker daemon that local sandboxes can
+// run on (spec 26). Machine-level like NexusHost, not workspace-scoped: it is
+// a place containers run, not a secret. `host` is always ssh:// — the browser
+// session is forwarded through the same SSH, and plain tcp:// is root on the
+// remote for anyone who reaches the port.
+//
+// The probe columns record the last `docker version` / `docker info` answer,
+// so the settings list shows state without re-probing on every render.
+model DockerEndpoint {
+  id            String    @id @default(cuid())
+  name          String
+  host          String    @unique // ssh://user@host[:port]
+  serverVersion String?
+  arch          String? // the base image is built on the remote, natively
+  memTotalMb    Int?
+  lastCheckedAt DateTime?
+  lastError     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sandboxes Sandbox[]
 }
 
 // SandboxProcess - one long-running command started on a sandbox instance
