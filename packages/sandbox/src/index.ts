@@ -1,4 +1,17 @@
 export * from "./types";
+// Spec 26 — remote Docker endpoints for local sandboxes.
+export {
+  describeDockerHostError,
+  dockerHostArgs,
+  explainProbeFailure,
+  parseDockerHost,
+  parseDockerInfo,
+  probeDockerEndpoint,
+  type DockerEndpointInfo,
+  type DockerHostError,
+  type DockerTarget,
+  type ProbeResult,
+} from "./docker-endpoint";
 // Spec 24 piece 1 — structured per-step bootstrap results.
 export {
   assertStepName,
