@@ -1,4 +1,5 @@
-export { prisma, databasePath } from "./client";
+export { prisma } from "./client";
+export { databasePath } from "./db-path";
 export {
   acquireInstanceLock,
   describeLockConflict,

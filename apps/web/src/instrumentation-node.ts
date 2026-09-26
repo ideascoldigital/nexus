@@ -12,8 +12,9 @@ export async function registerNode() {
   // One server per database, before anything else runs: the recovery pass
   // below treats every in-flight task as orphaned, which is only true when no
   // other server is running against the same file. See instance-lock.ts.
+  // From the client-free entry: importing "@nexux/db" would migrate first.
   const { acquireInstanceLock, databasePath, describeLockConflict } = await import(
-    "@nexux/db"
+    "@nexux/db/instance-lock"
   );
   const origin =
     process.env.NEXUX_WEB_ORIGIN ??

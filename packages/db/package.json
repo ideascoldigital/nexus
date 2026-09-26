@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/generated/client.ts",
-    "./types": "./src/generated/client.ts"
+    "./types": "./src/generated/client.ts",
+    "./instance-lock": "./src/instance-lock-entry.ts"
   },
   "scripts": {
     "generate": "prisma generate",
