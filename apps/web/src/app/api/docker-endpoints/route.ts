@@ -55,5 +55,5 @@ export async function POST(req: NextRequest) {
   const row = await prisma.dockerEndpoint.create({
     data: { name: parsed.data.name, host: host.host, ...probeColumns(res) },
   });
-  return NextResponse.json({ ...row, sandboxCount: 0 }, { status: 201 });
+  return NextResponse.json({ ...row, sandboxCount: 0, hostCount: 0 }, { status: 201 });
 }

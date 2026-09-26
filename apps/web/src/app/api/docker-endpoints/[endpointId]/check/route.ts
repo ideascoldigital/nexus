@@ -8,7 +8,7 @@
 import { prisma } from "@nexux/db";
 import { NextRequest, NextResponse } from "next/server";
 
-import { liveSandboxCount, probe, probeColumns } from "@/lib/docker-endpoints";
+import { probe, probeColumns, usage } from "@/lib/docker-endpoints";
 
 export const dynamic = "force-dynamic";
 
@@ -24,8 +24,5 @@ export async function POST(_req: NextRequest, { params }: Params) {
     where: { id: endpointId },
     data: probeColumns(res),
   });
-  return NextResponse.json({
-    ...updated,
-    sandboxCount: await liveSandboxCount(endpointId),
-  });
+  return NextResponse.json({ ...updated, ...(await usage(endpointId)) });
 }

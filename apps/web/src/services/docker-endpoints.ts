@@ -15,6 +15,8 @@ export type DockerEndpoint = {
   lastError: string | null;
   /** Sandboxes still living on this daemon — removal is refused while > 0. */
   sandboxCount: number;
+  /** Nexus hosts running on it (spec 27) — same rule. */
+  hostCount: number;
   createdAt: string;
   updatedAt: string;
 };

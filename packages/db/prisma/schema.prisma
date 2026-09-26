@@ -230,7 +230,7 @@ model NexusHost {
   id       String @id @default(cuid())
   name     String // instance hostname
   status   String @default("pending") // pending | provisioning | bootstrapping | running | error | destroying | destroyed
-  provider String @default("civo") // civo | aws
+  provider String @default("civo") // civo | aws | docker-endpoint
 
   credentialId String? // cloud credential used to provision; destroy prefers the same account
   // Tailscale auth key (provider "tailscale"). Provisioning is refused without
@@ -269,7 +269,13 @@ model NexusHost {
   updatedAt   DateTime  @updatedAt
   destroyedAt DateTime?
 
+  // provider "docker-endpoint" only (spec 27): the machine whose Docker runs
+  // this host's stack. Restrict, not SetNull — a host whose endpoint vanished
+  // could be neither updated nor destroyed.
+  dockerEndpointId String?
+
   credential          CloudCredential? @relation("NexusHostCredential", fields: [credentialId], references: [id], onDelete: SetNull)
+  dockerEndpoint      DockerEndpoint?  @relation(fields: [dockerEndpointId], references: [id], onDelete: Restrict)
   tailscaleCredential CloudCredential? @relation("NexusHostTailscaleCredential", fields: [tailscaleCredentialId], references: [id], onDelete: SetNull)
   registryCredential  CloudCredential? @relation("NexusHostRegistryCredential", fields: [registryCredentialId], references: [id], onDelete: SetNull)
 
@@ -411,7 +417,8 @@ model DockerEndpoint {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  sandboxes Sandbox[]
+  sandboxes  Sandbox[]
+  nexusHosts NexusHost[]
 }
 
 // SandboxProcess - one long-running command started on a sandbox instance

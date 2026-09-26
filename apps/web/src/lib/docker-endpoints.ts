@@ -39,9 +39,23 @@ export function liveSandboxCount(endpointId: string): Promise<number> {
   });
 }
 
+/** Nexus hosts whose stack runs on this endpoint (spec 27). */
+export function liveHostCount(endpointId: string): Promise<number> {
+  return prisma.nexusHost.count({
+    where: { dockerEndpointId: endpointId, status: { notIn: GONE } },
+  });
+}
+
+/** What the list shows per endpoint: what still runs there. */
+export async function usage(endpointId: string) {
+  const [sandboxCount, hostCount] = await Promise.all([
+    liveSandboxCount(endpointId),
+    liveHostCount(endpointId),
+  ]);
+  return { sandboxCount, hostCount };
+}
+
 export async function listEndpoints() {
   const rows = await prisma.dockerEndpoint.findMany({ orderBy: { createdAt: "asc" } });
-  return Promise.all(
-    rows.map(async (r) => ({ ...r, sandboxCount: await liveSandboxCount(r.id) })),
-  );
+  return Promise.all(rows.map(async (r) => ({ ...r, ...(await usage(r.id)) })));
 }

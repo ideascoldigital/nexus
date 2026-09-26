@@ -190,6 +190,11 @@ function EndpointRow({
             {ep.sandboxCount} sandbox{ep.sandboxCount === 1 ? "" : "es"}
           </Badge>
         )}
+        {ep.hostCount > 0 && (
+          <Badge variant="outline" className="text-[10px]">
+            {ep.hostCount} Nexus host{ep.hostCount === 1 ? "" : "s"}
+          </Badge>
+        )}
         <div className="ml-auto flex items-center gap-1">
           {ep.lastCheckedAt && (
             <span className="text-[10px] text-muted-foreground">
@@ -209,12 +214,12 @@ function EndpointRow({
             size="icon-sm"
             variant="ghost"
             title={
-              ep.sandboxCount > 0
-                ? "Destroy the sandboxes on it first"
+              ep.sandboxCount + ep.hostCount > 0
+                ? "Destroy what runs on it first"
                 : "Remove endpoint"
             }
             onClick={onRemove}
-            disabled={removing || ep.sandboxCount > 0}
+            disabled={removing || ep.sandboxCount + ep.hostCount > 0}
           >
             <Trash2 className="h-3.5 w-3.5 text-destructive" />
           </Button>

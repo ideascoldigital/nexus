@@ -10,7 +10,7 @@ import { prisma } from "@nexux/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { liveSandboxCount } from "@/lib/docker-endpoints";
+import { usage } from "@/lib/docker-endpoints";
 
 export const dynamic = "force-dynamic";
 
@@ -32,10 +32,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     where: { id: endpointId },
     data: { name: parsed.data.name },
   });
-  return NextResponse.json({
-    ...updated,
-    sandboxCount: await liveSandboxCount(endpointId),
-  });
+  return NextResponse.json({ ...updated, ...(await usage(endpointId)) });
 }
 
 export async function DELETE(_req: NextRequest, { params }: Params) {
@@ -45,16 +42,27 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
 
   // Same rule as a credential in use: removing it would strand containers
   // Nexux can no longer reach to stop or destroy.
-  const live = await liveSandboxCount(endpointId);
-  if (live > 0) {
+  const { sandboxCount, hostCount } = await usage(endpointId);
+  const inUse = [
+    sandboxCount && `${sandboxCount} sandbox${sandboxCount === 1 ? "" : "es"}`,
+    hostCount && `${hostCount} Nexus host${hostCount === 1 ? "" : "s"}`,
+  ].filter(Boolean);
+  if (inUse.length > 0) {
     return NextResponse.json(
       {
-        error: `${live} sandbox${live === 1 ? "" : "es"} still run${live === 1 ? "s" : ""} on "${row.name}" — destroy ${live === 1 ? "it" : "them"} first.`,
+        error: `${inUse.join(" and ")} still run${sandboxCount + hostCount === 1 ? "s" : ""} on "${row.name}" — destroy ${sandboxCount + hostCount === 1 ? "it" : "them"} first.`,
       },
       { status: 409 },
     );
   }
-  // Destroyed sandboxes keep their rows for history; the FK sets them to null.
-  await prisma.dockerEndpoint.delete({ where: { id: endpointId } });
+  // Destroyed sandboxes keep their rows for history (the FK sets them to
+  // null). Destroyed hosts do too, but their FK restricts — detach them first.
+  await prisma.$transaction([
+    prisma.nexusHost.updateMany({
+      where: { dockerEndpointId: endpointId },
+      data: { dockerEndpointId: null },
+    }),
+    prisma.dockerEndpoint.delete({ where: { id: endpointId } }),
+  ]);
   return NextResponse.json({ ok: true });
 }

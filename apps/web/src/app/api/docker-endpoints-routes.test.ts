@@ -47,6 +47,7 @@ after(async () => {
 beforeEach(async () => {
   await prisma.sandbox.deleteMany({ where: { projectId } });
   await prisma.repository.deleteMany({ where: { projectId } });
+  await prisma.nexusHost.deleteMany({});
   await prisma.dockerEndpoint.deleteMany({});
   process.env.NEXUX_TEST_DOCKER_PROBE = JSON.stringify(HEALTHY);
 });
@@ -202,4 +203,44 @@ test("an endpoint on a cloud launch is refused, and so is a stale one", async ()
   const stale = await launch({ provider: "local", dockerEndpointId: "gone" });
   assert.equal(stale.status, 400);
   assert.match((await stale.json()).error, /no longer exists/);
+});
+
+// --- Nexus hosts on an endpoint (spec 27) -----------------------------------
+
+function hostOn(dockerEndpointId: string, status: string) {
+  return prisma.nexusHost.create({
+    data: {
+      name: `host-${status}`,
+      status,
+      provider: "docker-endpoint",
+      region: "omarchy",
+      size: "docker",
+      imageRef: "ghcr.io/o/r:latest",
+      workDir: "/tmp/host",
+      dockerEndpointId,
+    },
+  });
+}
+
+test("an endpoint running a Nexus host cannot be removed", async () => {
+  const ep = await (await create({ name: "omarchy", host: "ssh://omarchy" })).json();
+  await hostOn(ep.id, "running");
+
+  const list = await (await listRoute()).json();
+  assert.equal(list[0].hostCount, 1);
+
+  const refused = await deleteRoute(json("DELETE", "http://test/x"), params(ep.id));
+  assert.equal(refused.status, 409);
+  assert.match((await refused.json()).error, /1 Nexus host still runs on "omarchy"/);
+});
+
+test("a destroyed host keeps its row and lets the endpoint go", async () => {
+  const ep = await (await create({ name: "omarchy", host: "ssh://omarchy" })).json();
+  const gone = await hostOn(ep.id, "destroyed");
+
+  // The FK restricts, so this only succeeds because the row is detached first.
+  const ok = await deleteRoute(json("DELETE", "http://test/x"), params(ep.id));
+  assert.equal(ok.status, 200);
+  const kept = await prisma.nexusHost.findUnique({ where: { id: gone.id } });
+  assert.equal(kept?.dockerEndpointId, null);
 });
