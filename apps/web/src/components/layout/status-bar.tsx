@@ -17,6 +17,7 @@ import { useEffect, useState } from "react";
 import { ArrowUpCircle, Check, Loader2 } from "lucide-react";
 
 import { SystemMeters } from "@/components/layout/system-meters";
+import { ZoomControl } from "@/components/layout/zoom-control";
 import { getVersion, type AppVersion } from "@/services/hosts";
 import {
   checkUpdates,
@@ -197,6 +198,7 @@ export function StatusBar() {
           constantly and the version is looked up deliberately. */}
       <SystemMeters />
       <span className="ml-auto" />
+      <ZoomControl />
       <UpdateBadge native={native} />
       {version && (
         <span

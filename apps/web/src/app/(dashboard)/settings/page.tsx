@@ -293,7 +293,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
         id: "appearance",
         label: "Appearance",
         icon: Columns3,
-        description: "How pages use the window — a centred column, or all of it.",
+        description: "Theme, zoom, and how pages use the window.",
       },
       {
         id: "desktop",
