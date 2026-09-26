@@ -47,6 +47,7 @@ export async function GET() {
       region: true,
       size: true,
       instanceId: true,
+      dockerEndpointId: true,
       publicIp: true,
       tailscaleIp: true,
       tailscaleName: true,

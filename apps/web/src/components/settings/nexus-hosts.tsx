@@ -65,6 +65,7 @@ import {
   sandboxProviderLabel,
 } from "@/components/settings/cloud-credentials";
 import { HostSshAccess } from "@/components/settings/host-ssh-access";
+import { EndpointHostAccess } from "@/components/settings/endpoint-host-access";
 import {
   lastUpdateFailed,
   lastUpdateFinished,
@@ -213,7 +214,10 @@ export function NexusHostsSection() {
   // A host creating hosts is confusing and almost certainly unintended — but
   // updating *itself* is exactly what someone standing on the host wants.
   if (readiness?.isHost) {
-    return <SelfUpdateCard />;
+    // A host on a Docker endpoint has nothing on its machine to ask for an
+    // update (spec 27); say where updates come from instead of offering a
+    // button that cannot work.
+    return readiness.hostKind === "endpoint" ? <EndpointHostSelfCard /> : <SelfUpdateCard />;
   }
 
   // Two ways to get a machine: a cloud VM (terraform + a cloud credential),
@@ -316,10 +320,22 @@ export function NexusHostsSection() {
               Destroy “{destroyTarget?.name}”?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              The {destroyTarget?.size} instance and everything on it — including
-              the database and search indexes — are deleted permanently. Export
-              its configuration first if you want to keep it. This cannot be
-              undone.
+              {destroyTarget?.provider === "docker-endpoint" ? (
+                <>
+                  Its containers on {destroyTarget.region} <strong>and their volumes</strong>{" "}
+                  — the database, credentials, checkouts and search indexes —
+                  are deleted permanently, the same as destroying a VM host.
+                  Export its configuration first if you want to keep it. This
+                  cannot be undone.
+                </>
+              ) : (
+                <>
+                  The {destroyTarget?.size} instance and everything on it —
+                  including the database and search indexes — are deleted
+                  permanently. Export its configuration first if you want to
+                  keep it. This cannot be undone.
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -367,6 +383,37 @@ function buildKey(v: AppVersion | null | undefined): string {
  * the build identity (/api/version) from before and after: changed means
  * updated, unchanged means the pull found nothing newer.
  */
+/** What Settings shows on a host that runs on someone's Docker endpoint. */
+function EndpointHostSelfCard() {
+  const { data: version } = useQuery({ queryKey: ["app-version"], queryFn: getVersion });
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Server className="h-5 w-5" />
+          This Nexus host
+        </CardTitle>
+        <CardDescription>
+          This install is a Nexus host running as containers on a Docker
+          endpoint — a machine you already had. It can&apos;t update itself: it
+          has no access to that machine&apos;s Docker, by design. Update it from
+          the install that created it (Settings → Backup &amp; migration →
+          Update); the database, credentials and search indexes live in volumes
+          and survive the update.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-muted-foreground">
+          Running{" "}
+          <span className="font-mono text-foreground">
+            {version ? describeVersion(version) : "…"}
+          </span>
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 function SelfUpdateCard() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -593,6 +640,7 @@ function HostRow({
   });
 
   const url = host.tailscaleIp ? `http://${host.tailscaleIp}:3030` : null;
+  const onEndpoint = host.provider === "docker-endpoint";
 
   return (
     <div className="rounded-lg border p-4 space-y-3">
@@ -681,15 +729,18 @@ function HostRow({
             <Check className="h-4 w-4 mt-0.5 shrink-0 text-emerald-600" />
             Open Backup &amp; migration below to move your configuration onto it.
           </p>
-          <HostSshAccess host={host} />
+          {onEndpoint ? <EndpointHostAccess host={host} /> : <HostSshAccess host={host} />}
         </>
       )}
 
-      {/* A failed host is the case where SSH matters most — the bootstrap log
-          in the UI is a tail, and the rest of the story is on the machine. */}
-      {host.status === "error" && (host.publicIp || host.tailscaleIp) && (
-        <HostSshAccess host={host} />
-      )}
+      {/* A failed host is the case where access matters most — the bootstrap
+          log in the UI is a tail, and the rest of the story is on the machine. */}
+      {host.status === "error" &&
+        (onEndpoint ? (
+          <EndpointHostAccess host={host} />
+        ) : (
+          (host.publicIp || host.tailscaleIp) && <HostSshAccess host={host} />
+        ))}
 
       {host.error && (
         <p className="text-sm text-destructive flex gap-1.5">

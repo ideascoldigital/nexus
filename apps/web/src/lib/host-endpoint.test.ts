@@ -5,7 +5,9 @@ import os from "os";
 import path from "path";
 
 import {
+  destroyEndpointHost,
   endpointComposeArgs,
+  updateEndpointHost,
   endpointHostProject,
   parseTailscaleDnsName,
   provisionEndpointHost,
@@ -165,4 +167,105 @@ test("helpers", () => {
   assert.throws(() => renderEndpointEnv({ X: "a'b" }), /quote or newline/);
   assert.equal(parseTailscaleDnsName("{}"), null);
   assert.equal(parseTailscaleDnsName("nope"), null);
+});
+
+// --- update and destroy (phase 3) -------------------------------------------
+
+/** A docker for update: `images` answers `before` then `after`. */
+function updateDocker(before: string, after: string, fail?: "pull" | "up") {
+  const calls: string[][] = [];
+  let images = 0;
+  const run: DockerRunner = async (args) => {
+    calls.push(args);
+    const verb = args.slice(args.indexOf("--env-file") + 2)[0];
+    if (verb === "images") return { code: 0, stdout: `${images++ === 0 ? before : after}\n`, stderr: "" };
+    if (verb === fail) return { code: 1, stdout: "", stderr: `${fail} broke` };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  return { run, calls };
+}
+
+const writeEnv = () => {
+  fs.mkdirSync(workDir, { recursive: true });
+  fs.writeFileSync(path.join(workDir, ".env"), "TS_AUTHKEY='x'\n");
+};
+
+test("update pulls and recreates, never takes the stack down, and says whether anything changed", async () => {
+  writeEnv();
+  const docker = updateDocker("sha256:old", "sha256:new");
+  const res = await updateEndpointHost(
+    { name: "home", imageRef: "ghcr.io/o/nexus:edge", dockerHost: "ssh://omarchy", workDir, registry: null },
+    docker.run,
+  );
+  assert.equal(res.ok, true);
+  assert.equal(res.updated, true);
+  const verbs = docker.calls.map((c) => c.slice(c.indexOf("--env-file") + 2).join(" "));
+  assert.deepEqual(verbs, ["images --quiet nexux", "pull", "up -d", "images --quiet nexux"]);
+  assert.ok(!verbs.some((v) => v.startsWith("down")), "volumes must survive an update");
+  // The compose file is re-rendered, so template changes reach old hosts.
+  assert.ok(fs.readFileSync(path.join(workDir, "compose.yml"), "utf8").includes("network_mode: service:tailscale"));
+
+  const same = await updateEndpointHost(
+    { name: "home", imageRef: "ghcr.io/o/nexus:edge", dockerHost: "ssh://omarchy", workDir, registry: null },
+    updateDocker("sha256:a", "sha256:a").run,
+  );
+  assert.equal(same.updated, false);
+  assert.match(same.message, /Already up to date/);
+});
+
+test("a failed pull leaves the old image running and says so", async () => {
+  writeEnv();
+  const docker = updateDocker("a", "a", "pull");
+  const res = await updateEndpointHost(
+    { name: "home", imageRef: "x/y:z", dockerHost: "ssh://omarchy", workDir, registry: null },
+    docker.run,
+  );
+  assert.equal(res.ok, false);
+  assert.match(res.message, /still running the old image/);
+  assert.ok(!docker.calls.some((c) => c.includes("up")), "nothing restarted");
+});
+
+test("an update without the host's local settings is refused, not guessed", async () => {
+  const res = await updateEndpointHost(
+    { name: "home", imageRef: "x/y:z", dockerHost: "ssh://omarchy", workDir, registry: null },
+    updateDocker("a", "b").run,
+  );
+  assert.equal(res.ok, false);
+  assert.match(res.message, /settings are missing/);
+});
+
+test("destroy removes the stack with its volumes, then the files here", async () => {
+  writeEnv();
+  fs.writeFileSync(path.join(workDir, "compose.yml"), "services: {}\n");
+  const calls: string[][] = [];
+  await destroyEndpointHost(
+    { name: "home", dockerHost: "ssh://omarchy", workDir },
+    { log: () => undefined, run: async (a) => (calls.push(a), { code: 0, stdout: "", stderr: "" }) },
+  );
+  assert.deepEqual(calls[0].slice(0, 2), ["-H", "ssh://omarchy"]);
+  assert.deepEqual(calls[0].slice(-3), ["down", "--volumes", "--remove-orphans"]);
+  assert.equal(fs.existsSync(workDir), false);
+});
+
+test("destroy works from the project name alone when the local files are gone", async () => {
+  const calls: string[][] = [];
+  await destroyEndpointHost(
+    { name: "home", dockerHost: "ssh://omarchy", workDir },
+    { log: () => undefined, run: async (a) => (calls.push(a), { code: 0, stdout: "", stderr: "" }) },
+  );
+  assert.deepEqual(calls[0], [
+    "-H", "ssh://omarchy", "compose", "-p", "nexus-host-home", "down", "--volumes", "--remove-orphans",
+  ]);
+});
+
+test("a destroy the endpoint refuses keeps the local files and says why", async () => {
+  writeEnv();
+  await assert.rejects(
+    destroyEndpointHost(
+      { name: "home", dockerHost: "ssh://omarchy", workDir },
+      { log: () => undefined, run: async () => ({ code: 1, stdout: "", stderr: "Cannot connect" }) },
+    ),
+    /Could not remove the stack.*Cannot connect/,
+  );
+  assert.equal(fs.existsSync(path.join(workDir, ".env")), true);
 });

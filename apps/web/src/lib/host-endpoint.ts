@@ -275,6 +275,131 @@ export async function provisionEndpointHost(
   io.log(`[nexus-host] ready at http://${dnsName ?? ip}:3030\n`);
 }
 
+/** The app container compose names for a host's project. */
+export function endpointHostAppContainer(project: string): string {
+  return `${project}-nexux-1`;
+}
+
+export type EndpointUpdateResult = {
+  ok: boolean;
+  message: string;
+  log: string;
+  /** Whether the running image changed; undefined when it cannot be told. */
+  updated?: boolean;
+};
+
+/**
+ * Pull the host's images and recreate what changed — spec 19's update, on an
+ * endpoint. Never `down`: the volumes hold the database, credentials and
+ * search indexes, and `up -d` recreates only containers whose image changed.
+ *
+ * The compose file is re-rendered first, so a template change shipped since
+ * the host was created reaches it on update (the file says as much). The
+ * `.env` is not: it holds the auth key, which only exists there.
+ */
+export async function updateEndpointHost(
+  spec: {
+    name: string;
+    imageRef: string;
+    dockerHost: string;
+    workDir: string;
+    registry: { host: string; username: string; password: string } | null;
+  },
+  run: DockerRunner = runDocker,
+): Promise<EndpointUpdateResult> {
+  if (!fs.existsSync(path.join(spec.workDir, ".env"))) {
+    return {
+      ok: false,
+      message: `This host's settings are missing from ${spec.workDir} on this machine, so it can't be updated from here. Update it on the endpoint (docker compose pull && up -d), or destroy and recreate it.`,
+      log: "",
+    };
+  }
+  const project = endpointHostProject(spec.name);
+  const compose = endpointComposeArgs({ dockerHost: spec.dockerHost, project, workDir: spec.workDir });
+  fs.writeFileSync(
+    path.join(spec.workDir, "compose.yml"),
+    renderHostCompose({ imageRef: spec.imageRef, mode: "endpoint", name: spec.name }),
+  );
+
+  let log = "";
+  const onLog = (c: string) => void (log += c);
+  const imageId = async () =>
+    (await run([...compose, "images", "--quiet", "nexux"], { timeoutMs: 60_000 })).stdout
+      .trim()
+      .split("\n")[0]
+      ?.trim() || null;
+
+  const before = await imageId();
+  const pull = spec.registry
+    ? await withTempDockerConfig(async (env) => {
+        const login = await run(
+          [...dockerHostArgs({ host: spec.dockerHost }), "login", spec.registry!.host, "-u", spec.registry!.username, "--password-stdin"],
+          { env, input: spec.registry!.password },
+        );
+        if (login.code !== 0) return login;
+        return run([...compose, "pull"], { env, onLog, timeoutMs: 20 * 60_000 });
+      })
+    : await run([...compose, "pull"], { onLog, timeoutMs: 20 * 60_000 });
+  if (pull.code !== 0) {
+    return {
+      ok: false,
+      message: "The pull failed. The host is still running the old image.",
+      log: (log + pull.stderr).trim().slice(-8000),
+    };
+  }
+  const up = await run([...compose, "up", "-d"], { onLog, timeoutMs: 5 * 60_000 });
+  if (up.code !== 0) {
+    return {
+      ok: false,
+      message: "The images were pulled but the stack did not restart cleanly.",
+      log: log.trim().slice(-8000),
+    };
+  }
+  const after = await imageId();
+  // Only claim "nothing changed" when both ids were actually read.
+  const updated = before && after ? before !== after : undefined;
+  return {
+    ok: true,
+    message:
+      updated === false
+        ? "Already up to date — the pull found no newer image."
+        : updated
+          ? "Updated — the host is now running the new image."
+          : "Updated and restarted.",
+    log: log.trim().slice(-8000),
+    updated,
+  };
+}
+
+/**
+ * Remove the host's stack *and its volumes* from the endpoint, then its files
+ * here. Volumes go because that is what destroying a VM host does: a
+ * "destroyed" host whose database quietly survives on someone's workstation
+ * is worse than an explicit loss. The UI says so before this runs.
+ *
+ * Works without the compose file too (`down` needs only the project name), so
+ * a host whose local files were lost can still be cleaned up.
+ */
+export async function destroyEndpointHost(
+  spec: { name: string; dockerHost: string; workDir: string },
+  io: { log: (chunk: string) => void; run?: DockerRunner },
+): Promise<void> {
+  const run = io.run ?? runDocker;
+  const project = endpointHostProject(spec.name);
+  const haveFiles = fs.existsSync(path.join(spec.workDir, "compose.yml"));
+  const args = haveFiles
+    ? [...endpointComposeArgs({ dockerHost: spec.dockerHost, project, workDir: spec.workDir }), "down", "--volumes", "--remove-orphans"]
+    : [...dockerHostArgs({ host: spec.dockerHost }), "compose", "-p", project, "down", "--volumes", "--remove-orphans"];
+  io.log(`[nexus-host] removing ${project} and its volumes from ${spec.dockerHost}\n`);
+  const res = await run(args, { onLog: io.log, timeoutMs: 5 * 60_000 });
+  if (res.code !== 0) {
+    throw new Error(
+      `Could not remove the stack from the endpoint: ${res.stderr.trim().split("\n").slice(-3).join(" ").slice(-400)}`,
+    );
+  }
+  fs.rmSync(spec.workDir, { recursive: true, force: true });
+}
+
 /**
  * Run `fn` with a DOCKER_CONFIG that holds only a throwaway login.
  *

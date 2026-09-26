@@ -19,6 +19,8 @@ export type NexusHostSummary = {
   region: string;
   size: string;
   instanceId: string | null;
+  /** provider "docker-endpoint" (spec 27): the machine its stack runs on. */
+  dockerEndpointId: string | null;
   publicIp: string | null;
   /** The address the dashboard is actually served on. */
   tailscaleIp: string | null;
@@ -38,6 +40,8 @@ export type HostReadiness = {
   hasTailscaleCredential: boolean;
   /** True when this install is itself a host — the panel hides itself. */
   isHost: boolean;
+  /** When it is a host: a VM, or a stack on a Docker endpoint (spec 27). */
+  hostKind: "vm" | "endpoint" | null;
   defaultImage: string;
 };
 

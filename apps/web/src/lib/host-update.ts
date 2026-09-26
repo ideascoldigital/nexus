@@ -62,6 +62,16 @@ export function isHostInstall(): boolean {
  * operation completed.
  */
 export async function requestSelfUpdate(): Promise<HostUpdateResult> {
+  // A host on a Docker endpoint (spec 27) has no root-side updater to ask and
+  // no docker socket of its own: it is updated from the install that created
+  // it. Say so rather than write a request nothing reads.
+  if (process.env.NEXUX_HOST_KIND === "endpoint") {
+    return {
+      ok: false,
+      message:
+        "This host runs on a Docker endpoint, so it can't update itself — update it from the install that created it (Settings → Backup & migration → Update).",
+    };
+  }
   const request = `${CONTROL_MOUNT}/update-requested`;
   try {
     await fs.writeFile(request, `${new Date().toISOString()}\n`);
@@ -112,11 +122,10 @@ export async function updateHost(hostId: string): Promise<HostUpdateResult> {
     );
   }
   if (host.provider === "docker-endpoint") {
-    // Spec 27 phase 3 — until then, say how rather than try SSH to a box
-    // that has none.
-    throw new Error(
-      `Updating a host on a Docker endpoint isn't available yet. On the endpoint: docker compose -p ${host.instanceId ?? "nexus-host-<name>"} pull && up -d.`,
-    );
+    // No SSH to a box we do not own: the same pull + up -d, through the
+    // endpoint's Docker (spec 27).
+    const { updateHostOnEndpoint } = await import("@/lib/host-manager");
+    return updateHostOnEndpoint(host);
   }
 
   const address = hostSshAddress(host);
@@ -178,6 +187,8 @@ export async function updateHost(hostId: string): Promise<HostUpdateResult> {
 export async function readHostUpdateLog(hostId: string): Promise<string | null> {
   const host = await prisma.nexusHost.findUnique({ where: { id: hostId } });
   if (!host || host.status !== "running") return null;
+  // An endpoint host has no on-host updater, so there is no log of one.
+  if (host.provider === "docker-endpoint") return null;
   const address = hostSshAddress(host);
   if (!address) return null;
 

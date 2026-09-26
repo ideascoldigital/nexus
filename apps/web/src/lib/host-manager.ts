@@ -40,7 +40,12 @@ import {
   resolveTailscaleKey,
 } from "@/lib/sandbox-manager";
 import { probe as probeEndpoint } from "@/lib/docker-endpoints";
-import { provisionEndpointHost } from "@/lib/host-endpoint";
+import {
+  destroyEndpointHost,
+  provisionEndpointHost,
+  updateEndpointHost,
+  type EndpointUpdateResult,
+} from "@/lib/host-endpoint";
 
 // Re-exported for the hosts routes, which historically import it from here.
 // The implementation moved to sandbox-manager so sandbox launches can share it
@@ -476,6 +481,11 @@ export type HostReadiness = {
   hasTailscaleCredential: boolean;
   /** Whether this install is itself running as a host (panel hides itself). */
   isHost: boolean;
+  /**
+   * When it is a host: a VM (can update itself) or a stack on a Docker
+   * endpoint (spec 27 — updated from the install that created it).
+   */
+  hostKind: "vm" | "endpoint" | null;
 };
 
 /**
@@ -495,6 +505,12 @@ export async function getHostReadiness(): Promise<HostReadiness> {
     hasCloudCredential: cloud > 0,
     hasTailscaleCredential: tailscale > 0,
     isHost: process.env.NEXUX_ROLE === "host",
+    hostKind:
+      process.env.NEXUX_ROLE !== "host"
+        ? null
+        : process.env.NEXUX_HOST_KIND === "endpoint"
+          ? "endpoint"
+          : "vm",
   };
 }
 
@@ -762,6 +778,76 @@ async function createEndpointHost(input: CreateHostInput) {
   return prisma.nexusHost.findUnique({ where: { id: host.id } });
 }
 
+/**
+ * Destroy a host whose stack runs on a Docker endpoint (spec 27): its
+ * containers and volumes there, its files here. Awaited like the VM path, so
+ * the route answers with the outcome.
+ */
+async function destroyOnEndpoint(host: { id: string; name: string; workDir: string; dockerEndpointId: string | null }) {
+  const endpoint = host.dockerEndpointId
+    ? await prisma.dockerEndpoint.findUnique({ where: { id: host.dockerEndpointId } })
+    : null;
+  if (!endpoint) {
+    throw new Error("The Docker endpoint this host ran on is gone — nothing left to remove it from.");
+  }
+  await prisma.nexusHost.update({
+    where: { id: host.id },
+    data: { status: "destroying", error: null },
+  });
+  const op = destroyEndpointHost(
+    { name: host.name, dockerHost: endpoint.host, workDir: host.workDir },
+    { log: (chunk) => void appendLog(host.id, chunk) },
+  )
+    .then(() =>
+      prisma.nexusHost.update({
+        where: { id: host.id },
+        data: { status: "destroyed", destroyedAt: new Date() },
+      }),
+    )
+    .catch(async (err: unknown) => {
+      await prisma.nexusHost.update({
+        where: { id: host.id },
+        data: { status: "error", error: err instanceof Error ? err.message : String(err) },
+      });
+      throw err;
+    });
+  activeOps.set(host.id, op);
+  void op.finally(() => activeOps.delete(host.id));
+  await op;
+  return prisma.nexusHost.findUnique({ where: { id: host.id } });
+}
+
+/**
+ * Update a host on a Docker endpoint from this install (spec 27): pull and
+ * `up -d` through `docker -H`. A private image logs in again with the
+ * credential it was created with — resolved now, since a token can have
+ * rotated since.
+ */
+export async function updateHostOnEndpoint(host: {
+  name: string;
+  imageRef: string;
+  workDir: string;
+  dockerEndpointId: string | null;
+  registryCredentialId: string | null;
+}): Promise<EndpointUpdateResult> {
+  const endpoint = host.dockerEndpointId
+    ? await prisma.dockerEndpoint.findUnique({ where: { id: host.dockerEndpointId } })
+    : null;
+  if (!endpoint) throw new Error("The Docker endpoint this host runs on is gone.");
+  const registry = host.registryCredentialId
+    ? await resolveHostRegistryAuth(host.imageRef, host.registryCredentialId)
+    : null;
+  return updateEndpointHost({
+    name: host.name,
+    imageRef: host.imageRef,
+    dockerHost: endpoint.host,
+    workDir: host.workDir,
+    registry: registry
+      ? { host: registryHost(host.imageRef), username: registry.username, password: registry.password }
+      : null,
+  });
+}
+
 async function provisionHost(
   hostId: string,
   spec: NexusHostSpec,
@@ -918,13 +1004,7 @@ export async function destroyHost(hostId: string) {
   const existing = activeOps.get(hostId);
   if (existing) await existing.catch(() => undefined);
 
-  if (host.provider === "docker-endpoint") {
-    // Spec 27 phase 3. Refused plainly rather than reaching for a cloud
-    // credential this host never had.
-    throw new Error(
-      `Destroying a host on a Docker endpoint isn't available yet. On the endpoint: docker compose -p ${host.instanceId ?? "nexus-host-<name>"} down --volumes (this deletes its data).`,
-    );
-  }
+  if (host.provider === "docker-endpoint") return destroyOnEndpoint(host);
 
   const cloud = await resolveProviderCredentials(host.provider, host.credentialId);
   if (!cloud) {
