@@ -15,7 +15,7 @@ export type NexusHostSummary = {
   id: string;
   name: string;
   status: HostStatus;
-  provider: "civo" | "aws";
+  provider: "civo" | "aws" | "docker-endpoint";
   region: string;
   size: string;
   instanceId: string | null;
@@ -43,7 +43,9 @@ export type HostReadiness = {
 
 export type CreateHostInput = {
   name: string;
-  provider: "civo" | "aws";
+  provider: "civo" | "aws" | "docker-endpoint";
+  /** provider "docker-endpoint" (spec 27): the machine the stack runs on. */
+  dockerEndpointId?: string | null;
   credentialId?: string | null;
   tailscaleCredentialId?: string | null;
   /** GitHub credential the host pulls a private GHCR image with. */

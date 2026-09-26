@@ -73,6 +73,7 @@ import {
   getCredentials,
   type CloudCredentialSummary,
 } from "@/services/sandbox";
+import { getDockerEndpoints, type DockerEndpoint } from "@/services/docker-endpoints";
 import {
   HOST_IN_FLIGHT,
   HOST_REGIONS,
@@ -155,6 +156,11 @@ export function NexusHostsSection() {
     queryKey: ["host-readiness"],
     queryFn: getHostReadiness,
   });
+  // Machines you already have, which can hold a host instead of a VM (spec 27).
+  const { data: endpoints = [] } = useQuery({
+    queryKey: ["docker-endpoints"],
+    queryFn: getDockerEndpoints,
+  });
 
   // A destroy in flight counts as "something is moving" on its own. The row is
   // only marked `destroying` a couple of awaits into the request, so the
@@ -210,12 +216,18 @@ export function NexusHostsSection() {
     return <SelfUpdateCard />;
   }
 
+  // Two ways to get a machine: a cloud VM (terraform + a cloud credential),
+  // or a Docker endpoint you already have (spec 27). Either is enough; the
+  // tailnet key is required by both, because it is each host's only door.
   const blockers: string[] = [];
-  if (readiness && !readiness.terraformInstalled) {
-    blockers.push("terraform is not installed on this machine");
-  }
-  if (readiness && !readiness.hasCloudCredential) {
-    blockers.push("no Civo or AWS credential saved (Settings → Cloud)");
+  const vmReady = Boolean(readiness?.terraformInstalled && readiness?.hasCloudCredential);
+  const endpointReady = endpoints.length > 0;
+  if (readiness && !vmReady && !endpointReady) {
+    blockers.push(
+      !readiness.terraformInstalled
+        ? "no machine to put it on: terraform is not installed for a cloud VM, and no Docker endpoint is added (Settings → Cloud)"
+        : "no machine to put it on: no Civo or AWS credential, and no Docker endpoint (Settings → Cloud)",
+    );
   }
   if (readiness && !readiness.hasTailscaleCredential) {
     blockers.push("no Tailscale auth key saved (Settings → Cloud)");
@@ -276,6 +288,8 @@ export function NexusHostsSection() {
         {showForm ? (
           <CreateHostForm
             defaultImage={readiness?.defaultImage ?? ""}
+            endpoints={endpoints}
+            vmReady={vmReady}
             onDone={() => {
               setShowForm(false);
               queryClient.invalidateQueries({ queryKey: ["hosts"] });
@@ -786,16 +800,30 @@ function CredentialField({
 
 function CreateHostForm({
   defaultImage,
+  endpoints,
+  vmReady,
   onDone,
   onCancel,
 }: {
   defaultImage: string;
+  endpoints: DockerEndpoint[];
+  /** Terraform and a cloud credential are both there. */
+  vmReady: boolean;
   onDone: () => void;
   onCancel: () => void;
 }) {
   const { toast } = useToast();
   const [name, setName] = useState("nexus-host");
-  const [provider, setProvider] = useState<"civo" | "aws">("civo");
+  // Start where the user can actually create one: a VM when that is set up,
+  // otherwise their first endpoint.
+  const [provider, setProvider] = useState<"civo" | "aws" | "docker-endpoint">(
+    vmReady || endpoints.length === 0 ? "civo" : "docker-endpoint",
+  );
+  const [dockerEndpointId, setDockerEndpointId] = useState<string | null>(
+    endpoints[0]?.id ?? null,
+  );
+  const onEndpoint = provider === "docker-endpoint";
+  const endpoint = endpoints.find((e) => e.id === dockerEndpointId) ?? null;
   const [region, setRegion] = useState(HOST_REGIONS.civo[0]);
   const [size, setSize] = useState(HOST_SIZES.civo[2].value);
   const [imageRef, setImageRef] = useState(defaultImage);
@@ -851,6 +879,11 @@ function CreateHostForm({
   // Base UI's Select emits null when a selection is cleared; every field here
   // is required, so a null is ignored rather than written as an empty value.
   const onProviderChange = (value: string | null) => {
+    if (value === "docker-endpoint") {
+      setProvider(value);
+      setCredentialId(null);
+      return;
+    }
     if (value !== "civo" && value !== "aws") return;
     const p = value;
     setProvider(p);
@@ -863,8 +896,9 @@ function CreateHostForm({
     setCredentialId(null);
   };
 
-  const sizeLabel =
-    HOST_SIZES[provider].find((s) => s.value === size)?.label ?? size;
+  const sizeLabel = onEndpoint
+    ? ""
+    : (HOST_SIZES[provider as "civo" | "aws"].find((s) => s.value === size)?.label ?? size);
 
   return (
     <div className="space-y-4 rounded-lg border p-4">
@@ -883,15 +917,48 @@ function CreateHostForm({
           <Label htmlFor="host-provider">Provider</Label>
           <Select value={provider} onValueChange={onProviderChange}>
             <SelectTrigger id="host-provider">
-              <SelectValue />
+              <SelectValue>
+                {(v) =>
+                  v === "docker-endpoint" ? "Docker endpoint" : v === "aws" ? "AWS EC2" : "Civo"
+                }
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="civo">Civo</SelectItem>
               <SelectItem value="aws">AWS EC2</SelectItem>
+              {endpoints.length > 0 && (
+                <SelectItem value="docker-endpoint">Docker endpoint (a machine you have)</SelectItem>
+              )}
             </SelectContent>
           </Select>
         </div>
 
+        {onEndpoint && (
+          <div className="space-y-2 sm:col-span-2">
+            <Label htmlFor="host-endpoint">Machine</Label>
+            <Select
+              value={dockerEndpointId ?? ""}
+              onValueChange={(v) => v && setDockerEndpointId(v)}
+            >
+              <SelectTrigger id="host-endpoint">
+                <SelectValue>
+                  {(v) => endpoints.find((e) => e.id === v)?.name ?? "Pick an endpoint"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {endpoints.map((e) => (
+                  <SelectItem key={e.id} value={e.id}>
+                    {e.name} · {e.host.replace(/^ssh:\/\//, "")}
+                    {e.arch ? ` · ${e.arch}` : ""}
+                    {e.memTotalMb != null ? ` · ${Math.round(e.memTotalMb / 1024)} GB RAM` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {!onEndpoint && (<>
         <div className="space-y-2">
           <Label htmlFor="host-region">Region</Label>
           <Select
@@ -902,7 +969,7 @@ function CreateHostForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {HOST_REGIONS[provider].map((r) => (
+              {HOST_REGIONS[provider as "civo" | "aws"].map((r) => (
                 <SelectItem key={r} value={r}>
                   {r}
                 </SelectItem>
@@ -918,7 +985,7 @@ function CreateHostForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {HOST_SIZES[provider].map((s) => (
+              {HOST_SIZES[provider as "civo" | "aws"].map((s) => (
                 <SelectItem key={s.value} value={s.value}>
                   {s.label}
                 </SelectItem>
@@ -926,17 +993,20 @@ function CreateHostForm({
             </SelectContent>
           </Select>
         </div>
+        </>)}
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <CredentialField
-          id="host-credential"
-          label={provider === "aws" ? "AWS credential" : "Civo credential"}
-          credentials={cloudCredentials}
-          value={credentialId}
-          onChange={setCredentialId}
-          empty={`No ${provider === "aws" ? "AWS" : "Civo"} credential saved (Settings → Cloud).`}
-        />
+        {!onEndpoint && (
+          <CredentialField
+            id="host-credential"
+            label={provider === "aws" ? "AWS credential" : "Civo credential"}
+            credentials={cloudCredentials}
+            value={credentialId}
+            onChange={setCredentialId}
+            empty={`No ${provider === "aws" ? "AWS" : "Civo"} credential saved (Settings → Cloud).`}
+          />
+        )}
         <CredentialField
           id="host-tailscale-credential"
           label="Tailscale auth key"
@@ -990,10 +1060,18 @@ function CreateHostForm({
         />
       </div>
 
-      <p className="text-sm text-muted-foreground">
-        This launches a <strong>{sizeLabel}</strong> instance on {provider} and
-        starts billing immediately.
-      </p>
+      {onEndpoint ? (
+        <p className="text-sm text-muted-foreground">
+          Runs as containers on <strong>{endpoint?.name ?? "the endpoint"}</strong>&apos;s
+          Docker — nothing is billed and nothing is installed on the machine
+          itself. It publishes no port there: only your tailnet can reach it.
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          This launches a <strong>{sizeLabel}</strong> instance on {provider} and
+          starts billing immediately.
+        </p>
+      )}
 
       <div className="flex gap-2">
         <Button
@@ -1001,7 +1079,8 @@ function CreateHostForm({
             create.mutate({
               name,
               provider,
-              credentialId,
+              dockerEndpointId: onEndpoint ? dockerEndpointId : null,
+              credentialId: onEndpoint ? null : credentialId,
               tailscaleCredentialId,
               registryCredentialId: needsRegistryLogin
                 ? registryCredentialId
@@ -1012,7 +1091,9 @@ function CreateHostForm({
               pullEmbeddingModel,
             })
           }
-          disabled={!name.trim() || !imageRef.trim() || create.isPending}
+          disabled={
+            !name.trim() || !imageRef.trim() || create.isPending || (onEndpoint && !dockerEndpointId)
+          }
         >
           {create.isPending && (
             <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
