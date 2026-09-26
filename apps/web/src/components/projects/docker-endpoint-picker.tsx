@@ -37,7 +37,7 @@ export function DockerEndpointPicker({
       detail: [
         ep.host.replace(/^ssh:\/\//, ""),
         ep.arch,
-        ep.memTotalMb != null ? `${Math.round(ep.memTotalMb / 1024)} GB` : null,
+        ep.memTotalMb != null ? `${Math.round(ep.memTotalMb / 1024)} GB RAM` : null,
         ep.lastError ? "last check failed" : null,
       ]
         .filter(Boolean)

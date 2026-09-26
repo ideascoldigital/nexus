@@ -182,7 +182,7 @@ function EndpointRow({
         )}
         {ep.memTotalMb != null && (
           <Badge variant="secondary" className="text-[10px]">
-            {formatMem(ep.memTotalMb)}
+            {formatMem(ep.memTotalMb)} RAM
           </Badge>
         )}
         {ep.sandboxCount > 0 && (
