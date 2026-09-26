@@ -300,23 +300,31 @@ export async function assertImagePullable<
   registry: T | null,
   /** Whether the user picked this credential, or it was merely the one saved. */
   chosen: boolean,
-): Promise<{ registry: T | null }> {
+): Promise<{
+  registry: T | null;
+  /**
+   * `os/arch[/variant]` entries the image publishes, read off its index, or
+   * null when that cannot be told from here (a single-platform manifest, an
+   * unreachable registry, Docker Hub). Null is "no opinion", never "none".
+   */
+  platforms: string[] | null;
+}> {
   const host = registryHost(imageRef);
   const [maybeHost, ...rest] = imageRef.split("/");
   // Docker Hub is not something a saved git token authenticates against, and an
   // image with no registry component has no host to ask.
   if (!host || host === "docker.io" || maybeHost?.toLowerCase() !== host) {
-    return { registry };
+    return { registry, platforms: null };
   }
 
   // <host>/<owner>/<name>[:tag] — the tag is not part of the auth scope.
   const path = rest.join("/");
   const repository = path.split("@")[0].split(":")[0];
-  if (!repository) return { registry };
+  if (!repository) return { registry, platforms: null };
   const tag = imageTag(path);
 
   const realm = await tokenEndpoint(host, repository, tag);
-  if (!realm) return { registry }; // Unreachable or not a token registry.
+  if (!realm) return { registry, platforms: null }; // Unreachable or not a token registry.
 
   /**
    * Whether these credentials can actually fetch the manifest — the same
@@ -329,7 +337,9 @@ export async function assertImagePullable<
    * gap. `null` means the probe never got an answer — unreachable from here
    * says nothing about the host, so it passes.
    */
-  const probe = async (auth: typeof registry): Promise<number | null> => {
+  const probe = async (
+    auth: typeof registry,
+  ): Promise<{ status: number; platforms: string[] | null } | null> => {
     try {
       const tokenRes = await fetch(realm, {
         headers: auth
@@ -341,7 +351,7 @@ export async function assertImagePullable<
           : {},
         signal: AbortSignal.timeout(10_000),
       });
-      if (!tokenRes.ok) return tokenRes.status;
+      if (!tokenRes.ok) return { status: tokenRes.status, platforms: null };
 
       const body = (await tokenRes.json()) as {
         token?: unknown;
@@ -355,23 +365,29 @@ export async function assertImagePullable<
             : null;
       if (!bearer) return null;
 
+      // GET rather than HEAD: the index body is a few KB and names the
+      // platforms the image is published for (spec 27 — a host on an arm64
+      // endpoint cannot run an amd64-only image).
       const manifest = await fetch(
         `https://${host}/v2/${repository}/manifests/${tag}`,
         {
-          method: "HEAD",
           headers: { Authorization: `Bearer ${bearer}`, Accept: MANIFEST_ACCEPT },
           signal: AbortSignal.timeout(10_000),
         },
       );
-      return manifest.status;
+      const platforms = manifest.ok
+        ? await manifest.json().then(manifestPlatforms, () => null)
+        : null;
+      return { status: manifest.status, platforms };
     } catch {
       return null;
     }
   };
 
-  const status = await probe(registry);
+  const first = await probe(registry);
+  const status = first?.status ?? null;
   if (status === null || (status !== 401 && status !== 403 && status !== 404)) {
-    return { registry };
+    return { registry, platforms: first?.platforms ?? null };
   }
 
   // A rejected credential does not mean the image is unreachable: a token
@@ -385,9 +401,10 @@ export async function assertImagePullable<
   // on the image and not on the credential, and blaming the token for it sends
   // the user to fix the wrong thing.
   if (registry && !chosen) {
-    const anon = await probe(null);
+    const anonProbe = await probe(null);
+    const anon = anonProbe?.status ?? null;
     if (anon === null || (anon !== 401 && anon !== 403 && anon !== 404)) {
-      return { registry: null };
+      return { registry: null, platforms: anonProbe?.platforms ?? null };
     }
     // Anonymous says the tag is missing rather than forbidden: that is about
     // the image, so report it as such instead of blaming a token.
@@ -423,6 +440,32 @@ export async function assertImagePullable<
         } — logging in is not enough, and a token without it fails only at the pull.`
       : `${repository}:${tag} is private and no saved token logs in to ${host}. Add one in Settings → Git and pick it under “Registry credential” — or make the image public.`,
   );
+}
+
+/**
+ * Platforms an image index lists, as `os/arch[/variant]`. Null for anything
+ * that is not an index — a single-platform manifest names its platform only in
+ * its config blob, which is not worth a third request here.
+ */
+export function manifestPlatforms(body: unknown): string[] | null {
+  const manifests = (body as { manifests?: unknown })?.manifests;
+  if (!Array.isArray(manifests)) return null;
+  const out = manifests
+    .map((m) => (m as { platform?: { os?: unknown; architecture?: unknown; variant?: unknown } }).platform)
+    .filter((p) => p && typeof p.os === "string" && typeof p.architecture === "string")
+    // Attestation manifests ("unknown/unknown") describe provenance, not a platform.
+    .filter((p) => p!.os !== "unknown")
+    .map((p) => [p!.os, p!.architecture, typeof p!.variant === "string" ? p!.variant : null].filter(Boolean).join("/"));
+  return out.length ? out : null;
+}
+
+/** `docker info`'s Architecture in the names image indexes use. */
+export function ociArch(dockerArch: string): string {
+  const a = dockerArch.toLowerCase();
+  if (a === "x86_64" || a === "amd64") return "amd64";
+  if (a === "aarch64" || a === "arm64") return "arm64";
+  if (a.startsWith("armv7")) return "arm";
+  return a;
 }
 
 export type HostReadiness = {
