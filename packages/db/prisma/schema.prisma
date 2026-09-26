@@ -376,6 +376,10 @@ model Sandbox {
   // machine's default daemon. A property of where the container runs, not of
   // what kind of sandbox it is — `provider` stays "local".
   dockerEndpointId String?
+  // The endpoint's host, copied at launch: the address lives on the row like
+  // publicIp and instanceId do, so every exec path reaches the right daemon
+  // without a join. It cannot drift — an endpoint's host is not editable.
+  dockerHost       String?
 
   project        Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   credential     CloudCredential? @relation(fields: [credentialId], references: [id], onDelete: SetNull)
