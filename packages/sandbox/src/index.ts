@@ -7,6 +7,7 @@ export {
   parseDockerHost,
   parseDockerInfo,
   probeDockerEndpoint,
+  sshUrlParts,
   type DockerEndpointInfo,
   type DockerHostError,
   type DockerTarget,

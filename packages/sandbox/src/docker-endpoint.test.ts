@@ -7,6 +7,7 @@ import {
   parseDockerHost,
   parseDockerInfo,
   probeDockerEndpoint,
+  sshUrlParts,
 } from "./docker-endpoint";
 
 test("accepts ssh endpoints and normalises them", () => {
@@ -164,4 +165,11 @@ test("a missing docker CLI on this machine is named as such", async () => {
     },
   });
   assert.match(!res.ok ? res.error : "", /docker CLI isn't installed on this machine/);
+});
+
+test("sshUrlParts takes an endpoint host apart for ssh itself", () => {
+  assert.deepEqual(sshUrlParts("ssh://omarchy"), { user: null, hostname: "omarchy", port: null });
+  assert.deepEqual(sshUrlParts("ssh://jairo@box:2222"), { user: "jairo", hostname: "box", port: 2222 });
+  assert.deepEqual(sshUrlParts("ssh://root@[fd7a::1]"), { user: "root", hostname: "fd7a::1", port: null });
+  assert.equal(sshUrlParts("tcp://box:2375"), null);
 });

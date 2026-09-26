@@ -44,6 +44,25 @@ export function parseDockerHost(
   return { ok: true, host };
 }
 
+/**
+ * The pieces of an endpoint host, for tools that take them apart — the
+ * browser session's `ssh -L` forward (spec 26 phase 3). Null when the host is
+ * not a valid endpoint.
+ */
+export function sshUrlParts(
+  raw: string,
+): { user: string | null; hostname: string; port: number | null } | null {
+  const parsed = parseDockerHost(raw);
+  if (!parsed.ok) return null;
+  const m = SSH_HOST_RE.exec(parsed.host)!;
+  return {
+    user: m[1] ?? null,
+    // ssh takes an IPv6 literal bare, not bracketed as in a URL.
+    hostname: m[2].replace(/^\[|\]$/g, ""),
+    port: m[3] ? Number(m[3]) : null,
+  };
+}
+
 export function describeDockerHostError(error: DockerHostError): string {
   switch (error) {
     case "empty":
