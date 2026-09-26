@@ -34,7 +34,18 @@ export async function registerNode() {
       const { startTerminalServer } = await import(
         "@nexux/terminal/terminal-server"
       );
-      const handle = startTerminalServer();
+      // Sessions on another machine's Docker name an endpoint id; the host
+      // comes from the database, never from the browser (spec 26).
+      const handle = startTerminalServer({
+        resolveDockerHost: async (endpointId) => {
+          const { prisma } = await import("@nexux/db");
+          const endpoint = await prisma.dockerEndpoint.findUnique({
+            where: { id: endpointId },
+            select: { host: true },
+          });
+          return endpoint?.host ?? null;
+        },
+      });
       console.log(`[instrumentation] terminal server up on :${handle.port}`);
     } catch (err) {
       console.error("[instrumentation] terminal server failed to start:", err);

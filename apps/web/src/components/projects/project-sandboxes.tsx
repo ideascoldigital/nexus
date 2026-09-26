@@ -160,6 +160,7 @@ import {
   type StackEnvSource,
   type StackServiceSummary,
 } from "@/services/sandbox";
+import { dockerTerminalTarget } from "@/lib/terminal-target";
 import { DockerEndpointPicker } from "@/components/projects/docker-endpoint-picker";
 import { parseDotenvWithDiagnostics } from "@/lib/stack/dotenv";
 import {
@@ -3860,14 +3861,13 @@ function SandboxRow({
   // from this session (node_modules, .next) would otherwise land root-owned and
   // break the dev servers and the agent, which both run as nexux. Passwordless
   // sudo is configured for the rare step that genuinely needs root.
-  // A container on another machine's Docker (spec 26) has no terminal yet:
-  // `docker://` attaches on this machine's daemon, which would not find it.
+  // A container on another machine's Docker (spec 26). The terminal reaches
+  // it through its endpoint; VS Code still attaches through this machine's
+  // daemon only.
   const onRemoteDocker = Boolean(sandbox.dockerHost);
   const terminalTarget =
     sandbox.provider === "local"
-      ? sandbox.instanceId && !onRemoteDocker
-        ? `docker://${sandbox.instanceId}${terminalPath}`
-        : null
+      ? dockerTerminalTarget(sandbox, terminalPath)
       : sandbox.publicIp
         ? `ssh://nexus@${sandbox.publicIp}${terminalPath}`
         : null;
