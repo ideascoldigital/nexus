@@ -611,3 +611,64 @@ test("a custom setup script runs before the marker", () => {
   const marker = script.indexOf(`> ${HOST_MARKER}`);
   assert.ok(custom > 0 && custom < marker);
 });
+
+// ---- endpoint hosts (spec 27) ------------------------------------------------
+
+const endpointCompose = () =>
+  renderHostCompose({ imageRef: "ghcr.io/o/r:latest", mode: "endpoint", name: "Omarchy Host" });
+
+test("an endpoint host publishes nothing — the tailnet is the only way in", () => {
+  const compose = endpointCompose();
+  // No ports: key at all, not merely none on 0.0.0.0. The LAN of a machine we
+  // do not own must not see an app with no authentication.
+  assert.ok(!/^\s+ports:/m.test(compose), compose);
+  assert.ok(compose.includes("network_mode: service:tailscale"));
+  // Userspace: no tun device or capabilities to ask of someone's daemon.
+  assert.ok(compose.includes('TS_USERSPACE: "true"'));
+  // Checked on the YAML, not the prose: the comment explaining the rule names
+  // both things it rules out.
+  const yaml = compose
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n");
+  assert.ok(!/cap_add|NET_ADMIN|\/dev\/net\/tun|devices:/.test(yaml), yaml);
+});
+
+test("an endpoint host's secrets are variables, never values", () => {
+  const compose = endpointCompose();
+  assert.ok(compose.includes('TS_AUTHKEY: "${TS_AUTHKEY}"'));
+  assert.ok(!compose.includes("tskey-"));
+});
+
+test("an endpoint host has no root-side updater and says so to the app", () => {
+  const compose = endpointCompose();
+  assert.ok(!compose.includes("/host-control"));
+  assert.ok(!compose.includes("docker.sock"));
+  assert.ok(compose.includes('NEXUX_HOST_KIND: "endpoint"'));
+});
+
+test("the node keeps its identity across recreation, under a safe hostname", () => {
+  const compose = endpointCompose();
+  assert.ok(compose.includes("- ts-state:/var/lib/tailscale"));
+  assert.match(compose, /^volumes:$[\s\S]*^ {2}ts-state:$/m);
+  assert.ok(compose.includes(`hostname: ${safeHostName("Omarchy Host")}`));
+  assert.throws(
+    () => renderHostCompose({ imageRef: "x", mode: "endpoint" }),
+    /needs its tailnet name/,
+  );
+});
+
+test("the app is configured the same on a VM host and an endpoint host", () => {
+  // Pull each file's nexux environment block and compare: the only allowed
+  // difference is the endpoint's NEXUX_HOST_KIND.
+  const envOf = (compose: string) => {
+    const block = compose.split("  nexux:\n")[1].split("\n    environment:\n")[1];
+    return block
+      .split("\n")
+      .filter((l) => /^ {6}[A-Z_]+: /.test(l))
+      .filter((l) => !l.includes("NEXUX_HOST_KIND"));
+  };
+  const vm = envOf(renderHostCompose({ imageRef: "ghcr.io/o/r:latest" }));
+  assert.ok(vm.length >= 8, vm.join("\n"));
+  assert.deepEqual(envOf(endpointCompose()), vm);
+});
