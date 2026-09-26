@@ -85,6 +85,15 @@ test("probe failures carry a hint and the raw stderr", () => {
   assert.match(msg, /docker group/);
   assert.match(msg, /permission denied while trying/);
   assert.match(explainProbeFailure("jairo@box: Permission denied (publickey)."), /authorized_keys/);
+  const changed = explainProbeFailure(
+    "Offending ECDSA key in /Users/me/.ssh/known_hosts:7\r\nHost key for 192.168.0.35 has changed and you have requested strict checking.\r\nHost key verification failed.",
+  );
+  assert.match(changed, /host key changed/);
+  assert.doesNotMatch(changed, /isn't trusted yet/);
+  assert.match(
+    explainProbeFailure("Host key verification failed."),
+    /isn't trusted yet/,
+  );
   // Unknown failures still say what happened.
   assert.equal(explainProbeFailure("something odd"), "something odd");
   assert.match(explainProbeFailure(""), /without saying why/);

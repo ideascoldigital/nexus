@@ -121,6 +121,13 @@ export function explainProbeFailure(stderr: string): string {
       /permission denied \((publickey|password|keyboard)/i,
       "SSH key authentication failed — this machine's key must be in that user's authorized_keys (password prompts are not supported).",
     ],
+    // Before the generic verification failure: a *changed* key is either a
+    // reinstalled machine or someone in the middle, and only the user can
+    // tell which — so say what changed and how to clear it, never accept it.
+    [
+      /remote host identification has changed|host key for .* has changed/i,
+      "The remote's host key changed since this machine last connected. If you reinstalled it, remove the old key (ssh-keygen -R <host>) and ssh to it once to accept the new one; if you didn't, don't.",
+    ],
     [
       /host key verification failed/i,
       "The remote's host key isn't trusted yet — ssh to it once from a terminal to accept it.",
