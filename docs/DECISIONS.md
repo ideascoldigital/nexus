@@ -741,3 +741,30 @@ env. It is still the wrong unit. Spec 26.
 - **Probe before saving.** An endpoint that cannot run a sandbox is not worth
   a row, and the error is most useful while the form is still open. Later
   re-checks record failures instead, next to the last facts that were true.
+
+## D-80 — One server per database; the installed app can point at any (2026-09-26)
+
+Letting the packaged app use the dev server's database (`~/.nexux/native.json`)
+made two servers on one SQLite file a two-click accident.
+
+- **The lock is about work, not the file.** SQLite survives two writers. The
+  work does not: each server boots by failing "orphaned" tasks and settling
+  "orphaned" provisions, judged by in-memory state, so a second server kills
+  the first one's runs; both would also run the scheduler twice and poll
+  Telegram (409). `<db>.lock` (atomic create, pid + origin) is taken before
+  anything else in startup — including migration, which is why it has a
+  client-free entry point — and a live holder means refuse, naming it. A dead
+  pid is stale and taken over.
+- **`native.json`, not env vars.** An app launched from Finder or the Start
+  menu has no shell environment. The file lives at a fixed place because it
+  says where everything else is, and the log stays beside it.
+- **A broken override never falls back.** An unknown key, a relative path or a
+  directory for a database stops the launch with the reason on screen. Silently
+  opening the default database instead would show a different set of projects
+  — indistinguishable, to the user, from losing theirs.
+- **Two migration ledgers, kept in agreement.** The dev database is migrated by
+  `prisma migrate` (`_prisma_migrations`), the sidecar by `ensureMigrated`
+  (`_nexux_migrations`). The runner adopts Prisma's finished rows and writes
+  Prisma's (sha256 checksum) for what it applies, so neither tool re-runs the
+  other's work.
+
