@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import {
+  AppWindow,
   Bot,
   Cloud,
   DatabaseBackup,
@@ -37,6 +38,7 @@ import { GitLabServersSection } from "@/components/gitlab/gitlab-servers-section
 import { ApiTokensSection } from "@/components/settings/api-tokens";
 import { BackupMigrationSection } from "@/components/settings/backup-migration";
 import { HostModelSection } from "@/components/settings/host-model";
+import { DesktopAppSection } from "@/components/settings/desktop-app";
 import { DockerEndpointsSection } from "@/components/settings/docker-endpoints";
 import { NexusHostsSection } from "@/components/settings/nexus-hosts";
 import { SandboxNamingSection } from "@/components/settings/sandbox-naming";
@@ -208,6 +210,7 @@ const SETTINGS_TABS = [
   "communications",
   "integrations",
   "terminal",
+  "desktop",
   "backup",
 ] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
@@ -282,6 +285,13 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
         label: "Terminal",
         icon: TerminalIcon,
         description: "The shell the in-app terminal opens with.",
+      },
+      {
+        id: "desktop",
+        label: "Desktop app",
+        icon: AppWindow,
+        description:
+          "Which database and data folder the desktop app opens — point it at your dev database to test the packaged app on real data.",
       },
       {
         id: "backup",
@@ -917,6 +927,8 @@ function SettingsPageContent() {
               )}
 
               {activeTab === "terminal" && <TerminalShellSection />}
+
+              {activeTab === "desktop" && <DesktopAppSection />}
 
               {activeTab === "backup" && (
                 <>

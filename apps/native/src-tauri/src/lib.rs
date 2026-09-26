@@ -314,6 +314,9 @@ pub fn run() {
                 .env("HOSTNAME", SIDECAR_HOST)
                 .env("NEXUX_TERMINAL_PORT", SIDECAR_TERMINAL_PORT.to_string())
                 .env("NEXUX_MODE", "local")
+                // Lets the server tell the desktop app from `pnpm dev` — the
+                // data-location settings say "reopen Nexus" only in the app.
+                .env("NEXUX_SHELL", "native")
                 .env("DATABASE_URL", &db_url)
                 .env("NEXUX_DATA_DIR", data_dir.to_string_lossy().to_string())
                 .env(
