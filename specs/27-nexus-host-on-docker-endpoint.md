@@ -1,7 +1,9 @@
 # 27 — A Nexus host on a machine you already have
 
-Status: **phase 1 shipped** (2026-09-26) — schema, endpoint-removal guard,
-the endpoint compose stack. Nothing provisions a host on an endpoint yet.
+Status: **phases 1–2 shipped** (2026-09-26) — a host can be created on an
+endpoint from the hosts form. Update, destroy and the host terminal refuse
+endpoint hosts with the manual command until phase 3. Not yet walked end to
+end on a real endpoint.
 Depends on [spec 19](19-nexus-host-provisioning.md) (Nexus hosts) and
 [spec 26](26-remote-docker-endpoints.md) (Docker endpoints), both shipped.
 
@@ -215,7 +217,7 @@ hosts.
 
 1. ✅ Schema (`provider` value, `dockerEndpointId`), endpoint-DELETE guard,
    `renderHostCompose` endpoint mode + tests.
-2. `createHost`/provision/poll for endpoints; host form gains the provider;
+2. ✅ `createHost`/provision/poll for endpoints; host form gains the provider;
    registry auth via temp `DOCKER_CONFIG`.
 3. Update and destroy branches; terminal target for endpoint hosts; the host
    dashboard's Update button explains itself.
@@ -232,3 +234,22 @@ hosts.
 - Removing an endpoint detaches *destroyed* hosts in the same transaction
   (their FK restricts), and refuses while a live one exists. The endpoints
   list shows a host count beside the sandbox count.
+
+## As built (phase 2)
+
+- **Platforms come from the pull check.** `assertImagePullable` now GETs the
+  manifest it already probed and returns the index's platforms (attestations
+  excluded); a single-platform manifest returns null — no opinion. The endpoint
+  arch from the probe is mapped (`x86_64` → `amd64`) and compared.
+- **Order of the bootstrap** is chosen so each failure names its cause: pull
+  every image (registry), start tailscale and wait for its IPv4 (auth key —
+  its log is captured on timeout), write `NEXUX_WEB_ORIGIN=http://<ip>:3030`,
+  start the rest, then poll `/api/version` from inside the container with
+  `node` (not `/api/health`, which probes terraform and docker).
+- **Temp `DOCKER_CONFIG`** links `~/.docker/cli-plugins`, because that is where
+  Docker Desktop keeps `compose`; without it the pull would fail with
+  "unknown command: compose".
+- **`NEXUX_TEST_HOST_PROVISION=skip`** stops route tests after the row: an
+  endpoint named in a test could be a live machine on this network.
+- A running server keeps its Prisma client in memory; a new column needs a
+  restart before routes that select it stop answering 500.
