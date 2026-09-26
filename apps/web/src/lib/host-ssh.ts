@@ -89,6 +89,14 @@ export function hostSshAddress(
  * Returns null when the host has no address yet.
  */
 export function ensureHostSshAccess(host: HostSshSource): HostSshTarget | null {
+  // A host on a Docker endpoint has no sshd of its own — its stack is
+  // containers on someone else's machine (spec 27). Its terminal goes through
+  // the endpoint instead; there is no SSH target to hand out.
+  if (host.provider === "docker-endpoint") {
+    throw new Error(
+      "A host on a Docker endpoint has no SSH of its own — open its terminal from the host's row instead.",
+    );
+  }
   const address = hostSshAddress(host);
   if (!address) return null;
 

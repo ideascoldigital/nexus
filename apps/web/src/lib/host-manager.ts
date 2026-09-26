@@ -39,6 +39,8 @@ import {
   resolveProviderCredentials,
   resolveTailscaleKey,
 } from "@/lib/sandbox-manager";
+import { probe as probeEndpoint } from "@/lib/docker-endpoints";
+import { provisionEndpointHost } from "@/lib/host-endpoint";
 
 // Re-exported for the hosts routes, which historically import it from here.
 // The implementation moved to sandbox-manager so sandbox launches can share it
@@ -498,7 +500,10 @@ export async function getHostReadiness(): Promise<HostReadiness> {
 
 export type CreateHostInput = {
   name: string;
-  provider: "civo" | "aws";
+  /** "docker-endpoint": the stack runs on a machine you already have (spec 27). */
+  provider: "civo" | "aws" | "docker-endpoint";
+  /** Which Docker endpoint, for provider "docker-endpoint". */
+  dockerEndpointId?: string | null;
   credentialId?: string | null;
   tailscaleCredentialId?: string | null;
   /** Git credential the host logs in to the image registry with (GHCR). */
@@ -521,6 +526,7 @@ export async function createHost(input: CreateHostInput) {
       "This install is itself a Nexus host. Create hosts from your local install.",
     );
   }
+  if (input.provider === "docker-endpoint") return createEndpointHost(input);
   if (!(await hasTerraform())) {
     throw new Error(
       "terraform CLI not found. Install it from developer.hashicorp.com/terraform and restart Nexus.",
@@ -631,6 +637,123 @@ export async function createHost(input: CreateHostInput) {
           error: err instanceof Error ? err.message : String(err),
         },
       })
+      .catch(() => undefined);
+  });
+  activeOps.set(host.id, op);
+  void op.finally(() => activeOps.delete(host.id));
+
+  return prisma.nexusHost.findUnique({ where: { id: host.id } });
+}
+
+/**
+ * A host whose stack runs on a Docker endpoint (spec 27). Same discipline as a
+ * VM host: every precondition that can be checked is checked before the row
+ * exists — here there is no bill, but a host that can never start is still a
+ * row the user has to understand and clean up.
+ */
+async function createEndpointHost(input: CreateHostInput) {
+  const name = safeHostName(input.name);
+  const imageRef = (input.imageRef || DEFAULT_HOST_IMAGE).trim();
+  if (!isValidImageRef(imageRef)) {
+    throw new Error(
+      `"${imageRef}" is not a valid image reference (expected something like ghcr.io/owner/repo:tag).`,
+    );
+  }
+
+  const endpoint = input.dockerEndpointId
+    ? await prisma.dockerEndpoint.findUnique({ where: { id: input.dockerEndpointId } })
+    : null;
+  if (!endpoint) {
+    throw new Error("Pick a Docker endpoint (Settings → Cloud → Docker endpoints).");
+  }
+
+  // Two stacks with one project name on one daemon would be one stack.
+  const taken = await prisma.nexusHost.findFirst({
+    where: { name, status: { not: "destroyed" } },
+    select: { id: true },
+  });
+  if (taken) throw new Error(`There is already a host called "${name}".`);
+
+  // Same rule as a VM host (D-34), for the same reason: the stack publishes
+  // nothing, so a Tailscale that cannot join unattended is a host nobody can
+  // reach — and there is no other door it should have.
+  const tailscale = await resolveTailscaleKey(input.tailscaleCredentialId);
+  if (!tailscale?.authKey) {
+    throw new Error(
+      "A host needs a Tailscale credential with an auth key (Settings → Cloud) — it starts unattended and cannot complete a browser login.",
+    );
+  }
+
+  // Reachable now, and the architecture the image must match.
+  const probed = await probeEndpoint(endpoint.host);
+  if (!probed.ok) {
+    throw new Error(`Docker on "${endpoint.name}" isn't answering: ${probed.error}`);
+  }
+
+  const resolved = await resolveHostRegistryAuth(imageRef, input.registryCredentialId);
+  const { registry, platforms } = await assertImagePullable(
+    imageRef,
+    resolved,
+    Boolean(input.registryCredentialId),
+  );
+  const arch = probed.arch ? ociArch(probed.arch) : null;
+  if (arch && platforms && !platforms.some((p) => p.split("/")[1] === arch)) {
+    throw new Error(
+      `${imageRef} is published for ${platforms.join(", ")} — "${endpoint.name}" is ${arch}, so it could never start there.`,
+    );
+  }
+
+  const host = await prisma.nexusHost.create({
+    data: {
+      name,
+      status: "pending",
+      provider: "docker-endpoint",
+      dockerEndpointId: endpoint.id,
+      tailscaleCredentialId: tailscale.credentialId,
+      registryCredentialId: registry?.credentialId ?? null,
+      // What the list shows as "where" and "what": the machine, and Docker.
+      region: endpoint.name,
+      size: "docker",
+      diskImage: "",
+      imageRef,
+      pullEmbeddingModel: input.pullEmbeddingModel ?? true,
+      workDir: "",
+    },
+  });
+  const workDir = hostWorkDir(host.id);
+  await prisma.nexusHost.update({ where: { id: host.id }, data: { workDir } });
+
+  // Route tests stop here: the row is what they check, and the endpoint they
+  // name may well be a real machine on this network. Env-guarded like
+  // NEXUX_TEST_TERRAFORM, so production cannot reach it.
+  if (process.env.NEXUX_TEST_HOST_PROVISION === "skip") {
+    return prisma.nexusHost.findUnique({ where: { id: host.id } });
+  }
+
+  const op = provisionEndpointHost(
+    {
+      name,
+      imageRef,
+      dockerHost: endpoint.host,
+      workDir,
+      tailscaleAuthKey: tailscale.authKey,
+      tailscaleLoginServer: tailscale.loginServer,
+      registry: registry
+        ? { host: registryHost(imageRef), username: registry.username, password: registry.password }
+        : null,
+      pullEmbeddingModel: input.pullEmbeddingModel ?? true,
+    },
+    {
+      log: (chunk) => void appendLog(host.id, chunk),
+      update: async (data) => {
+        await prisma.nexusHost.update({ where: { id: host.id }, data });
+      },
+    },
+  ).catch(async (err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    await appendLog(host.id, `[nexus-host] ERROR: ${message}\n`);
+    await prisma.nexusHost
+      .update({ where: { id: host.id }, data: { status: "error", error: message } })
       .catch(() => undefined);
   });
   activeOps.set(host.id, op);
@@ -794,6 +917,14 @@ export async function destroyHost(hostId: string) {
 
   const existing = activeOps.get(hostId);
   if (existing) await existing.catch(() => undefined);
+
+  if (host.provider === "docker-endpoint") {
+    // Spec 27 phase 3. Refused plainly rather than reaching for a cloud
+    // credential this host never had.
+    throw new Error(
+      `Destroying a host on a Docker endpoint isn't available yet. On the endpoint: docker compose -p ${host.instanceId ?? "nexus-host-<name>"} down --volumes (this deletes its data).`,
+    );
+  }
 
   const cloud = await resolveProviderCredentials(host.provider, host.credentialId);
   if (!cloud) {

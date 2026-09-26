@@ -111,6 +111,13 @@ export async function updateHost(hostId: string): Promise<HostUpdateResult> {
       `This host is ${host.status}, not running — there is nothing to update yet.`,
     );
   }
+  if (host.provider === "docker-endpoint") {
+    // Spec 27 phase 3 — until then, say how rather than try SSH to a box
+    // that has none.
+    throw new Error(
+      `Updating a host on a Docker endpoint isn't available yet. On the endpoint: docker compose -p ${host.instanceId ?? "nexus-host-<name>"} pull && up -d.`,
+    );
+  }
 
   const address = hostSshAddress(host);
   if (!address) {
