@@ -334,12 +334,22 @@ test("docker targets parse with and without an endpoint", async () => {
     endpointId: null,
     container: "nexux-app",
     path: "/opt/nexus",
+    kind: "sandbox",
   });
   assert.deepEqual(parseDockerTerminalTarget("docker://cmfoo123@nexux-app"), {
     endpointId: "cmfoo123",
     container: "nexux-app",
     path: "",
+    kind: "sandbox",
   });
+  // A Nexus host's app container (spec 27): only ever named with its endpoint.
+  assert.deepEqual(parseDockerTerminalTarget("docker-host://cmfoo123@nexus-host-home-nexux-1"), {
+    endpointId: "cmfoo123",
+    container: "nexus-host-home-nexux-1",
+    path: "",
+    kind: "host",
+  });
+  assert.equal(parseDockerTerminalTarget("docker-host://nexus-host-home-nexux-1"), null);
   // A host never travels in the URL — only an id the server looks up.
   for (const bad of [
     "docker://ssh://omarchy@nexux-app",

@@ -84,14 +84,25 @@ export type DockerTerminalTarget = {
   endpointId: string | null;
   container: string;
   path: string;
+  /**
+   * "sandbox" (`docker://`): exec as the sandbox's agent user into
+   * /opt/nexus. "host" (`docker-host://`, spec 27): a Nexus host's own app
+   * container — exec as the image's own user into /app, and only ever on an
+   * endpoint, since that is the only place such a container is reached this way.
+   */
+  kind: "sandbox" | "host";
 };
 
 export function parseDockerTerminalTarget(cwd: string): DockerTerminalTarget | null {
   const m = cwd.match(
-    /^docker:\/\/(?:([a-z0-9]{1,64})@)?([a-z0-9][a-z0-9._-]*)((?:\/[a-z0-9._-]+)*)\/?$/i,
+    /^(docker|docker-host):\/\/(?:([a-z0-9]{1,64})@)?([a-z0-9][a-z0-9._-]*)((?:\/[a-z0-9._-]+)*)\/?$/i,
   );
   if (!m) return null;
-  return { endpointId: m[1] ?? null, container: m[2], path: m[3] || "" };
+  const kind = m[1].toLowerCase() === "docker-host" ? "host" : "sandbox";
+  // A host container is only ever on an endpoint; without one this would be a
+  // container on the machine running this server, which is not what it names.
+  if (kind === "host" && !m[2]) return null;
+  return { endpointId: m[2] ?? null, container: m[3], path: m[4] || "", kind };
 }
 
 /**
@@ -267,17 +278,19 @@ export function startTerminalServer(
   // user, and anything this session builds there (node_modules, .next, dist)
   // would otherwise land root-owned and break the dev servers and the agent
   // that run as nexux. `sudo` is passwordless here for the rare root step.
+  const hostContainer = dockerTarget?.kind === "host";
   const dockerArgs = dockerContainer
     ? [
         ...(dockerHost ? ["-H", dockerHost] : []),
         "exec",
         "-it",
-        "-u",
-        SANDBOX_USER,
+        // A host's app container runs as the image's own user; forcing the
+        // sandbox user there fails with "unable to find user".
+        ...(hostContainer ? [] : ["-u", SANDBOX_USER]),
         dockerContainer,
         "bash",
         "-c",
-        `cd '${dockerPath || "/opt/nexus"}' 2>/dev/null; exec bash -l`,
+        `cd '${dockerPath || (hostContainer ? "/app" : "/opt/nexus")}' 2>/dev/null; exec bash -l`,
       ]
     : [];
 
