@@ -1,10 +1,10 @@
 # 26 — Local sandboxes on another machine's Docker
 
-Status: **phases 1–2 shipped** (2026-09-26, D-79) — endpoints can be added,
-and a local sandbox can be launched, polled, paused, resumed, exec'd into and
-destroyed on one. Terminal, VS Code and the browser session refuse remote
-sandboxes until phase 3; metrics (phase 4) still only see this machine. What
-changed from the draft is under *As built* at the end.
+Status: **phases 1–3 shipped** (2026-09-26, D-79) — endpoints can be added;
+a local sandbox can be launched, exec'd into, paused, resumed and destroyed on
+one; the in-app terminal and the browser session reach it. Still open: VS Code
+attach (not in v1) and metrics per endpoint (phase 4). What changed from the
+draft is under *As built* at the end.
 
 ## Goal
 
@@ -238,7 +238,7 @@ endpoint name, and the VS Code action (below).
 2. ✅ `dockerHostArgs` threaded through `local.ts` and the container transport;
    picker; bind-mount refusal. Sandboxes on B work
    except terminal and browser.
-3. Terminal target + browser forward.
+3. ✅ Terminal target + browser forward.
 4. Metrics per endpoint.
 
 ## As built (phase 1)
@@ -293,3 +293,25 @@ endpoint name, and the VS Code action (below).
   this machine's daemon and find nothing.
 - `region` on a remote row is the endpoint's name, so the row reads
   `local · docker @ omarchy` with no UI change.
+
+## As built (phase 3)
+
+- **The terminal server stays database-free.** `startTerminalServer` takes an
+  injected `resolveDockerHost(endpointId)`; the web app passes one backed by
+  `DockerEndpoint`. The standalone CLI entry has none, so a remote target
+  closes with a message instead of exec'ing on this machine's daemon, where
+  the container does not exist. The socket is paused during the lookup.
+- **One helper builds every terminal target** (`lib/terminal-target.ts`), used
+  by the sandbox row and the terminal picker. Restored tabs are pruned by
+  container name; the old regex would have read `id@container` as the name and
+  dropped every remote tab on reload.
+- **The browser forward authenticates as the user, not as Nexux.**
+  `endpointForwardArgs` uses the user's ssh config, keys and known_hosts for
+  the endpoint — what `docker -H ssh://…` itself uses — with `BatchMode=yes`.
+  The sandbox key is authorized inside sandboxes, not on the endpoint.
+- **SSH connection reuse (ControlMaster) was not needed yet** and is not done:
+  the endpoint is reached through the user's own ssh config, where a
+  `ControlMaster auto` for that host already applies if they want it.
+- Smoke-tested against a real LAN endpoint with a throwaway busybox container:
+  `docker -H … port` read the remote port, the forward served its page, and
+  the container was removed.
