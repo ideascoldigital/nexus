@@ -128,15 +128,29 @@ test("terminal port passed by lib.rs is the one it defines", () => {
   );
 });
 
-test("native dev port agrees between beforeDevCommand and devUrl", () => {
+test("native dev port agrees between the web script it runs and devUrl", () => {
+  // Checked against the script, not the command line: this used to assert a
+  // PORT=3100 prefix on beforeDevCommand while the script it ran hardcoded
+  // `-p 3333`, which wins over PORT — so Next served :3333, the webview waited
+  // on :3100, and the test passed.
   const conf = readJson("apps/native/src-tauri/tauri.conf.json");
-  const devPort = (conf.build.beforeDevCommand as string).match(
-    /PORT=(\d+)/,
+  const scriptName = (conf.build.beforeDevCommand as string).match(
+    /--filter @nexux\/web (\S+)/,
   )?.[1];
-  assert.ok(devPort, "beforeDevCommand does not set PORT");
+  assert.ok(scriptName, "beforeDevCommand no longer runs a @nexux/web script");
+  const script = readJson("apps/web/package.json").scripts[scriptName!] as string;
+  assert.ok(script, `@nexux/web has no "${scriptName}" script`);
+  const port = script.match(/-p (\d+)/)?.[1];
+  assert.ok(port, `${scriptName} does not pin its port with -p`);
   assert.ok(
-    (conf.build.devUrl as string).endsWith(`:${devPort}`),
-    `devUrl (${conf.build.devUrl}) does not match beforeDevCommand PORT=${devPort}`,
+    (conf.build.devUrl as string).endsWith(`:${port}`),
+    `devUrl (${conf.build.devUrl}) does not match ${scriptName}'s -p ${port}`,
+  );
+  // The terminal server takes this as its CORS origin; a mismatch refuses the
+  // webview's WebSocket.
+  assert.ok(
+    script.includes(`NEXUX_WEB_ORIGIN=http://localhost:${port}`),
+    `${scriptName}'s NEXUX_WEB_ORIGIN does not name port ${port}`,
   );
 });
 

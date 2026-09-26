@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "cross-env NEXUX_WEB_ORIGIN=http://localhost:3333 next dev --turbopack -p 3333",
     "dev:next": "cross-env NEXUX_WEB_ORIGIN=http://localhost:3333 next dev --turbopack -p 3333",
+    "dev:native": "cross-env NEXUX_WEB_ORIGIN=http://localhost:3100 NEXUX_TERMINAL_PORT=3102 next dev --turbopack -p 3100",
     "dev:terminal": "pnpm --filter @nexux/terminal dev:terminal",
     "dev:server": "pnpm --filter @nexux/terminal dev:server",
     "build": "next build",

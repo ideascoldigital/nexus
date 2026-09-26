@@ -4,7 +4,7 @@
   "version": "0.1.8",
   "identifier": "com.ideascol.nexux",
   "build": {
-    "beforeDevCommand": "PORT=3100 NEXUX_TERMINAL_PORT=3102 pnpm --filter @nexux/web dev:next",
+    "beforeDevCommand": "pnpm --filter @nexux/web dev:native",
     "beforeBuildCommand": "pnpm --filter @nexux/native build:sidecar",
     "devUrl": "http://localhost:3100",
     "frontendDist": "sidecar-build/static"
