@@ -64,7 +64,12 @@ before(async () => {
   cwd = fs.mkdtempSync(path.join(os.tmpdir(), "nexux-term-"));
   // Server reads config at call time; import after env is set for safety.
   const { startTerminalServer } = await import("./terminal-server");
-  handle = startTerminalServer();
+  // One known endpoint, pointing somewhere that cannot resolve: enough to see
+  // the session handed to docker with -H, without a daemon to reach.
+  handle = startTerminalServer({
+    resolveDockerHost: async (id) =>
+      id === "ep1" ? "ssh://nobody@nexux-test.invalid" : null,
+  });
   await new Promise((r) => setTimeout(r, 100));
 });
 
@@ -319,4 +324,47 @@ test("no queue size ever asks for both actions", () => {
     assert.ok(running !== "resume", `${n} never resumes a running pty`);
     assert.ok(held !== "pause", `${n} never re-pauses a paused pty`);
   }
+});
+
+// --- docker targets on another machine (spec 26) ----------------------------
+
+test("docker targets parse with and without an endpoint", async () => {
+  const { parseDockerTerminalTarget } = await import("./terminal-server");
+  assert.deepEqual(parseDockerTerminalTarget("docker://nexux-app/opt/nexus"), {
+    endpointId: null,
+    container: "nexux-app",
+    path: "/opt/nexus",
+  });
+  assert.deepEqual(parseDockerTerminalTarget("docker://cmfoo123@nexux-app"), {
+    endpointId: "cmfoo123",
+    container: "nexux-app",
+    path: "",
+  });
+  // A host never travels in the URL — only an id the server looks up.
+  for (const bad of [
+    "docker://ssh://omarchy@nexux-app",
+    "docker://-H@nexux-app",
+    "docker://a.b@nexux-app",
+    "docker://id@-app",
+    "docker://id@app/it's",
+  ]) {
+    assert.equal(parseDockerTerminalTarget(bad), null, bad);
+  }
+});
+
+test("a container on a known endpoint is exec'd through that daemon", posixShell, async () => {
+  const s = await connect({ cwd: "docker://ep1@nexux-app/opt/nexus", cols: "80", rows: "24" });
+  // The connect banner names the daemon, and docker's own failure to reach it
+  // proves -H went into argv (a local exec would say "No such container").
+  await s.waitFor(/nexux-app on ssh:\/\/nobody@nexux-test\.invalid/);
+  // Not /connect/ — the banner itself says "connecting".
+  await s.waitFor(/Could not resolve hostname|error during connect|docker: (command )?not found|ENOENT/i);
+  s.ws.close();
+});
+
+test("an unknown endpoint closes the session instead of falling back to this machine", posixShell, async () => {
+  const s = await connect({ cwd: "docker://gone@nexux-app", cols: "80", rows: "24" });
+  await s.waitFor(/no Docker endpoint gone/);
+  assert.ok(!/No such container/i.test(s.output()), s.output());
+  s.ws.close();
 });

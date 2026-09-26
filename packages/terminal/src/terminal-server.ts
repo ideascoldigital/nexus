@@ -72,6 +72,39 @@ export function sshLaunchArgs(
 }
 
 /**
+ * A `docker://` session target: `docker://[<endpointId>@]<container>[/path]`.
+ *
+ * The endpoint id names another machine's Docker (spec 26) and is resolved to
+ * its `ssh://` host on the server — the browser never sends a host, because
+ * whatever arrives here ends up in argv. Ids are cuids ([a-z0-9]); container
+ * names are Docker's [a-zA-Z0-9][a-zA-Z0-9_.-]*; the path allows no quotes or
+ * spaces. None of it can pose as a flag or break the shell quoting below.
+ */
+export type DockerTerminalTarget = {
+  endpointId: string | null;
+  container: string;
+  path: string;
+};
+
+export function parseDockerTerminalTarget(cwd: string): DockerTerminalTarget | null {
+  const m = cwd.match(
+    /^docker:\/\/(?:([a-z0-9]{1,64})@)?([a-z0-9][a-z0-9._-]*)((?:\/[a-z0-9._-]+)*)\/?$/i,
+  );
+  if (!m) return null;
+  return { endpointId: m[1] ?? null, container: m[2], path: m[3] || "" };
+}
+
+/**
+ * Looks up an endpoint id's `ssh://` host. Injected by the web app, which owns
+ * the database; the standalone CLI entry has none and refuses remote targets.
+ */
+export type DockerHostResolver = (endpointId: string) => Promise<string | null>;
+
+export interface TerminalServerOptions {
+  resolveDockerHost?: DockerHostResolver;
+}
+
+/**
  * Start the terminal WebSocket server (node-pty backed). Returns a handle so the
  * caller can shut it down. Has no module-level side effects — call it from the
  * Next sidecar (start.js) in prod, or from the CLI entry below in dev.
@@ -100,7 +133,9 @@ export function backpressureAction(
   return bufferedBytes <= RESUME_BELOW_BYTES ? "resume" : "none";
 }
 
-export function startTerminalServer(): TerminalServerHandle {
+export function startTerminalServer(
+  options: TerminalServerOptions = {},
+): TerminalServerHandle {
   const PORT = Number(process.env.NEXUX_TERMINAL_PORT ?? 3002);
   const CORS_ORIGIN = process.env.NEXUX_WEB_ORIGIN ?? "http://localhost:3000";
   const { shell: shellConfig } = getConfig();
@@ -118,7 +153,7 @@ export function startTerminalServer(): TerminalServerHandle {
 
   const wss = new WebSocketServer({ server });
 
-  wss.on("connection", (ws: WebSocket, req) => {
+  wss.on("connection", async (ws: WebSocket, req) => {
   const url = new URL(req.url || "", "ws://localhost");
   const cwd = url.searchParams.get("cwd") || shellConfig.home;
   const cols = parseInt(url.searchParams.get("cols") || "80", 10) || 80;
@@ -150,13 +185,35 @@ export function startTerminalServer(): TerminalServerHandle {
   // reasoning as above: Docker names are [a-zA-Z0-9][a-zA-Z0-9_.-]* and the
   // path allows no quotes/spaces, so neither can pose as a flag or break out
   // of the shell quoting below.
-  const dockerMatch = cwd.match(
-    /^docker:\/\/([a-z0-9][a-z0-9._-]*)((?:\/[a-z0-9._-]+)*)\/?$/i,
-  );
-  const dockerContainer = sshTarget ? undefined : dockerMatch?.[1];
-  const dockerPath = dockerMatch?.[2] || "";
+  const dockerTarget = sshTarget ? null : parseDockerTerminalTarget(cwd);
+  const dockerContainer = dockerTarget?.container;
+  const dockerPath = dockerTarget?.path ?? "";
 
-  const remote = sshTarget || dockerContainer;
+  // A container on another machine's Docker: resolve its daemon before
+  // spawning. The socket is paused meanwhile so keystrokes typed during the
+  // lookup queue up instead of arriving before anything listens for them.
+  let dockerHost: string | null = null;
+  if (dockerTarget?.endpointId) {
+    ws.pause();
+    const resolved = await options
+      .resolveDockerHost?.(dockerTarget.endpointId)
+      .catch(() => null);
+    // Defensive: the value came from the database, validated on write, but it
+    // is about to become argv.
+    if (!resolved || !/^ssh:\/\/[a-z0-9_.@:[\]-]+$/i.test(resolved)) {
+      ws.send(
+        `\x1b[31m[no Docker endpoint ${dockerTarget.endpointId} — it may have been removed]\x1b[0m\r\n`,
+      );
+      ws.close();
+      return;
+    }
+    dockerHost = resolved;
+    ws.resume();
+  }
+
+  const remote =
+    sshTarget ||
+    (dockerContainer && dockerHost ? `${dockerContainer} on ${dockerHost}` : dockerContainer);
 
   console.log(
     sshTarget
@@ -212,6 +269,7 @@ export function startTerminalServer(): TerminalServerHandle {
   // that run as nexux. `sudo` is passwordless here for the rare root step.
   const dockerArgs = dockerContainer
     ? [
+        ...(dockerHost ? ["-H", dockerHost] : []),
         "exec",
         "-it",
         "-u",
