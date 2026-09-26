@@ -31,6 +31,7 @@ import {
   renderBrowserStartScript,
   renderBrowserStopScript,
   sandboxPrivateKeyPath,
+  sshUrlParts,
   VNC_TOKEN_LENGTH,
 } from "@nexux/sandbox";
 
@@ -130,6 +131,48 @@ export function forwardArgs(opts: {
   ];
 }
 
+/**
+ * The forward to a container on another machine's Docker (spec 26): to the
+ * port docker published on *that machine's* loopback, through the endpoint's
+ * own SSH.
+ *
+ * Authenticates the way `docker -H ssh://…` does — the user's ssh config and
+ * keys for that host, and its known_hosts — not with the sandbox key, which is
+ * authorized inside sandboxes and nowhere else. BatchMode, because there is
+ * no terminal to prompt on.
+ */
+export function endpointForwardArgs(opts: {
+  localPort: number;
+  remotePort: number;
+  /** The endpoint's host, `ssh://[user@]host[:port]`. */
+  dockerHost: string;
+}): string[] {
+  const parts = sshUrlParts(opts.dockerHost);
+  if (!parts) throw new Error(`Not a Docker endpoint host: ${opts.dockerHost}`);
+  return [
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=15",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=3",
+    "-o",
+    "ExitOnForwardFailure=yes",
+    ...(parts.port ? ["-p", String(parts.port)] : []),
+    "-N",
+    "-L",
+    // Loopback on both ends, for the reason forwardArgs gives — and on the far
+    // end because that is the only place docker published it.
+    `127.0.0.1:${opts.localPort}:127.0.0.1:${opts.remotePort}`,
+    // "--" so a hostname can never be read as an option, though the endpoint
+    // validation already forbids a leading "-".
+    "--",
+    parts.user ? `${parts.user}@${parts.hostname}` : parts.hostname,
+  ];
+}
+
 /** Wait until something answers on the forwarded port, or give up. */
 async function waitForPort(port: number, attempts = 30): Promise<boolean> {
   for (let i = 0; i < attempts; i++) {
@@ -197,8 +240,12 @@ export async function reapForwards(): Promise<void> {
 async function publishedPortFor(sandbox: {
   provider: string;
   instanceId: string | null;
+  dockerHost: string | null;
 }): Promise<number | null> {
   if (sandbox.provider !== "local" || !sandbox.instanceId) return null;
+  // On another machine's Docker the published port is on *that* machine;
+  // this one serves the session through a forward, like a cloud sandbox.
+  if (sandbox.dockerHost) return null;
   return browserWsPort(sandbox.instanceId).catch(() => null);
 }
 
@@ -247,15 +294,6 @@ export async function startBrowserSession(
   if (!sandboxReachable(sandbox)) {
     throw new Error("The sandbox is not running");
   }
-  // The bridge is published on the remote's loopback; reaching it needs an
-  // SSH forward to that machine (spec 26 phase 3). Refuse rather than start a
-  // session the panel could never connect to.
-  if (sandbox.provider === "local" && sandbox.dockerHost) {
-    throw new Error(
-      "The browser session isn't available yet for sandboxes on another machine's Docker.",
-    );
-  }
-
   // A restart must not leave the previous forward holding a local port.
   stopForward(sandboxId);
 
@@ -336,6 +374,26 @@ export async function startBrowserSession(
     return fail("The session script ended without reporting the browser up.");
   }
 
+  // A container on another machine's Docker: docker published the bridge on
+  // that machine's loopback. Read the port there, then forward to it through
+  // the endpoint's SSH — the same shape as a cloud sandbox, different door.
+  if (sandbox.provider === "local" && sandbox.dockerHost) {
+    const remotePort = sandbox.instanceId
+      ? await browserWsPort(sandbox.instanceId, { host: sandbox.dockerHost }).catch(() => null)
+      : null;
+    if (remotePort === null) {
+      return fail(
+        "This container publishes no browser port. It was created before the " +
+          "browser session shipped — destroy it and launch a new sandbox.",
+      );
+    }
+    const localPort = await freePort();
+    return openForward(
+      localPort,
+      endpointForwardArgs({ localPort, remotePort, dockerHost: sandbox.dockerHost }),
+    );
+  }
+
   // Local sandboxes have no sshd, so there is nothing to forward through —
   // docker publishes the port instead and the container is already reachable
   // from this machine.
@@ -356,10 +414,10 @@ export async function startBrowserSession(
 
   if (!sandbox.publicIp) return fail("The sandbox has no address to reach");
 
-  const localPort = await freePort();
   const target = sandboxTarget(sandbox, "/opt/nexus");
-  const child = spawn(
-    "ssh",
+  const localPort = await freePort();
+  return openForward(
+    localPort,
     forwardArgs({
       localPort,
       remotePort: started.wsPort,
@@ -367,24 +425,28 @@ export async function startBrowserSession(
       user: target.user ?? "nexus",
       privateKeyPath: sandboxPrivateKeyPath(getConfig().dataDir),
     }),
-    { stdio: "ignore", detached: false },
   );
-  forwards.set(sandboxId, { child, localPort, sandboxId });
-  child.on("exit", () => {
-    // Only clear if this is still the current forward: a restart replaces the
-    // entry, and the old child's exit must not unregister the new one.
-    if (forwards.get(sandboxId)?.child === child) forwards.delete(sandboxId);
-  });
 
-  if (!(await waitForPort(localPort))) {
-    return fail("The browser is up on the sandbox, but the SSH forward did not open.");
+  /** Spawn the ssh forward landing on `localPort` and mark the session running. */
+  async function openForward(localPort: number, args: string[]): Promise<BrowserSessionView> {
+    const child = spawn("ssh", args, { stdio: "ignore", detached: false });
+    forwards.set(sandboxId, { child, localPort, sandboxId });
+    child.on("exit", () => {
+      // Only clear if this is still the current forward: a restart replaces the
+      // entry, and the old child's exit must not unregister the new one.
+      if (forwards.get(sandboxId)?.child === child) forwards.delete(sandboxId);
+    });
+
+    if (!(await waitForPort(localPort))) {
+      return fail("The browser is up on the sandbox, but the SSH forward did not open.");
+    }
+
+    const updated = await prisma.browserSession.update({
+      where: { id: row.id },
+      data: { status: "running", error: null, startedAt: new Date() },
+    });
+    return toView(updated);
   }
-
-  const updated = await prisma.browserSession.update({
-    where: { id: row.id },
-    data: { status: "running", error: null, startedAt: new Date() },
-  });
-  return toView(updated);
 }
 
 /** Stop the session on the instance and drop the forward. */

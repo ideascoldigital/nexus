@@ -67,12 +67,15 @@ export function SandboxBrowserPanel({
   projectId,
   sandboxId,
   provider,
+  remoteDocker = false,
 }: {
   projectId: string;
   sandboxId: string;
   /** Which transport serves the session — the two differ, and the caption
    * claiming an SSH forward is wrong for a container, which has no sshd. */
   provider?: string;
+  /** A container on another machine's Docker — forwarded, like a cloud box. */
+  remoteDocker?: boolean;
 }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -315,9 +318,11 @@ export function SandboxBrowserPanel({
             Runs inside the sandbox, so <code>localhost</code> here is the
             sandbox&apos;s own — the app&apos;s API URL resolves without any
             rewriting.{" "}
-            {provider === "local"
+            {provider === "local" && !remoteDocker
               ? "Reached over a port docker publishes on this machine's loopback, not a public tunnel."
-              : "Reached over an SSH forward from this machine, not a public tunnel."}
+              : remoteDocker
+                ? "Reached over an SSH forward to the machine running its Docker, not a public tunnel."
+                : "Reached over an SSH forward from this machine, not a public tunnel."}
           </p>
         </div>
       )}

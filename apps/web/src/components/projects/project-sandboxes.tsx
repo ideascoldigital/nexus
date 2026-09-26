@@ -4387,13 +4387,12 @@ function SandboxRow({
       {sandbox.status === "running" && (
         <SandboxProcessPanel projectId={projectId} sandboxId={sandbox.id} />
       )}
-      {/* The panel connects to a port docker published on the remote's
-          loopback; forwarding it is spec 26 phase 3. */}
-      {sandbox.status === "running" && !onRemoteDocker && (
+      {sandbox.status === "running" && (
         <SandboxBrowserPanel
           projectId={projectId}
           sandboxId={sandbox.id}
           provider={sandbox.provider}
+          remoteDocker={onRemoteDocker}
         />
       )}
       {showLog && (

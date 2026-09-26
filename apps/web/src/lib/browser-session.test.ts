@@ -4,7 +4,7 @@ import { test } from "node:test";
 // Env setup must stay above ./browser-session — it reaches prisma at import
 // time and the client is built when the module loads.
 import "./browser-session.test-setup";
-import { forwardArgs, generateToken } from "./browser-session";
+import { endpointForwardArgs, forwardArgs, generateToken } from "./browser-session";
 
 const BASE = {
   localPort: 45123,
@@ -81,4 +81,36 @@ test("the token alphabet avoids characters that misread when retyped", () => {
       `${ambiguous} is easy to misread and should not appear`,
     );
   }
+});
+
+// --- forwards to another machine's Docker (spec 26) -------------------------
+
+test("an endpoint forward lands on the remote's loopback, through the user's own ssh", () => {
+  const args = endpointForwardArgs({
+    localPort: 51000,
+    remotePort: 49153,
+    dockerHost: "ssh://jairo@omarchy:2222",
+  });
+  // Loopback on both ends: docker published the bridge on the remote's
+  // 127.0.0.1 only, and this end must not offer it to the LAN.
+  assert.ok(args.includes("127.0.0.1:51000:127.0.0.1:49153"), args.join(" "));
+  assert.deepEqual(args.slice(-2), ["--", "jairo@omarchy"]);
+  assert.ok(args.includes("-p") && args[args.indexOf("-p") + 1] === "2222");
+  // The sandbox key is authorized inside sandboxes, not on the endpoint.
+  assert.ok(!args.includes("-i"), args.join(" "));
+  assert.ok(args.includes("BatchMode=yes"));
+  assert.ok(args.includes("ExitOnForwardFailure=yes"));
+});
+
+test("an ssh-config alias forwards with no user and no port of its own", () => {
+  const args = endpointForwardArgs({ localPort: 1, remotePort: 2, dockerHost: "ssh://omarchy" });
+  assert.equal(args.at(-1), "omarchy");
+  assert.ok(!args.includes("-p"));
+});
+
+test("a host that is not an endpoint never becomes an ssh argument", () => {
+  assert.throws(
+    () => endpointForwardArgs({ localPort: 1, remotePort: 2, dockerHost: "tcp://box:2375" }),
+    /Not a Docker endpoint host/,
+  );
 });
