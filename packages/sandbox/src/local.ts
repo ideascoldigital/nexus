@@ -21,6 +21,7 @@ import {
   safeSlug,
 } from "./template";
 import { DEFAULT_WS_PORT } from "./template-browser";
+import { dockerHostArgs, type DockerTarget } from "./docker-endpoint";
 
 /**
  * What a sandbox container starts from when nothing has been prebuilt.
@@ -66,6 +67,19 @@ function run(
 }
 
 /**
+ * `docker …` against `target` — this machine's daemon when it is null, another
+ * machine's over `-H ssh://…` otherwise (spec 26). Every docker call in this
+ * file goes through here, so a sandbox cannot half-live on two daemons.
+ */
+function docker(
+  target: DockerTarget | null | undefined,
+  args: string[],
+  opts: { onLog?: LogSink; timeoutMs?: number } = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return run("docker", [...dockerHostArgs(target), ...args], opts);
+}
+
+/**
  * Memory ceiling for a sandbox container, as a fraction of what Docker itself
  * has. Unlimited is the dangerous default: a dev server that spawns a worker
  * per file (Turbopack does exactly this for PostCSS) climbs until the *engine*
@@ -84,9 +98,11 @@ export function memoryLimitFromTotalBytes(total: number): number | null {
   return mb >= 1024 ? mb : null;
 }
 
-export async function sandboxMemoryLimitMb(): Promise<number | null> {
+export async function sandboxMemoryLimitMb(
+  target?: DockerTarget | null,
+): Promise<number | null> {
   try {
-    const res = await run("docker", ["info", "--format", "{{.MemTotal}}"], {
+    const res = await docker(target, ["info", "--format", "{{.MemTotal}}"], {
       timeoutMs: 15_000,
     });
     return memoryLimitFromTotalBytes(Number(res.stdout.trim()));
@@ -95,9 +111,14 @@ export async function sandboxMemoryLimitMb(): Promise<number | null> {
   }
 }
 
-export async function dockerAvailable(): Promise<boolean> {
+export async function dockerAvailable(
+  target?: DockerTarget | null,
+): Promise<boolean> {
   try {
-    const res = await run("docker", ["info"], { timeoutMs: 15_000 });
+    // Longer for a remote daemon: the first call pays the SSH handshake.
+    const res = await docker(target, ["info"], {
+      timeoutMs: target?.host ? 30_000 : 15_000,
+    });
     return res.code === 0;
   } catch {
     return false;
@@ -111,10 +132,13 @@ export async function dockerAvailable(): Promise<boolean> {
  * older image, and one that claims v1 while holding v0's tooling would make a
  * dry run answer for a machine that no longer exists.
  */
-async function baseImageVersion(tag: string): Promise<string | null> {
+async function baseImageVersion(
+  tag: string,
+  target: DockerTarget | null | undefined,
+): Promise<string | null> {
   try {
-    const res = await run(
-      "docker",
+    const res = await docker(
+      target,
       [
         "image",
         "inspect",
@@ -140,7 +164,9 @@ async function baseImageVersion(tag: string): Promise<string | null> {
  * minutes the first time, and a provision that silently stalled on it would be
  * indistinguishable from the slow bootstrap it exists to replace.
  */
-export async function buildSandboxBaseImage(opts: { onLog?: LogSink } = {}): Promise<{
+export async function buildSandboxBaseImage(
+  opts: { onLog?: LogSink; target?: DockerTarget | null } = {},
+): Promise<{
   tag: string;
   built: boolean;
 }> {
@@ -149,8 +175,10 @@ export async function buildSandboxBaseImage(opts: { onLog?: LogSink } = {}): Pro
   try {
     await fs.writeFile(path.join(dir, "Dockerfile"), renderBaseDockerfile());
     onLog?.(`[nexux] building ${BASE_IMAGE_TAG} (first run takes a few minutes)\n`);
-    const res = await run(
-      "docker",
+    // Over -H the build context is uploaded, so the image is built on — and
+    // native to — the daemon that will run the sandboxes.
+    const res = await docker(
+      opts.target,
       ["build", "-t", BASE_IMAGE_TAG, "--label", `org.nexux.base-version=${BASE_IMAGE_VERSION}`, dir],
       { onLog, timeoutMs: 20 * 60_000 },
     );
@@ -175,11 +203,15 @@ export async function buildSandboxBaseImage(opts: { onLog?: LogSink } = {}): Pro
  * The caller decides when to pay for the build.
  */
 export async function resolveBaseImage(
-  opts: { preferPrebuilt?: boolean; onLog?: LogSink } = {},
+  opts: {
+    preferPrebuilt?: boolean;
+    onLog?: LogSink;
+    target?: DockerTarget | null;
+  } = {},
 ): Promise<{ image: string; prebuilt: boolean }> {
   if (!opts.preferPrebuilt) return { image: BASE_IMAGE, prebuilt: false };
 
-  const version = await baseImageVersion(BASE_IMAGE_TAG);
+  const version = await baseImageVersion(BASE_IMAGE_TAG, opts.target);
   if (version === null) {
     opts.onLog?.(
       `[nexux] no prebuilt base image — using ${BASE_IMAGE} (build one to make dry runs fast)\n`,
@@ -210,18 +242,34 @@ export async function launchLocalSandbox(opts: {
    * back to ubuntu:22.04 when it is absent or stale — never builds inline.
    */
   preferPrebuilt?: boolean;
+  /** Which daemon the container lives on; null/absent = this machine. */
+  target?: DockerTarget | null;
 }): Promise<{ containerName: string; prebuilt: boolean }> {
-  const { name, spec, onLog } = opts;
+  const { name, spec, onLog, target } = opts;
+
+  // A bind mount names a path on the daemon's machine, not this one. On a
+  // remote daemon that is an empty directory Docker creates without a word —
+  // a sandbox working on nothing. The launch route refuses this with a
+  // friendlier message; this is the backstop.
+  if (target?.host) {
+    const unmountable = spec.repos.filter((r) => !r.repoUrl && r.mountPath);
+    if (unmountable.length > 0) {
+      throw new Error(
+        `${target.host} can't see local folders (${unmountable.map((r) => r.name).join(", ")}) — give them a clone URL or run the sandbox on this machine.`,
+      );
+    }
+  }
 
   const base = await resolveBaseImage({
     preferPrebuilt: opts.preferPrebuilt,
     onLog,
+    target,
   });
   // Only the upstream image is pullable: the prebuilt one is local-only, and
   // `docker pull` on it fails against Docker Hub.
   if (!base.prebuilt) {
     onLog?.(`[nexux] pulling ${base.image}\n`);
-    await run("docker", ["pull", base.image], { onLog, timeoutMs: 300_000 });
+    await docker(target, ["pull", base.image], { onLog, timeoutMs: 300_000 });
   }
 
   // Repos without a clone URL link the local folder straight into the
@@ -235,16 +283,18 @@ export async function launchLocalSandbox(opts: {
       return ["-v", `${r.mountPath}:${dir}`];
     });
 
-  const memoryMb = await sandboxMemoryLimitMb();
+  const memoryMb = await sandboxMemoryLimitMb(target);
   if (memoryMb) {
     onLog?.(`[nexux] memory limit ${memoryMb}m\n`);
   } else {
     onLog?.(`[nexux] WARN: no memory limit — a runaway build can take the host down\n`);
   }
 
-  onLog?.(`[nexux] creating container ${name}\n`);
-  const created = await run(
-    "docker",
+  onLog?.(
+    `[nexux] creating container ${name}${target?.host ? ` on ${target.host}` : ""}\n`,
+  );
+  const created = await docker(
+    target,
     [
       "run",
       "-d",
@@ -289,8 +339,8 @@ export async function launchLocalSandbox(opts: {
   // Staged via printf %s with the script as a single argv element — no
   // heredoc/quoting pitfalls.
   const script = renderCloudInit(spec, { mode: "container" });
-  const staged = await run(
-    "docker",
+  const staged = await docker(
+    target,
     [
       "exec",
       name,
@@ -307,8 +357,8 @@ export async function launchLocalSandbox(opts: {
   }
 
   onLog?.(`[nexux] bootstrap started — tail ${LOCAL_BOOTSTRAP_LOG} inside the container\n`);
-  const kicked = await run(
-    "docker",
+  const kicked = await docker(
+    target,
     ["exec", "-d", name, "bash", "/opt/nexus-bootstrap.sh"],
     { timeoutMs: 30_000 },
   );
@@ -326,9 +376,12 @@ function shellQuote(value: string): string {
 }
 
 /** Has the bootstrap finished? (completion marker written at the end.) */
-export async function localBootstrapComplete(name: string): Promise<boolean> {
-  const res = await run(
-    "docker",
+export async function localBootstrapComplete(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<boolean> {
+  const res = await docker(
+    target,
     ["exec", name, "test", "-f", BOOTSTRAP_COMPLETE_MARKER],
     { timeoutMs: 15_000 },
   ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
@@ -342,8 +395,9 @@ export async function localBootstrapComplete(name: string): Promise<boolean> {
  */
 export async function localBootstrapFailure(
   name: string,
+  target?: DockerTarget | null,
 ): Promise<string | null> {
-  const res = await run("docker", ["exec", name, "cat", BOOTSTRAP_FAILED_MARKER], {
+  const res = await docker(target, ["exec", name, "cat", BOOTSTRAP_FAILED_MARKER], {
     timeoutMs: 15_000,
   }).catch(() => ({ code: 1, stdout: "", stderr: "" }));
   if (res.code !== 0) return null;
@@ -360,9 +414,12 @@ export async function localBootstrapFailure(
  * destroy that half-failed), and the host is shared with whatever else the
  * user runs.
  */
-export async function localContainerExists(name: string): Promise<boolean> {
-  const res = await run(
-    "docker",
+export async function localContainerExists(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<boolean> {
+  const res = await docker(
+    target,
     ["ps", "-a", "--filter", `name=^${name}$`, "--format", "{{.Names}}"],
     { timeoutMs: 15_000 },
   ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
@@ -370,9 +427,12 @@ export async function localContainerExists(name: string): Promise<boolean> {
 }
 
 /** Is the container still running? */
-export async function localSandboxRunning(name: string): Promise<boolean> {
-  const res = await run(
-    "docker",
+export async function localSandboxRunning(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<boolean> {
+  const res = await docker(
+    target,
     ["inspect", "-f", "{{.State.Running}}", name],
     { timeoutMs: 15_000 },
   ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
@@ -399,9 +459,12 @@ export function parseDockerPort(stdout: string): number | null {
   return null;
 }
 
-export async function browserWsPort(name: string): Promise<number | null> {
-  const res = await run(
-    "docker",
+export async function browserWsPort(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<number | null> {
+  const res = await docker(
+    target,
     ["port", name, `${DEFAULT_WS_PORT}/tcp`],
     { timeoutMs: 15_000 },
   ).catch(() => ({ code: 1, stdout: "", stderr: "" }));
@@ -410,8 +473,11 @@ export async function browserWsPort(name: string): Promise<number | null> {
 }
 
 /** Stop the container — cheap pause; state (checkout, node_modules) stays. */
-export async function pauseLocalSandbox(name: string): Promise<void> {
-  const res = await run("docker", ["stop", name], { timeoutMs: 60_000 });
+export async function pauseLocalSandbox(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<void> {
+  const res = await docker(target, ["stop", name], { timeoutMs: 60_000 });
   if (res.code !== 0) {
     throw new Error(`docker stop failed: ${res.stderr.trim().slice(-200)}`);
   }
@@ -424,9 +490,9 @@ export async function pauseLocalSandbox(name: string): Promise<void> {
  */
 export async function resumeLocalSandbox(
   name: string,
-  opts: { onLog?: LogSink } = {},
+  opts: { onLog?: LogSink; target?: DockerTarget | null } = {},
 ): Promise<void> {
-  const res = await run("docker", ["start", name], {
+  const res = await docker(opts.target, ["start", name], {
     onLog: opts.onLog,
     timeoutMs: 60_000,
   });
@@ -442,7 +508,7 @@ if [ -f /opt/nexus/stack/docker-compose.yml ] && command -v docker >/dev/null 2>
   (cd /opt/nexus/stack && docker compose up -d) || echo "[nexux] WARN: stack services failed to resume"
 fi
 echo "[nexux] resumed"`;
-  await run("docker", ["exec", name, "bash", "-lc", revive], {
+  await docker(opts.target, ["exec", name, "bash", "-lc", revive], {
     onLog: opts.onLog,
     timeoutMs: 120_000,
   });
@@ -451,11 +517,12 @@ echo "[nexux] resumed"`;
 export async function destroyLocalSandbox(
   name: string,
   onLog?: LogSink,
+  target?: DockerTarget | null,
 ): Promise<void> {
   onLog?.(`[nexux] removing container ${name}\n`);
-  await run("docker", ["rm", "-f", name], { onLog, timeoutMs: 120_000 });
+  await docker(target, ["rm", "-f", name], { onLog, timeoutMs: 120_000 });
   // The DinD storage volume is sandbox-scoped: it dies with the sandbox.
-  await run("docker", ["volume", "rm", `${name}-docker`], {
+  await docker(target, ["volume", "rm", `${name}-docker`], {
     timeoutMs: 60_000,
   }).catch(() => undefined);
 }

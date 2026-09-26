@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import path from "path";
 import type { LogSink } from "./types";
+import { dockerHostArgs } from "./docker-endpoint";
 
 // Host keys are recorded next to the sandbox key, not in ~/.ssh: on a Nexus
 // host the container's uid has no home directory, so the default known_hosts
@@ -54,6 +55,11 @@ export type RemoteExecOpts = {
   privateKeyPath?: string;
   /** Docker container name — local sandboxes exec here instead of SSH. */
   container?: string;
+  /**
+   * The daemon `container` lives on (`ssh://…`, spec 26); null/absent is this
+   * machine's. Ignored for SSH targets.
+   */
+  dockerHost?: string | null;
   /** Remote working directory. */
   cwd?: string;
   onLog?: LogSink;
@@ -78,6 +84,8 @@ export type SandboxAddress = {
   tailscaleIp?: string | null;
   /** Container name for local sandboxes. */
   instanceId?: string | null;
+  /** The daemon a local sandbox's container lives on (spec 26). */
+  dockerHost?: string | null;
 };
 
 /**
@@ -101,9 +109,11 @@ export function sandboxShellCommand(
 ): string | null {
   if (sandbox.provider === "local") {
     // No sshd in a container — the same door `execRemote` uses.
-    return sandbox.instanceId
-      ? `docker exec -it -u ${opts.user} ${sandbox.instanceId} bash -l`
-      : null;
+    if (!sandbox.instanceId) return null;
+    // -H goes in the pasted command too: without it the same line opens a
+    // shell on the wrong machine, or reports no such container.
+    const host = dockerHostArgs({ host: sandbox.dockerHost ?? null }).join(" ");
+    return `docker ${host ? `${host} ` : ""}exec -it -u ${opts.user} ${sandbox.instanceId} bash -l`;
   }
   // The public address is the one that always answers. A tailnet address only
   // works from a machine on the tailnet that can also see this peer, so it is
@@ -138,7 +148,16 @@ export function execRemote(
   if (opts.container) {
     bin = "docker";
     // argv goes straight to execve — the command needs no extra quoting here.
-    args = ["exec", "-u", user, opts.container, "bash", "-lc", remote];
+    args = [
+      ...dockerHostArgs({ host: opts.dockerHost ?? null }),
+      "exec",
+      "-u",
+      user,
+      opts.container,
+      "bash",
+      "-lc",
+      remote,
+    ];
   } else {
     if (!opts.host || !opts.privateKeyPath) {
       return Promise.reject(
@@ -221,6 +240,7 @@ export function fetchRemoteDir(opts: {
   user?: string;
   privateKeyPath?: string;
   container?: string;
+  dockerHost?: string | null;
   remoteDir: string;
   localDir: string;
   timeoutMs?: number;
@@ -230,7 +250,14 @@ export function fetchRemoteDir(opts: {
   let args: string[];
   if (opts.container) {
     bin = "docker";
-    args = ["cp", `${opts.container}:${opts.remoteDir}/.`, opts.localDir];
+    // `docker cp` streams a tar over -H, so the copy works against a remote
+    // daemon without the files ever touching its disk outside the container.
+    args = [
+      ...dockerHostArgs({ host: opts.dockerHost ?? null }),
+      "cp",
+      `${opts.container}:${opts.remoteDir}/.`,
+      opts.localDir,
+    ];
   } else {
     if (!opts.host || !opts.privateKeyPath) {
       return Promise.reject(
@@ -289,6 +316,7 @@ export function pushLocalDir(opts: {
   user?: string;
   privateKeyPath?: string;
   container?: string;
+  dockerHost?: string | null;
   localDir: string;
   remoteDir: string;
   timeoutMs?: number;
@@ -298,7 +326,12 @@ export function pushLocalDir(opts: {
   let args: string[];
   if (opts.container) {
     bin = "docker";
-    args = ["cp", `${opts.localDir}/.`, `${opts.container}:${opts.remoteDir}`];
+    args = [
+      ...dockerHostArgs({ host: opts.dockerHost ?? null }),
+      "cp",
+      `${opts.localDir}/.`,
+      `${opts.container}:${opts.remoteDir}`,
+    ];
   } else {
     if (!opts.host || !opts.privateKeyPath) {
       return Promise.reject(
