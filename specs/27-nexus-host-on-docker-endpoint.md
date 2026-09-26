@@ -1,8 +1,8 @@
 # 27 — A Nexus host on a machine you already have
 
-Status: **phases 1–3 shipped** (2026-09-26) — create, update, destroy and a
-terminal for hosts on an endpoint. Phase 4, the end-to-end walk on a real
-endpoint, is still to do.
+Status: **shipped** (2026-09-26) — create, update, destroy and a terminal for
+hosts on an endpoint, walked on a real LAN endpoint (phase 4) except destroy,
+which is left for when that host is no longer wanted.
 Depends on [spec 19](19-nexus-host-provisioning.md) (Nexus hosts) and
 [spec 26](26-remote-docker-endpoints.md) (Docker endpoints), both shipped.
 
@@ -220,7 +220,7 @@ hosts.
    registry auth via temp `DOCKER_CONFIG`.
 3. ✅ Update and destroy branches; terminal target for endpoint hosts; the host
    dashboard's Update button explains itself.
-4. Manual E2E on a real endpoint.
+4. ✅ Manual E2E on a real endpoint (destroy pending — see As built).
 
 ## As built (phase 1)
 
@@ -268,3 +268,22 @@ hosts.
   local files were lost.
 - **Self-update on the host** answers with where to update from
   (`NEXUX_HOST_KIND=endpoint`), and Settings on the host says so up front.
+
+## As built (phase 4 — the walk on a real endpoint)
+
+On `omarchy` (x86_64, Docker 29, reached as `ssh://omarchy`):
+
+- **The precondition caught the real failure first.** Three saved GitHub
+  tokens were refused before any row existed — none had `read:packages` —
+  naming the missing scope. With a token that had it, the host was created.
+- **Bootstrap:** pull → tailscale → tailnet address `100.91.253.127` →
+  app healthy → `running`, MagicDNS `nexus-e2e.<tailnet>.ts.net`. The app
+  answered over the tailnet from another machine.
+- **Nothing on the LAN:** `ss -ltn` on the endpoint showed nothing on
+  3030/3002/11434; `docker ps` showed no published ports.
+- **Terminal assumption held:** `docker exec` into the app container lands as
+  `nexux` in `/app` with bash — what `docker-host://` relies on.
+- **Update:** pull + `up -d` through the endpoint answered "Already up to
+  date" (the image had just been pulled), and the app kept answering.
+- **Destroy:** not run on this host yet — it is in use. The unit tests cover
+  the command; walk it when the host is retired.
