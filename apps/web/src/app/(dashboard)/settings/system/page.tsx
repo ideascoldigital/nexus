@@ -1,6 +1,7 @@
 "use client";
 
-// System resources: this machine, then every sandbox running on it.
+// System resources: this machine, then every sandbox running on it — and on
+// each other machine whose Docker runs sandboxes (spec 26).
 //
 // The page the status bar's meters lead to. It answers the question the bar
 // can only hint at — *what* is using the disk, and is it a sandbox or the host
@@ -13,10 +14,15 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Cpu, HardDrive, MemoryStick, Monitor } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { SandboxMetric } from "@/lib/sandbox-metrics";
+import type { DaemonStatus, SandboxMetric } from "@/lib/sandbox-metrics";
 import type { Metric, SystemMetrics } from "@/lib/system-metrics";
 
-type MetricsResponse = { system: SystemMetrics; sandboxes: SandboxMetric[] };
+type MetricsResponse = {
+  system: SystemMetrics;
+  sandboxes: SandboxMetric[];
+  /** One per Docker daemon measured: this machine, then each endpoint. */
+  daemons?: DaemonStatus[];
+};
 
 /** Shared by the header and every row, so the columns cannot drift apart. */
 const SANDBOX_COLS = "grid-cols-[1fr_4rem_9rem_4rem]";
@@ -95,6 +101,56 @@ function Gauge({
         ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+/** One daemon's sandboxes, in the shared column layout. */
+function SandboxRows({ rows }: { rows: SandboxMetric[] }) {
+  return (
+    <div className="space-y-1">
+      {/* One shared column definition, in fixed widths rather than
+          `auto`: the header and each row are separate grids, so `auto`
+          sizes every one of them to its own content and the columns
+          drift apart. Memory is the widest because it carries a pair
+          ("336 MB / 10 GB"); the rest are short percentages. */}
+      <div
+        className={`grid ${SANDBOX_COLS} gap-4 border-b pb-1 font-mono text-[10px] uppercase text-muted-foreground`}
+      >
+        <span>name</span>
+        <span className="text-right">cpu</span>
+        <span className="text-right">memory</span>
+        <span className="text-right">disk</span>
+      </div>
+      {rows.map((s) => (
+        <div
+          key={s.name}
+          className={`grid ${SANDBOX_COLS} items-center gap-4 py-1 font-mono text-xs`}
+        >
+          <span className="truncate">{s.name}</span>
+          <span className="text-right text-muted-foreground">
+            {s.cpuPercent === null ? "—" : `${s.cpuPercent}%`}
+          </span>
+          <span className="text-right text-muted-foreground">
+            {s.memUsedBytes === null
+              ? "—"
+              : `${formatBytes(s.memUsedBytes)} / ${formatBytes(s.memLimitBytes)}`}
+          </span>
+          <span
+            className={`text-right ${
+              (s.diskPercent ?? 0) >= 90
+                ? "text-destructive"
+                : (s.diskPercent ?? 0) >= 80
+                  ? "text-amber-400"
+                  : "text-muted-foreground"
+            }`}
+          >
+            {s.diskPercent === null || s.diskPercent === undefined
+              ? "—"
+              : `${s.diskPercent}%`}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -183,56 +239,49 @@ export default function SystemStatsPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {!data?.sandboxes?.length ? (
-            <p className="text-sm text-muted-foreground">
-              No sandboxes running on this machine.
-            </p>
-          ) : (
-            <div className="space-y-1">
-              {/* One shared column definition, in fixed widths rather than
-                  `auto`: the header and each row are separate grids, so `auto`
-                  sizes every one of them to its own content and the columns
-                  drift apart. Memory is the widest because it carries a pair
-                  ("336 MB / 10 GB"); the rest are short percentages. */}
-              <div
-                className={`grid ${SANDBOX_COLS} gap-4 border-b pb-1 font-mono text-[10px] uppercase text-muted-foreground`}
-              >
-                <span>name</span>
-                <span className="text-right">cpu</span>
-                <span className="text-right">memory</span>
-                <span className="text-right">disk</span>
+          {(() => {
+            const daemons = data?.daemons?.length
+              ? data.daemons
+              : [{ endpointId: null, name: "This machine", reachable: true }];
+            // With no endpoints this reads exactly as before: one list, no
+            // headings. Headings only earn their place once there are two.
+            const grouped = daemons.length > 1;
+            return (
+              <div className="space-y-4">
+                {daemons.map((d) => {
+                  const rows = (data?.sandboxes ?? []).filter(
+                    (s) => (s.endpointId ?? null) === d.endpointId,
+                  );
+                  return (
+                    <div key={d.endpointId ?? "local"} className="space-y-1">
+                      {grouped && (
+                        <div className="flex items-center gap-2 text-xs font-medium">
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full ${d.reachable ? "bg-emerald-400" : "bg-destructive"}`}
+                          />
+                          {d.name}
+                          {!d.reachable && (
+                            <span className="font-normal text-destructive">
+                              not reachable — its sandboxes can&apos;t be measured
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {!d.reachable ? null : !rows.length ? (
+                        <p className="text-sm text-muted-foreground">
+                          {grouped
+                            ? "No sandboxes running here."
+                            : "No sandboxes running on this machine."}
+                        </p>
+                      ) : (
+                        <SandboxRows rows={rows} />
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              {data.sandboxes.map((s) => (
-                <div
-                  key={s.name}
-                  className={`grid ${SANDBOX_COLS} items-center gap-4 py-1 font-mono text-xs`}
-                >
-                  <span className="truncate">{s.name}</span>
-                  <span className="text-right text-muted-foreground">
-                    {s.cpuPercent === null ? "—" : `${s.cpuPercent}%`}
-                  </span>
-                  <span className="text-right text-muted-foreground">
-                    {s.memUsedBytes === null
-                      ? "—"
-                      : `${formatBytes(s.memUsedBytes)} / ${formatBytes(s.memLimitBytes)}`}
-                  </span>
-                  <span
-                    className={`text-right ${
-                      (s.diskPercent ?? 0) >= 90
-                        ? "text-destructive"
-                        : (s.diskPercent ?? 0) >= 80
-                          ? "text-amber-400"
-                          : "text-muted-foreground"
-                    }`}
-                  >
-                    {s.diskPercent === null || s.diskPercent === undefined
-                      ? "—"
-                      : `${s.diskPercent}%`}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
+            );
+          })()}
         </CardContent>
       </Card>
     </div>

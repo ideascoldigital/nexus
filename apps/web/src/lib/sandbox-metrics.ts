@@ -8,6 +8,11 @@
 // container's filesystem, so it costs one `exec` per sandbox and is therefore
 // only collected for the detail page, never for the bar.
 //
+// Sandboxes on another machine's Docker (spec 26) are measured the same way,
+// one `docker -H` per daemon, in parallel — a slow endpoint delays only its own
+// rows, and one that does not answer is reported as such rather than as "no
+// sandboxes".
+//
 // Cloud sandboxes are out of scope here. They are reached over ssh, their
 // metrics cost a network round trip each, and a box that is merely slow would
 // hold up the whole response; that belongs behind its own explicitly-requested
@@ -16,13 +21,25 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { dockerHostArgs } from "@nexux/sandbox";
+
 import { parseDf } from "./system-metrics";
 
-const run = promisify(execFile);
+const execFileAsync = promisify(execFile);
+
+type Runner = (
+  bin: string,
+  args: string[],
+  opts: { timeout: number; maxBuffer: number },
+) => Promise<{ stdout: string }>;
+
+const defaultRun: Runner = (bin, args, opts) => execFileAsync(bin, args, opts);
 
 export type SandboxMetric = {
   /** The container name, which is the sandbox name for a local sandbox. */
   name: string;
+  /** Which daemon it runs on: null = this machine, else a DockerEndpoint id. */
+  endpointId: string | null;
   cpuPercent: number | null;
   memPercent: number | null;
   memUsedBytes: number | null;
@@ -75,6 +92,7 @@ export function parseDockerStats(stdout: string): SandboxMetric[] {
     const [used, limit] = (mem ?? "").split("/");
     rows.push({
       name: name.trim(),
+      endpointId: null,
       cpuPercent: parsePercent(cpu ?? ""),
       memPercent: parsePercent(memPct ?? ""),
       memUsedBytes: used ? parseSize(used) : null,
@@ -85,47 +103,83 @@ export function parseDockerStats(stdout: string): SandboxMetric[] {
 }
 
 const EXEC = { timeout: 6000, maxBuffer: 2 * 1024 * 1024 } as const;
+/** A remote daemon pays an SSH handshake per call on top of the work. */
+const EXEC_REMOTE = { ...EXEC, timeout: 15_000 } as const;
+
+/** A Docker daemon to measure: this machine's (host null) or an endpoint's. */
+export type MetricsDaemon = { endpointId: string | null; name: string; host: string | null };
+
+/** Whether a daemon answered — so an unreachable one reads as that, not as empty. */
+export type DaemonStatus = { endpointId: string | null; name: string; reachable: boolean };
 
 /**
- * Stats for every running Nexus sandbox on this machine.
+ * Stats for every running Nexus sandbox, on this machine and on each endpoint.
  *
  * Filtered by the label the launcher sets, so the user's unrelated containers
  * — and this repo's own dev stack — stay out of a view about sandboxes.
  */
 export async function collectSandboxMetrics(
-  opts: { withDisk?: boolean } = {},
-): Promise<SandboxMetric[]> {
+  opts: { withDisk?: boolean; endpoints?: MetricsDaemon[]; run?: Runner } = {},
+): Promise<{ sandboxes: SandboxMetric[]; daemons: DaemonStatus[] }> {
+  const daemons: MetricsDaemon[] = [
+    { endpointId: null, name: "This machine", host: null },
+    ...(opts.endpoints ?? []),
+  ];
+  const results = await Promise.all(
+    daemons.map((d) => collectDaemon(d, opts.withDisk ?? false, opts.run ?? defaultRun)),
+  );
+  return {
+    sandboxes: results.flatMap((r) => r.sandboxes),
+    daemons: results.map((r, i) => ({
+      endpointId: daemons[i].endpointId,
+      name: daemons[i].name,
+      reachable: r.reachable,
+    })),
+  };
+}
+
+async function collectDaemon(
+  daemon: MetricsDaemon,
+  withDisk: boolean,
+  run: Runner,
+): Promise<{ sandboxes: SandboxMetric[]; reachable: boolean }> {
+  const H = dockerHostArgs({ host: daemon.host });
+  const exec = daemon.host ? EXEC_REMOTE : EXEC;
   const ids = await run(
     "docker",
-    ["ps", "--filter", "label=nexux-sandbox=1", "--format", "{{.Names}}"],
-    EXEC,
+    [...H, "ps", "--filter", "label=nexux-sandbox=1", "--format", "{{.Names}}"],
+    exec,
   )
     .then((r) => r.stdout.trim().split("\n").filter(Boolean))
-    .catch(() => [] as string[]);
-  if (ids.length === 0) return [];
+    .catch(() => null);
+  if (ids === null) return { sandboxes: [], reachable: false };
+  if (ids.length === 0) return { sandboxes: [], reachable: true };
 
   const stats = await run(
     "docker",
     [
+      ...H,
       "stats",
       "--no-stream",
       "--format",
       "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}",
       ...ids,
     ],
-    EXEC,
+    exec,
   )
-    .then((r) => parseDockerStats(r.stdout))
+    .then((r) =>
+      parseDockerStats(r.stdout).map((row) => ({ ...row, endpointId: daemon.endpointId })),
+    )
     .catch(() => [] as SandboxMetric[]);
 
-  if (!opts.withDisk) return stats;
+  if (!withDisk) return { sandboxes: stats, reachable: true };
 
   // One exec per container, so this is only for the page that asked for it.
   // A container that cannot answer keeps its other metrics rather than
   // dropping out of the list entirely.
-  return Promise.all(
+  const sandboxes = await Promise.all(
     stats.map(async (row) => {
-      const disk = await run("docker", ["exec", row.name, "df", "-k", "/"], EXEC)
+      const disk = await run("docker", [...H, "exec", row.name, "df", "-k", "/"], exec)
         .then((r) => parseDf(r.stdout))
         .catch(() => null);
       return {
@@ -136,4 +190,5 @@ export async function collectSandboxMetrics(
       };
     }),
   );
+  return { sandboxes, reachable: true };
 }

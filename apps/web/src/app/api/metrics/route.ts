@@ -7,6 +7,7 @@
  * filesystems, which cost an exec each and so are opt-in.
  */
 
+import { prisma } from "@nexux/db";
 import { NextRequest, NextResponse } from "next/server";
 
 import { collectSandboxMetrics } from "@/lib/sandbox-metrics";
@@ -20,12 +21,21 @@ export async function GET(req: NextRequest) {
 
   // A docker that is not running must not take the host's own numbers with
   // it: the bar still has something true to show.
-  const [system, sandboxes] = await Promise.all([
+  const [system, measured] = await Promise.all([
     collectSystemMetrics(),
     wantSandboxes
-      ? collectSandboxMetrics({ withDisk: wantDisk }).catch(() => [])
-      : Promise.resolve([]),
+      ? prisma.dockerEndpoint
+          .findMany({ orderBy: { createdAt: "asc" }, select: { id: true, name: true, host: true } })
+          .then((rows) =>
+            collectSandboxMetrics({
+              withDisk: wantDisk,
+              // Other machines' Docker (spec 26), measured alongside this one.
+              endpoints: rows.map((r) => ({ endpointId: r.id, name: r.name, host: r.host })),
+            }),
+          )
+          .catch(() => ({ sandboxes: [], daemons: [] }))
+      : Promise.resolve({ sandboxes: [], daemons: [] }),
   ]);
 
-  return NextResponse.json({ system, sandboxes });
+  return NextResponse.json({ system, ...measured });
 }
