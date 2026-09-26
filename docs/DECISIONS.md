@@ -716,3 +716,28 @@ that is not a checkout: each yields a null field rather than an exception, and
 the lock write is wrapped so that failing to record one never changes the
 verdict of the validation that earned it. A lock with a null digest is worth
 strictly more than no lock.
+
+## D-79 — Remote Docker is a per-sandbox `-H ssh://`, never a process-wide `DOCKER_HOST` (2026-09-26)
+
+Setting `DOCKER_HOST` on the Nexux process already moves local sandboxes to
+another machine, because every container-path `spawn("docker")` inherits the
+env. It is still the wrong unit. Spec 26.
+
+- **Per sandbox, not per process.** A global env var also moves the stack
+  runner, the stack lock and the harness — which are about the developer's own
+  machine — and strands every existing local sandbox on the daemon it was
+  created on. So a sandbox records its daemon (`Sandbox.dockerEndpointId`, null
+  = this machine) and `provider` stays `"local"`: the ~30 `provider ===
+  "local"` checks mean "container transport, no Terraform", which is still true.
+- **`-H` in argv, not `DOCKER_HOST` in the env.** The destination is visible in
+  logs and tests, needs no env threaded into node-pty, and cannot leak into a
+  child that was never meant to see it. `dockerHostArgs` is the only way an
+  argv gets pointed elsewhere, and it re-validates the host even though the
+  API already did.
+- **ssh:// only.** tcp:// without TLS is root on the remote for anyone who
+  reaches the port; with TLS there is no channel to forward the browser
+  session through, and the alternative — publishing the VNC bridge on the
+  remote's LAN address — is what spec 23 forbids.
+- **Probe before saving.** An endpoint that cannot run a sandbox is not worth
+  a row, and the error is most useful while the form is still open. Later
+  re-checks record failures instead, next to the last facts that were true.

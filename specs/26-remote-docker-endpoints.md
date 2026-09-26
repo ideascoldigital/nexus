@@ -1,6 +1,8 @@
 # 26 — Local sandboxes on another machine's Docker
 
-Status: **draft** (2026-09-26). Nothing implemented.
+Status: **phase 1 shipped** (2026-09-26, D-79) — model, probe, API and the
+Settings → Cloud list. Nothing routes sandboxes to an endpoint yet; phases 2–4
+remain. What phase 1 changed from the draft is under *As built* at the end.
 
 ## Goal
 
@@ -57,7 +59,7 @@ model DockerEndpoint {
   /** Last `docker version` / `docker info` probe, for the settings list. */
   serverVersion String?
   arch      String?   // B's arch: the base image is built there, natively
-  memTotal  BigInt?
+  memTotalMb Int?     // not BigInt: that does not survive NextResponse.json
   lastCheckedAt DateTime?
   lastError String?
   sandboxes Sandbox[]
@@ -229,10 +231,36 @@ endpoint name, and the VS Code action (below).
 
 ## Order
 
-1. `DockerEndpoint` model + migration + probe + settings UI (usable, nothing
-   routes to it yet).
+1. ✅ `DockerEndpoint` model + migration + probe + settings UI (usable,
+   nothing routes to it yet). `Sandbox.dockerEndpointId` landed here too.
 2. `dockerHostArgs` threaded through `local.ts` and the container transport;
-   `Sandbox.dockerEndpointId`; picker; bind-mount refusal. Sandboxes on B work
+   picker; bind-mount refusal. Sandboxes on B work
    except terminal and browser.
 3. Terminal target + browser forward.
 4. Metrics per endpoint.
+
+## As built (phase 1)
+
+- **Machine-level, not workspace-scoped.** Like `NexusHost`: an endpoint is a
+  place containers run, not a secret, and two workspaces on one install share
+  the same machines.
+- **`Sandbox.dockerEndpointId` shipped in phase 1**, not 2 — refusing to remove
+  an endpoint that live sandboxes use needs the column, and one migration is
+  less churn than two. `ON DELETE SET NULL`: destroyed sandboxes keep their
+  rows for history. Added with `ALTER TABLE … ADD COLUMN … REFERENCES` rather
+  than Prisma's table redefinition, which would copy every Sandbox row.
+- **The probe is one `docker info --format '{{json .}}'`**, not `version` then
+  `info` — one SSH connection answers reachability, auth, daemon access and the
+  facts. It runs `detached` (own session, no controlling terminal) with
+  `SSH_ASKPASS_REQUIRE=never`, so a missing key fails in a second instead of
+  sitting on a password prompt in the terminal that started the dev server.
+- **The user part is optional** (`ssh://host`): it can come from
+  `~/.ssh/config`, which is where most LAN machines already have an alias.
+- **The host is not editable** (`PATCH` renames only) — repointing a row would
+  silently orphan its sandboxes.
+- **Probing a real endpoint** (a LAN box whose `known_hosts` entry was stale)
+  showed the first cut telling a *changed* host key apart from nothing: it said
+  the key "isn't trusted yet", which invites accepting it blindly. The hint now
+  names the change and how to clear it if expected.
+- Tests: `NEXUX_TEST_DOCKER_PROBE` (JSON `ProbeResult`) stands in for the probe
+  in route tests, env-guarded like `NEXUX_TEST_TERRAFORM`.

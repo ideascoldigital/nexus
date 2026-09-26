@@ -2,7 +2,7 @@
 
 Live project state. Update when closing each significant PR/session: move items between sections and add a line to the timeline. Detail of long sessions → `specs/` (like `15-roadmap-definicion-features.md`).
 
-_Last updated: 2026-09-23._
+_Last updated: 2026-09-26._
 
 ## Status by module
 
@@ -15,13 +15,15 @@ _Last updated: 2026-09-23._
 | `harness` | 🟡 P0 done · compose healthchecks (spec 24 p2) | P1 warm pool · P2 tool adapters (Claude tool/MCP) · P3 artifacts (spec 13) |
 | `llm` | 🔴 nascent | provider abstraction; only Codex client |
 | `mcp` | ✅ tools + scopes · stack validation (spec 24 p4) | answering a blocked run (own spec) · per-workspace/project tokens |
-| `sandbox` | ✅ complete | — (multi-cloud Civo/AWS + local DinD) · spec 24 complete · spec 25 p1–p2 (seed + repair loop) |
+| `sandbox` | ✅ complete | — (multi-cloud Civo/AWS + local DinD) · spec 24 complete · spec 25 p1–p2 (seed + repair loop) · spec 26 p1 (remote Docker endpoints: model + probe) |
 | `storage` | ✅ local complete | `server` adapter (stub) |
 | `terminal` | 🟡 mixed | sidecar-server + types = Phase 0 stubs (Tools/MCP) |
 | `apps/web` | ✅ active | see "In progress" · browser session works on local docker (D-70); idle TTL + CDP screenshot route still open (spec 23) |
 | `apps/native` | ✅ functional | — (sidecar :3030, kill on exit) |
 
 ## Milestones (timeline by PR)
+
+- **2026-09-26** — Local sandboxes can learn about other machines' Docker (spec 26 phase 1, D-79). Settings → Cloud lists remote daemons reached as `docker -H ssh://…`; adding one runs a single `docker info` over SSH first, so a row is a daemon that answered, with its version, arch and memory. ssh:// only — tcp:// is root on the remote for anyone who reaches the port, and leaves nothing to forward the browser session through. Rootless daemons are refused (Docker-in-Docker needs `--privileged`). Nothing routes sandboxes there yet; `dockerHostArgs` is the one argv prefix phase 2 will thread through. Probing a real LAN box caught the first cut calling a *changed* host key "not trusted yet" — advice to accept it blindly. 8 sandbox + 8 route tests.
 
 - **2026-09-23** — Host agents stopped being OpenAI-only (D-77). Sandboxes have fanned six LLM credentials out for months while every agent on the host hardcoded `modelProvider: "openai"` in seven places and read one `openai_api_key` setting — so an Anthropic key was not a configuration the product would accept, though nothing about the SDK required that: it takes provider, model and key per call and ships 75 providers. `resolveHostModel` now reads the same CloudCredential rows everything else does, with the legacy setting kept as the last fallback so existing installs keep working. Verified against the SDK's own model list, which caught an invented default (`zai/glm-4-plus`; the real one is `zai/glm-4.5`). 1373 web tests.
 
