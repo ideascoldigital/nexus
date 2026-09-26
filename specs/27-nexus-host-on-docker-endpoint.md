@@ -1,9 +1,8 @@
 # 27 — A Nexus host on a machine you already have
 
-Status: **phases 1–2 shipped** (2026-09-26) — a host can be created on an
-endpoint from the hosts form. Update, destroy and the host terminal refuse
-endpoint hosts with the manual command until phase 3. Not yet walked end to
-end on a real endpoint.
+Status: **phases 1–3 shipped** (2026-09-26) — create, update, destroy and a
+terminal for hosts on an endpoint. Phase 4, the end-to-end walk on a real
+endpoint, is still to do.
 Depends on [spec 19](19-nexus-host-provisioning.md) (Nexus hosts) and
 [spec 26](26-remote-docker-endpoints.md) (Docker endpoints), both shipped.
 
@@ -219,7 +218,7 @@ hosts.
    `renderHostCompose` endpoint mode + tests.
 2. ✅ `createHost`/provision/poll for endpoints; host form gains the provider;
    registry auth via temp `DOCKER_CONFIG`.
-3. Update and destroy branches; terminal target for endpoint hosts; the host
+3. ✅ Update and destroy branches; terminal target for endpoint hosts; the host
    dashboard's Update button explains itself.
 4. Manual E2E on a real endpoint.
 
@@ -253,3 +252,19 @@ hosts.
   endpoint named in a test could be a live machine on this network.
 - A running server keeps its Prisma client in memory; a new column needs a
   restart before routes that select it stop answering 500.
+
+## As built (phase 3)
+
+- **Terminal: `docker-host://`, not `docker://`.** The sandbox scheme execs as
+  the agent user (`-u nexus`) into `/opt/nexus`; the host's app container runs
+  as the image's own user (`nexux`), where that fails with "unable to find
+  user". `docker-host://<endpointId>@<container>` execs as the image's user
+  into `/app`, and is refused without an endpoint id. The row also offers
+  the `docker -H … exec -it … bash` to copy.
+- **Update re-renders `compose.yml`** (the file says it is overwritten on
+  update) but never `.env`, which holds the auth key and only exists there;
+  without it, update refuses rather than guess.
+- **Destroy needs only the project name**, so it still works if the host's
+  local files were lost.
+- **Self-update on the host** answers with where to update from
+  (`NEXUX_HOST_KIND=endpoint`), and Settings on the host says so up front.
