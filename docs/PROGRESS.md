@@ -15,13 +15,15 @@ _Last updated: 2026-09-26._
 | `harness` | 🟡 P0 done · compose healthchecks (spec 24 p2) | P1 warm pool · P2 tool adapters (Claude tool/MCP) · P3 artifacts (spec 13) |
 | `llm` | 🔴 nascent | provider abstraction; only Codex client |
 | `mcp` | ✅ tools + scopes · stack validation (spec 24 p4) | answering a blocked run (own spec) · per-workspace/project tokens |
-| `sandbox` | ✅ complete | — (multi-cloud Civo/AWS + local DinD) · spec 24 complete · spec 25 p1–p2 (seed + repair loop) · spec 26 p1–p3 (remote Docker endpoints: probe, launch, terminal, browser) |
+| `sandbox` | ✅ complete | — (multi-cloud Civo/AWS + local DinD) · spec 24 complete · spec 25 p1–p2 (seed + repair loop) · spec 26 complete (remote Docker endpoints) |
 | `storage` | ✅ local complete | `server` adapter (stub) |
 | `terminal` | 🟡 mixed | sidecar-server + types = Phase 0 stubs (Tools/MCP) |
 | `apps/web` | ✅ active | see "In progress" · browser session works on local docker (D-70); idle TTL + CDP screenshot route still open (spec 23) |
 | `apps/native` | ✅ functional | — (sidecar :3030, kill on exit) |
 
 ## Milestones (timeline by PR)
+
+- **2026-09-26** — Spec 26 complete: metrics cover every Docker daemon (phase 4). `/api/metrics?sandboxes=1` measures this machine and each endpoint in parallel and labels rows by endpoint; each daemon reports whether it answered, so an unreachable endpoint no longer reads as one with no sandboxes. Settings → System groups by daemon once there are two. Checked against a real LAN endpoint. 10 metrics tests.
 
 - **2026-09-26** — Terminal and browser session reach sandboxes on another machine's Docker (spec 26 phase 3). Terminal targets carry an endpoint id (`docker://<id>@<container>`), resolved to a host inside the terminal server through an injected resolver — the browser never sends a host, and the package stays free of the database. The browser session reads the remote published port with `docker -H … port` and forwards to it with `ssh -L` through the endpoint, authenticating with the user's own ssh config rather than the sandbox key; loopback on both ends. Smoke-tested on a LAN box with a throwaway container. 1434 web + 39 terminal + 349 sandbox tests.
 

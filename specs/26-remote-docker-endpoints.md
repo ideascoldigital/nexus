@@ -1,10 +1,10 @@
 # 26 — Local sandboxes on another machine's Docker
 
-Status: **phases 1–3 shipped** (2026-09-26, D-79) — endpoints can be added;
-a local sandbox can be launched, exec'd into, paused, resumed and destroyed on
-one; the in-app terminal and the browser session reach it. Still open: VS Code
-attach (not in v1) and metrics per endpoint (phase 4). What changed from the
-draft is under *As built* at the end.
+Status: **shipped** (2026-09-26, D-79) — all four phases. Endpoints can be
+added; a local sandbox can be launched, exec'd into, paused, resumed and
+destroyed on one; the terminal and the browser session reach it; metrics
+cover every daemon. VS Code attach stays out (see *Not in v1*). What changed
+from the draft is under *As built* at the end.
 
 ## Goal
 
@@ -239,7 +239,7 @@ endpoint name, and the VS Code action (below).
    picker; bind-mount refusal. Sandboxes on B work
    except terminal and browser.
 3. ✅ Terminal target + browser forward.
-4. Metrics per endpoint.
+4. ✅ Metrics per endpoint.
 
 ## As built (phase 1)
 
@@ -315,3 +315,12 @@ endpoint name, and the VS Code action (below).
 - Smoke-tested against a real LAN endpoint with a throwaway busybox container:
   `docker -H … port` read the remote port, the forward served its page, and
   the container was removed.
+
+## As built (phase 4)
+
+- `collectSandboxMetrics` measures each daemon in parallel (`docker -H` per
+  endpoint, 15s timeout remote vs 6s local) and labels rows with `endpointId`.
+- It also returns a per-daemon `reachable` flag, so the System page can say
+  "omarchy: not reachable" instead of showing it as empty.
+- The System page groups by daemon only when there is more than one; the
+  status bar never requests sandboxes and is unaffected.
