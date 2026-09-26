@@ -32,12 +32,17 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
 
-function createPrismaClient(): PrismaClient {
+/** Absolute path of the SQLite file DATABASE_URL names. */
+export function databasePath(): string {
   const url = getConfig().databaseUrl;
   if (!url.startsWith("file:")) {
     throw new Error(`Unsupported DATABASE_URL scheme: ${url}`);
   }
-  const dbPath = resolveSqlitePath(url);
+  return resolveSqlitePath(url);
+}
+
+function createPrismaClient(): PrismaClient {
+  const dbPath = databasePath();
   ensureDir(dbPath);
   maybeMigrate(dbPath);
   const adapter = new PrismaBetterSqlite3({ url: dbPath });

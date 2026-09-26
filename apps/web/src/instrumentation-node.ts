@@ -9,6 +9,23 @@
 // bundler can leave the whole module out of the edge build, which is the shape
 // Next documents for exactly this reason.
 export async function registerNode() {
+  // One server per database, before anything else runs: the recovery pass
+  // below treats every in-flight task as orphaned, which is only true when no
+  // other server is running against the same file. See instance-lock.ts.
+  const { acquireInstanceLock, databasePath, describeLockConflict } = await import(
+    "@nexux/db"
+  );
+  const origin =
+    process.env.NEXUX_WEB_ORIGIN ??
+    `http://${process.env.HOSTNAME ?? "localhost"}:${process.env.PORT ?? "3000"}`;
+  const lock = acquireInstanceLock(databasePath(), { origin });
+  if (!lock.ok) {
+    console.error(describeLockConflict(lock));
+    process.exit(1);
+  }
+  process.once("exit", lock.release);
+  console.log(`[instrumentation] holding ${lock.path}`);
+
   // In dev, `pnpm dev` may already run the standalone terminal server; let an
   // explicit opt-out skip the in-process one to avoid a port clash.
   if (process.env.NEXUX_DISABLE_INPROC_TERMINAL !== "1") {
