@@ -1,8 +1,10 @@
 # 26 — Local sandboxes on another machine's Docker
 
-Status: **phase 1 shipped** (2026-09-26, D-79) — model, probe, API and the
-Settings → Cloud list. Nothing routes sandboxes to an endpoint yet; phases 2–4
-remain. What phase 1 changed from the draft is under *As built* at the end.
+Status: **phases 1–2 shipped** (2026-09-26, D-79) — endpoints can be added,
+and a local sandbox can be launched, polled, paused, resumed, exec'd into and
+destroyed on one. Terminal, VS Code and the browser session refuse remote
+sandboxes until phase 3; metrics (phase 4) still only see this machine. What
+changed from the draft is under *As built* at the end.
 
 ## Goal
 
@@ -233,7 +235,7 @@ endpoint name, and the VS Code action (below).
 
 1. ✅ `DockerEndpoint` model + migration + probe + settings UI (usable,
    nothing routes to it yet). `Sandbox.dockerEndpointId` landed here too.
-2. `dockerHostArgs` threaded through `local.ts` and the container transport;
+2. ✅ `dockerHostArgs` threaded through `local.ts` and the container transport;
    picker; bind-mount refusal. Sandboxes on B work
    except terminal and browser.
 3. Terminal target + browser forward.
@@ -264,3 +266,30 @@ endpoint name, and the VS Code action (below).
   names the change and how to clear it if expected.
 - Tests: `NEXUX_TEST_DOCKER_PROBE` (JSON `ProbeResult`) stands in for the probe
   in route tests, env-guarded like `NEXUX_TEST_TERRAFORM`.
+
+## As built (phase 2)
+
+- **`Sandbox.dockerHost` is denormalised** from the endpoint at launch (second
+  migration). The daemon is part of a sandbox's address, like `publicIp` and
+  `instanceId`, and every exec path builds its target from the row — a join on
+  each would have touched ~20 call sites for nothing, and the value cannot
+  drift because an endpoint's host is not editable. The FK stays for "which
+  sandboxes still use this endpoint".
+- **`sandboxTarget` requires `dockerHost`** on its input rather than taking it
+  optionally, so a caller that `select`ed part of the row and forgot it fails
+  typecheck instead of silently exec'ing on this machine's daemon. The only
+  failures were tests; the hand-built targets (task-manager's copies, the two
+  log routes) were patched by hand.
+- **`local.ts` has one private `docker(target, args)`** that every call goes
+  through, so a sandbox cannot half-live on two daemons.
+- **Mount refusal runs before any daemon is asked**, in the launch, and again
+  in `launchLocalSandbox` as a backstop. The picker disables endpoints with the
+  same reason when the project has folder-only repos.
+- **Reconcile groups by daemon**: Docker Desktop down on the laptop no longer
+  implies anything about the workstation's containers.
+- **Phase 3 surfaces refuse rather than misbehave**: the row hides terminal,
+  VS Code and the browser panel for a remote sandbox, and the vscode route and
+  `startBrowserSession` return errors — each would otherwise attach through
+  this machine's daemon and find nothing.
+- `region` on a remote row is the endpoint's name, so the row reads
+  `local · docker @ omarchy` with no UI change.

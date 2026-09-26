@@ -15,13 +15,15 @@ _Last updated: 2026-09-26._
 | `harness` | 🟡 P0 done · compose healthchecks (spec 24 p2) | P1 warm pool · P2 tool adapters (Claude tool/MCP) · P3 artifacts (spec 13) |
 | `llm` | 🔴 nascent | provider abstraction; only Codex client |
 | `mcp` | ✅ tools + scopes · stack validation (spec 24 p4) | answering a blocked run (own spec) · per-workspace/project tokens |
-| `sandbox` | ✅ complete | — (multi-cloud Civo/AWS + local DinD) · spec 24 complete · spec 25 p1–p2 (seed + repair loop) · spec 26 p1 (remote Docker endpoints: model + probe) |
+| `sandbox` | ✅ complete | — (multi-cloud Civo/AWS + local DinD) · spec 24 complete · spec 25 p1–p2 (seed + repair loop) · spec 26 p1–p2 (remote Docker endpoints: probe + launch) |
 | `storage` | ✅ local complete | `server` adapter (stub) |
 | `terminal` | 🟡 mixed | sidecar-server + types = Phase 0 stubs (Tools/MCP) |
 | `apps/web` | ✅ active | see "In progress" · browser session works on local docker (D-70); idle TTL + CDP screenshot route still open (spec 23) |
 | `apps/native` | ✅ functional | — (sidecar :3030, kill on exit) |
 
 ## Milestones (timeline by PR)
+
+- **2026-09-26** — A local sandbox can now run on another machine's Docker (spec 26 phase 2). Launch → "Which Docker" → an endpoint, and provisioning, polling, exec, copies, pause/resume and destroy all go to that daemon via `-H ssh://…`. `Sandbox.dockerHost` is denormalised onto the row (the daemon is part of the address, like `publicIp`), and `sandboxTarget` requires it so a partial `select` fails typecheck instead of exec'ing on the wrong machine. Folder-only repos are refused before any daemon is asked. Reconcile judges each daemon on its own. Terminal, VS Code and the browser panel refuse remote sandboxes until phase 3. 1428 web + 348 sandbox tests.
 
 - **2026-09-26** — Local sandboxes can learn about other machines' Docker (spec 26 phase 1, D-79). Settings → Cloud lists remote daemons reached as `docker -H ssh://…`; adding one runs a single `docker info` over SSH first, so a row is a daemon that answered, with its version, arch and memory. ssh:// only — tcp:// is root on the remote for anyone who reaches the port, and leaves nothing to forward the browser session through. Rootless daemons are refused (Docker-in-Docker needs `--privileged`). Nothing routes sandboxes there yet; `dockerHostArgs` is the one argv prefix phase 2 will thread through. Probing a real LAN box caught the first cut calling a *changed* host key "not trusted yet" — advice to accept it blindly. 8 sandbox + 8 route tests.
 
