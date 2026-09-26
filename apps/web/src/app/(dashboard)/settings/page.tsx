@@ -37,6 +37,7 @@ import { GitLabServersSection } from "@/components/gitlab/gitlab-servers-section
 import { ApiTokensSection } from "@/components/settings/api-tokens";
 import { BackupMigrationSection } from "@/components/settings/backup-migration";
 import { HostModelSection } from "@/components/settings/host-model";
+import { DockerEndpointsSection } from "@/components/settings/docker-endpoints";
 import { NexusHostsSection } from "@/components/settings/nexus-hosts";
 import { SandboxNamingSection } from "@/components/settings/sandbox-naming";
 import { TerminalShellSection } from "@/components/settings/terminal-shell";
@@ -242,7 +243,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
         label: "Cloud",
         icon: Cloud,
         description:
-          "Compute credentials for sandboxes, the tailnet key that reaches your hosts, and how new machines get their names.",
+          "Compute credentials for sandboxes, the tailnet key that reaches your hosts, other machines' Docker for local sandboxes, and how new machines get their names.",
       },
       {
         id: "git",
@@ -800,6 +801,9 @@ function SettingsPageContent() {
                   {/* Needed to reach a Nexus host — the readiness checklist in
                       Backup & migration links the user here. */}
                   <TailscaleCredentialsSection />
+                  {/* Compute you already own: another machine's Docker for
+                      local sandboxes (spec 26). */}
+                  <DockerEndpointsSection />
                   {/* Names the machines the credentials above provision, and
                       the local docker ones too. */}
                   <SandboxNamingSection />
