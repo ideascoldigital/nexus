@@ -160,6 +160,7 @@ import {
   type StackEnvSource,
   type StackServiceSummary,
 } from "@/services/sandbox";
+import { DockerEndpointPicker } from "@/components/projects/docker-endpoint-picker";
 import { parseDotenvWithDiagnostics } from "@/lib/stack/dotenv";
 import {
   applyWizardParams,
@@ -996,6 +997,8 @@ function SetupEditor({
   // be created, not to the project's saved configuration, so typing one must
   // not mark the form dirty.
   const [sandboxName, setSandboxName] = useState("");
+  // Local only: another machine's Docker (spec 26). Null = this machine.
+  const [dockerEndpointId, setDockerEndpointId] = useState<string | null>(null);
   const namePreview = previewSandboxName(sandboxName);
 
   useEffect(() => {
@@ -1120,7 +1123,13 @@ function SetupEditor({
       await save();
       setSavedSnapshot(persisted);
       if (launchOverride) await launchOverride.action();
-      else await launchSandbox(projectId, provider, sandboxName);
+      else
+        await launchSandbox(
+          projectId,
+          provider,
+          sandboxName,
+          provider === "local" ? dockerEndpointId : null,
+        );
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["project-setup", projectId] });
@@ -1379,6 +1388,15 @@ function SetupEditor({
               );
             })}
           </div>
+          {isLocal && (
+            <DockerEndpointPicker
+              value={dockerEndpointId}
+              onChange={setDockerEndpointId}
+              mountOnlyRepos={repositories
+                .filter((r) => !r.repoUrl && r.localPath)
+                .map((r) => r.name)}
+            />
+          )}
           {!isLocal && (
             <div className="grid gap-3">
               <CredentialPicker
@@ -3842,9 +3860,12 @@ function SandboxRow({
   // from this session (node_modules, .next) would otherwise land root-owned and
   // break the dev servers and the agent, which both run as nexux. Passwordless
   // sudo is configured for the rare step that genuinely needs root.
+  // A container on another machine's Docker (spec 26) has no terminal yet:
+  // `docker://` attaches on this machine's daemon, which would not find it.
+  const onRemoteDocker = Boolean(sandbox.dockerHost);
   const terminalTarget =
     sandbox.provider === "local"
-      ? sandbox.instanceId
+      ? sandbox.instanceId && !onRemoteDocker
         ? `docker://${sandbox.instanceId}${terminalPath}`
         : null
       : sandbox.publicIp
@@ -4201,7 +4222,8 @@ function SandboxRow({
                 </DropdownMenuItem>
               )}
               {sandbox.status === "running" &&
-                (sandbox.publicIp || sandbox.provider === "local") && (
+                (sandbox.publicIp ||
+                  (sandbox.provider === "local" && !onRemoteDocker)) && (
                   <DropdownMenuItem onClick={() => void openVsCode()}>
                     Open in VS Code
                   </DropdownMenuItem>
@@ -4365,7 +4387,9 @@ function SandboxRow({
       {sandbox.status === "running" && (
         <SandboxProcessPanel projectId={projectId} sandboxId={sandbox.id} />
       )}
-      {sandbox.status === "running" && (
+      {/* The panel connects to a port docker published on the remote's
+          loopback; forwarding it is spec 26 phase 3. */}
+      {sandbox.status === "running" && !onRemoteDocker && (
         <SandboxBrowserPanel
           projectId={projectId}
           sandboxId={sandbox.id}
