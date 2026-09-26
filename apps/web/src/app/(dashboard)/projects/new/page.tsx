@@ -73,7 +73,7 @@ export default function NewProjectPage() {
       <AppHeader title="New Project" />
       <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto w-full max-w-6xl px-4 py-6 space-y-6">
+        <div className="mx-auto w-full max-w-page px-4 py-6 space-y-6">
           <div className="flex items-center justify-between">
             <Button
               variant="ghost"

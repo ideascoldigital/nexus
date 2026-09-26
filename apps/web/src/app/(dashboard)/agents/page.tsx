@@ -188,7 +188,7 @@ export default function AgentsPage() {
     <>
       <AppHeader title="Agents" />
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto w-full max-w-6xl space-y-5 px-4 py-6">
+        <div className="mx-auto w-full max-w-page space-y-5 px-4 py-6">
           {/* ---- Hero ---------------------------------------------------- */}
           <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border/60 pb-5">
             <div className="flex items-start gap-3">

@@ -449,7 +449,7 @@ export default function ProjectDetailPage({
       <>
         <AppHeader title="Loading..." />
         <div className="flex-1 overflow-auto">
-          <div className="mx-auto w-full max-w-6xl px-4 py-6 space-y-4">
+          <div className="mx-auto w-full max-w-page px-4 py-6 space-y-4">
             <Skeleton className="h-8 w-48" />
             <Skeleton className="h-[300px] rounded-xl" />
           </div>
@@ -463,7 +463,7 @@ export default function ProjectDetailPage({
       <>
         <AppHeader title="Project" />
         <div className="flex-1 overflow-auto">
-          <div className="mx-auto w-full max-w-6xl px-4 py-6 space-y-4">
+          <div className="mx-auto w-full max-w-page px-4 py-6 space-y-4">
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <p className="text-sm text-destructive mb-4">
                 Failed to load project.
@@ -490,7 +490,7 @@ export default function ProjectDetailPage({
       {/* Keeps the search index warm: auto-incremental build on open. */}
       <ProjectAutoIndexer projectId={projectId} />
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto w-full max-w-6xl">
+        <div className="mx-auto w-full max-w-page">
           {/* Tab bar attached under the topbar (prototype): tabs left,
               index status + project actions right. */}
           <Tabs value={activeProjectTab} onValueChange={setProjectTab}>

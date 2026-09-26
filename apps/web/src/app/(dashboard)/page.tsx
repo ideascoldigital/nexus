@@ -245,7 +245,7 @@ export default async function DashboardPage() {
       <div className="flex flex-1 min-h-0">
 
         <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-6xl px-4 py-6 space-y-5">
+        <div className="mx-auto w-full max-w-page px-4 py-6 space-y-5">
           {/* Pulse: spend, runs, delivery, machines, review queue. */}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             <StatTile

@@ -15,6 +15,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import {
   AppWindow,
   Bot,
+  Columns3,
   Cloud,
   DatabaseBackup,
   Terminal as TerminalIcon,
@@ -38,6 +39,7 @@ import { GitLabServersSection } from "@/components/gitlab/gitlab-servers-section
 import { ApiTokensSection } from "@/components/settings/api-tokens";
 import { BackupMigrationSection } from "@/components/settings/backup-migration";
 import { HostModelSection } from "@/components/settings/host-model";
+import { AppearanceSection } from "@/components/settings/appearance";
 import { DesktopAppSection } from "@/components/settings/desktop-app";
 import { DockerEndpointsSection } from "@/components/settings/docker-endpoints";
 import { NexusHostsSection } from "@/components/settings/nexus-hosts";
@@ -210,6 +212,7 @@ const SETTINGS_TABS = [
   "communications",
   "integrations",
   "terminal",
+  "appearance",
   "desktop",
   "backup",
 ] as const;
@@ -285,6 +288,12 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
         label: "Terminal",
         icon: TerminalIcon,
         description: "The shell the in-app terminal opens with.",
+      },
+      {
+        id: "appearance",
+        label: "Appearance",
+        icon: Columns3,
+        description: "How pages use the window — a centred column, or all of it.",
       },
       {
         id: "desktop",
@@ -693,7 +702,7 @@ function SettingsPageContent() {
       <AppHeader title="Settings" />
 
       <main className="flex-1 overflow-auto">
-        <div className="mx-auto flex w-full max-w-6xl gap-8 px-4 py-6">
+        <div className="mx-auto flex w-full max-w-page gap-8 px-4 py-6">
           {/* ---- Rail (md+) -------------------------------------------- */}
           <nav
             aria-label="Settings sections"
@@ -927,6 +936,8 @@ function SettingsPageContent() {
               )}
 
               {activeTab === "terminal" && <TerminalShellSection />}
+
+              {activeTab === "appearance" && <AppearanceSection />}
 
               {activeTab === "desktop" && <DesktopAppSection />}
 

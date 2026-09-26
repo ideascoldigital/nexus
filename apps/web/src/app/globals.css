@@ -191,3 +191,21 @@
     min-height: 2.25rem;
   }
 }
+
+/*
+ * Page width (Settings → Appearance). Contained is the designed default: a
+ * 72rem column that keeps line lengths and card grids at the proportions they
+ * were drawn for. Full width lets every page use the whole window. Driven by
+ * an attribute on <html> that an inline script sets before first paint, so a
+ * full-width preference never flashes the contained layout on load.
+ */
+:root {
+  --page-max-width: 72rem;
+}
+:root[data-layout="full"] {
+  --page-max-width: none;
+}
+
+@utility max-w-page {
+  max-width: var(--page-max-width);
+}
