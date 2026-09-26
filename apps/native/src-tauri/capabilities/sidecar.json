@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "sidecar-zoom",
+  "description": "What the sidecar's own page may ask of the shell: set the webview zoom (Settings → Appearance, the status bar). Nothing else — the page is a remote origin, and core/shell/opener stay out of its reach.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:3030/*"]
+  },
+  "permissions": ["allow-set-zoom"]
+}

@@ -16,21 +16,33 @@ mod native_config;
 /// previous build on port 3030 (stale UI on next launch).
 struct SidecarChild(Mutex<Option<CommandChild>>);
 
-/// Current webview zoom factor. Kept app-side because the webview does not
-/// expose a getter, so relative zoom (in/out) needs the last applied value.
-struct ZoomLevel(Mutex<f64>);
-
-const ZOOM_STEP: f64 = 1.1;
 const ZOOM_MIN: f64 = 0.5;
 const ZOOM_MAX: f64 = 3.0;
 
-fn apply_zoom(app: &AppHandle, level: f64) {
-    let level = level.clamp(ZOOM_MIN, ZOOM_MAX);
-    if let Some(state) = app.try_state::<ZoomLevel>() {
-        *state.0.lock().unwrap() = level;
+/// Set the webview's zoom — a browser's zoom, which scales viewport units and
+/// everything else consistently (CSS `zoom` on the page does not: its `vh`
+/// layouts overflow). Called by the page, which owns the number: it persists
+/// it, steps it, and shows it in Settings and the status bar.
+#[tauri::command]
+fn set_zoom(app: AppHandle, level: f64) -> Result<f64, String> {
+    if !level.is_finite() {
+        return Err("zoom must be a number".into());
     }
+    let level = level.clamp(ZOOM_MIN, ZOOM_MAX);
+    let window = app.get_webview_window("main").ok_or("no main window")?;
+    window.set_zoom(level).map_err(|e| e.to_string())?;
+    Ok(level)
+}
+
+/// The View menu's shortcuts call the page's hook rather than zooming here, so
+/// the menu, Settings and the status bar step through the same number, stored
+/// in one place. Before the page has loaded (the placeholder) there is nothing
+/// to zoom.
+fn page_zoom(app: &AppHandle, dir: &str) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_zoom(level);
+        let _ = window.eval(format!(
+            "window.__nexuxZoom && window.__nexuxZoom(\"{dir}\")"
+        ));
     }
 }
 
@@ -157,7 +169,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
-        .manage(ZoomLevel(Mutex::new(1.0)))
+        .invoke_handler(tauri::generate_handler![set_zoom])
         .setup(|app| {
             // View menu with webview zoom, appended to the default menu so the
             // standard Edit/Window items (copy, paste, minimize) stay intact.
@@ -446,14 +458,11 @@ pub fn run() {
 
             Ok(())
         })
-        .on_menu_event(|app, event| {
-            let current = *app.state::<ZoomLevel>().0.lock().unwrap();
-            match event.id().as_ref() {
-                "zoom_in" => apply_zoom(app, current * ZOOM_STEP),
-                "zoom_out" => apply_zoom(app, current / ZOOM_STEP),
-                "zoom_reset" => apply_zoom(app, 1.0),
-                _ => {}
-            }
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "zoom_in" => page_zoom(app, "in"),
+            "zoom_out" => page_zoom(app, "out"),
+            "zoom_reset" => page_zoom(app, "reset"),
+            _ => {}
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
