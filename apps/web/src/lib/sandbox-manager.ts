@@ -44,6 +44,7 @@ import {
   type SandboxStackCompose,
 } from "@/lib/stack/sandbox-compose";
 import { sandboxTarget } from "@/lib/agent-core";
+import type { DockerTarget } from "@nexux/sandbox";
 import {
   gitProvidersForRepos,
   selfHostedGitLabHost,
@@ -889,6 +890,8 @@ export type SandboxNameLookups = {
   heldBy: (name: string) => Promise<string | null>;
   /** Does the host already have a container by this name, any state? */
   containerExists: (name: string) => Promise<boolean>;
+  /** Names the daemon in the collision message; defaults to "this machine". */
+  where?: string;
 };
 
 export async function resolveSandboxName(
@@ -926,17 +929,39 @@ export async function resolveSandboxName(
   // scoped to the provider, which rejects duplicates itself.
   if (provider === "local" && (await lookups.containerExists(name))) {
     throw new Error(
-      `A docker container called "${name}" already exists on this machine.`,
+      `A docker container called "${name}" already exists on ${lookups.where ?? "this machine"}.`,
     );
   }
 
   return name;
 }
 
+/**
+ * The daemon a new local sandbox goes to (spec 26): null for this machine,
+ * or a DockerEndpoint's id. Resolved here rather than trusted from the caller,
+ * so a stale id fails loudly instead of launching on this machine.
+ */
+async function resolveDockerEndpoint(
+  dockerEndpointId: string | null | undefined,
+): Promise<{ id: string; name: string; target: DockerTarget } | null> {
+  if (!dockerEndpointId) return null;
+  const endpoint = await prisma.dockerEndpoint.findUnique({
+    where: { id: dockerEndpointId },
+  });
+  if (!endpoint) throw new Error("That Docker endpoint no longer exists.");
+  return { id: endpoint.id, name: endpoint.name, target: { host: endpoint.host } };
+}
+
+/** Where a local sandbox's container lives, off its row. */
+function rowTarget(sandbox: { dockerHost: string | null }): DockerTarget {
+  return { host: sandbox.dockerHost };
+}
+
 export async function launchSandbox(
   projectId: string,
   providerOverride?: SandboxProvider,
   requestedName?: string,
+  dockerEndpointId?: string | null,
 ): Promise<Sandbox> {
   const [readiness, project] = await Promise.all([
     getSandboxReadiness(),
@@ -954,13 +979,33 @@ export async function launchSandbox(
       ? configProvider
       : "civo");
 
+  if (dockerEndpointId && provider !== "local") {
+    throw new Error("A Docker endpoint only applies to local sandboxes.");
+  }
+  const endpoint = await resolveDockerEndpoint(dockerEndpointId);
+  const target: DockerTarget = endpoint?.target ?? { host: null };
+
+  // A bind mount names a path on the daemon's disk. Another machine cannot see
+  // this one's folders — Docker would mount an empty directory without a word
+  // — so refuse, naming the repos, rather than drop them or guess a path.
+  if (endpoint) {
+    const mountOnly = project.repositories.filter((r) => !r.repoUrl && r.localPath);
+    if (mountOnly.length > 0) {
+      throw new Error(
+        `"${endpoint.name}" can't see local folders: ${mountOnly.map((r) => r.name).join(", ")}. Give ${mountOnly.length === 1 ? "it" : "them"} a clone URL, or run the sandbox on this machine.`,
+      );
+    }
+  }
+
   // Cloud credentials only matter for cloud providers; local needs Docker.
   let resolved: { credentialId: string | null; env: ProviderCredentials } | null =
     null;
   if (provider === "local") {
-    if (!(await dockerAvailable())) {
+    if (!(await dockerAvailable(target))) {
       throw new Error(
-        "Docker is not available. Local sandboxes run in a Docker container — start Docker Desktop and retry.",
+        endpoint
+          ? `Docker on "${endpoint.name}" isn't answering — check it in Settings → Cloud → Docker endpoints.`
+          : "Docker is not available. Local sandboxes run in a Docker container — start Docker Desktop and retry.",
       );
     }
   } else {
@@ -1031,6 +1076,11 @@ export async function launchSandbox(
     requestedName,
     provider,
     await sandboxPrefixForProject(projectId),
+    {
+      heldBy: projectHoldingName,
+      containerExists: (n) => localContainerExists(n, target),
+      where: endpoint ? `"${endpoint.name}"` : undefined,
+    },
   );
   const workDir = path.join(getConfig().dataDir, "sandboxes", sandboxId);
 
@@ -1044,10 +1094,13 @@ export async function launchSandbox(
       status: "provisioning",
       provider,
       credentialId: resolved?.credentialId ?? null,
-      region: provider === "local" ? "local" : spec.region,
+      // The row's "@ where" — for a remote daemon, the endpoint's name.
+      region: provider === "local" ? (endpoint?.name ?? "local") : spec.region,
       size: provider === "local" ? "docker" : spec.size,
       stackServices: stack.services,
       workDir,
+      dockerEndpointId: endpoint?.id ?? null,
+      dockerHost: target.host,
     },
   });
 
@@ -1067,7 +1120,7 @@ export async function launchSandbox(
   activeOps.add(sandboxId);
   const provision =
     provider === "local"
-      ? runLocalProvision(sandboxId, spec, stackLog)
+      ? runLocalProvision(sandboxId, spec, stackLog, target)
       : runProvision(sandboxId, workDir, spec, resolved!.env, stackLog);
   void provision.finally(() => activeOps.delete(sandboxId));
 
@@ -1084,10 +1137,13 @@ async function runLocalProvision(
   sandboxId: string,
   spec: SandboxSpec,
   extraLogLines: string[] = [],
+  target: DockerTarget = { host: null },
 ) {
   const log = createLogWriter(sandboxId);
   try {
-    log.append(`[nexux] provisioning local container ${spec.name}`);
+    log.append(
+      `[nexux] provisioning local container ${spec.name}${target.host ? ` on ${target.host}` : ""}`,
+    );
     for (const line of extraLogLines) log.append(line);
     const { containerName } = await launchLocalSandbox({
       name: spec.name,
@@ -1100,6 +1156,7 @@ async function runLocalProvision(
       // spent five minutes on it would be the same slow surprise this piece
       // exists to remove.
       preferPrebuilt: true,
+      target,
     });
     await prisma.sandbox.update({
       where: { id: sandboxId },
@@ -1109,15 +1166,15 @@ async function runLocalProvision(
     const deadline = Date.now() + 20 * 60_000;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 10_000));
-      if (!(await localSandboxRunning(containerName))) {
+      if (!(await localSandboxRunning(containerName, target))) {
         throw new Error("container exited during bootstrap");
       }
       // Checked before completion: a fatal step suppresses the completion
       // marker, so without this the run only ends at the 20-minute timeout,
       // reporting a deadline instead of the reason sitting on disk.
-      const failure = await localBootstrapFailure(containerName);
+      const failure = await localBootstrapFailure(containerName, target);
       if (failure) throw new Error(failure);
-      if (await localBootstrapComplete(containerName)) {
+      if (await localBootstrapComplete(containerName, target)) {
         log.append(`[nexux] bootstrap complete — sandbox ready`);
         await prisma.sandbox.update({
           where: { id: sandboxId },
@@ -1304,7 +1361,7 @@ export async function requestDestroy(sandboxId: string): Promise<Sandbox> {
       data: { status: "destroying", error: null },
     });
     activeOps.add(sandboxId);
-    void runLocalDestroy(sandboxId, sandbox.instanceId).finally(() =>
+    void runLocalDestroy(sandboxId, sandbox.instanceId, rowTarget(sandbox)).finally(() =>
       activeOps.delete(sandboxId),
     );
     return updated;
@@ -1336,7 +1393,11 @@ export async function requestDestroy(sandboxId: string): Promise<Sandbox> {
   return updated;
 }
 
-async function runLocalDestroy(sandboxId: string, containerName: string | null) {
+async function runLocalDestroy(
+  sandboxId: string,
+  containerName: string | null,
+  target: DockerTarget = { host: null },
+) {
   const log = createLogWriter(sandboxId);
   const existing = await prisma.sandbox.findUnique({
     where: { id: sandboxId },
@@ -1345,7 +1406,7 @@ async function runLocalDestroy(sandboxId: string, containerName: string | null) 
   if (existing?.log) log.sink(existing.log);
   try {
     if (containerName) {
-      await destroyLocalSandbox(containerName, log.sink.bind(log));
+      await destroyLocalSandbox(containerName, log.sink.bind(log), target);
     }
     await prisma.sandbox.update({
       where: { id: sandboxId },
@@ -1437,6 +1498,8 @@ export type ReconcileCandidate = {
   id: string;
   name: string;
   instanceId: string | null;
+  /** The daemon it lives on; null = this machine (spec 26). */
+  dockerHost?: string | null;
 };
 
 /**
@@ -1447,26 +1510,39 @@ export type ReconcileCandidate = {
 export async function staleRunningSandboxIds(
   candidates: ReconcileCandidate[],
   probes: {
-    dockerAvailable: () => Promise<boolean>;
-    containerRunning: (container: string) => Promise<boolean>;
+    dockerAvailable: (target: DockerTarget) => Promise<boolean>;
+    containerRunning: (container: string, target: DockerTarget) => Promise<boolean>;
   },
 ): Promise<string[]> {
   if (candidates.length === 0) return [];
-  // Docker being unreachable is not evidence the sandboxes died — leave the
-  // rows alone rather than marking every one of them paused.
-  if (!(await probes.dockerAvailable())) return [];
+
+  // Per daemon: a laptop's Docker Desktop being down says nothing about the
+  // workstation's sandboxes, and the reverse. Docker being unreachable is not
+  // evidence the sandboxes died — leave those rows alone rather than marking
+  // every one of them paused.
+  const byHost = new Map<string | null, ReconcileCandidate[]>();
+  for (const c of candidates) {
+    const key = c.dockerHost ?? null;
+    byHost.set(key, [...(byHost.get(key) ?? []), c]);
+  }
 
   const results = await Promise.all(
-    candidates.map(async (s) => {
-      // A probe that throws says nothing about the container; treat only a
-      // definite "not running" as stale.
-      const running = await probes
-        .containerRunning(s.instanceId ?? s.name)
-        .catch(() => true);
-      return running ? null : s.id;
+    [...byHost].map(async ([host, group]) => {
+      const target: DockerTarget = { host };
+      if (!(await probes.dockerAvailable(target).catch(() => false))) return [];
+      return Promise.all(
+        group.map(async (s) => {
+          // A probe that throws says nothing about the container; treat only a
+          // definite "not running" as stale.
+          const running = await probes
+            .containerRunning(s.instanceId ?? s.name, target)
+            .catch(() => true);
+          return running ? null : s.id;
+        }),
+      );
     }),
   );
-  return results.filter((id): id is string => id !== null);
+  return results.flat().filter((id): id is string => id !== null);
 }
 
 export async function reconcileLocalSandboxStatuses(
@@ -1474,12 +1550,12 @@ export async function reconcileLocalSandboxStatuses(
 ): Promise<void> {
   const candidates = await prisma.sandbox.findMany({
     where: { projectId, archived: false, provider: "local", status: "running" },
-    select: { id: true, name: true, instanceId: true },
+    select: { id: true, name: true, instanceId: true, dockerHost: true },
   });
 
   const stale = await staleRunningSandboxIds(candidates, {
-    dockerAvailable,
-    containerRunning: localSandboxRunning,
+    dockerAvailable: (target) => dockerAvailable(target),
+    containerRunning: (name, target) => localSandboxRunning(name, target),
   });
   if (stale.length === 0) return;
 
@@ -1501,7 +1577,7 @@ export async function pauseSandbox(sandboxId: string) {
   if (isSandboxBusy(sandboxId)) {
     throw new Error("A task is running on this sandbox — wait for it first");
   }
-  await pauseLocalSandbox(sandbox.instanceId ?? sandbox.name);
+  await pauseLocalSandbox(sandbox.instanceId ?? sandbox.name, rowTarget(sandbox));
   return prisma.sandbox.update({
     where: { id: sandboxId },
     data: { status: "paused" },
@@ -1518,7 +1594,9 @@ export async function resumeSandbox(sandboxId: string) {
   if (sandbox.status !== "paused") {
     throw new Error("Only a paused sandbox can be resumed");
   }
-  await resumeLocalSandbox(sandbox.instanceId ?? sandbox.name);
+  await resumeLocalSandbox(sandbox.instanceId ?? sandbox.name, {
+    target: rowTarget(sandbox),
+  });
   return prisma.sandbox.update({
     where: { id: sandboxId },
     data: { status: "running" },

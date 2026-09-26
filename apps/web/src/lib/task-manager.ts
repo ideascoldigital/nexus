@@ -238,6 +238,7 @@ export async function pushAttachments(opts: {
         user: opts.rootTarget.user,
         privateKeyPath: opts.rootTarget.privateKeyPath,
         container: opts.rootTarget.container,
+        dockerHost: opts.rootTarget.dockerHost,
         localDir,
         remoteDir,
         timeoutMs: 180_000,
@@ -322,6 +323,7 @@ export async function materializeContext(
       user: ssh.user,
       privateKeyPath: ssh.privateKeyPath,
       container: ssh.container,
+      dockerHost: ssh.dockerHost,
       localDir: hostTmpDir,
       remoteDir: remoteTmpDir,
       timeoutMs: 120_000,
@@ -419,6 +421,7 @@ export async function collectScreenshots(
   const res = await fetchRemoteDir({
     host: ssh.host,
     container: ssh.container,
+    dockerHost: ssh.dockerHost,
     user: ssh.user,
     privateKeyPath: ssh.privateKeyPath,
     remoteDir: REMOTE_SHOT_DIR,

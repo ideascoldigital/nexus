@@ -75,16 +75,23 @@ export async function POST(req: NextRequest, { params }: Params) {
   const { projectId } = await params;
   const body = await req
     .json()
-    .catch(() => ({}) as { provider?: string; name?: string });
+    .catch(
+      () => ({}) as { provider?: string; name?: string; dockerEndpointId?: string },
+    );
   const provider =
     body?.provider === "local" || body?.provider === "aws"
       ? body.provider
       : "civo";
   // Absent or blank both mean "generate one" — a cleared input posts "".
   const name = typeof body?.name === "string" ? body.name : undefined;
+  // Another machine's Docker (spec 26); absent = this machine.
+  const dockerEndpointId =
+    typeof body?.dockerEndpointId === "string" && body.dockerEndpointId
+      ? body.dockerEndpointId
+      : null;
 
   try {
-    const sandbox = await launchSandbox(projectId, provider, name);
+    const sandbox = await launchSandbox(projectId, provider, name, dockerEndpointId);
     return NextResponse.json(sandbox, { status: 202 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Launch failed";

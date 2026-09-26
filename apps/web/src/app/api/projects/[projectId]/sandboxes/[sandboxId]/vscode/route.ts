@@ -95,6 +95,14 @@ export async function POST(req: NextRequest, { params }: Params) {
   // Local Docker sandboxes have no sshd — attach with the Dev Containers
   // extension instead: the authority is "attached-container+<hex(name)>".
   if (sandbox.provider === "local") {
+    // Dev Containers attaches through this machine's daemon; one on another
+    // machine needs a docker context there first (spec 26, not yet).
+    if (sandbox.dockerHost) {
+      return NextResponse.json(
+        { error: "VS Code can't attach to a sandbox on another machine's Docker yet." },
+        { status: 409 },
+      );
+    }
     if (!sandbox.instanceId) {
       return NextResponse.json(
         { error: "Local sandbox has no container yet" },

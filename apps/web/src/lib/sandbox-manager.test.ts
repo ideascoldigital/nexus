@@ -15,7 +15,10 @@ const up = async () => true;
 const down = async () => false;
 const dockerUp = async () => true;
 
-const sandbox = (id: string, over: Partial<{ instanceId: string | null }> = {}) => ({
+const sandbox = (
+  id: string,
+  over: Partial<{ instanceId: string | null; dockerHost: string | null }> = {},
+) => ({
   id,
   name: `nexux-${id}`,
   instanceId: null,
@@ -71,6 +74,26 @@ test("the probe is asked about instanceId when present, else the name", async ()
     },
   );
   assert.deepEqual(asked.sort(), ["container-xyz", "nexux-b"]);
+});
+
+test("each daemon is judged on its own: one being down leaves its sandboxes alone", async () => {
+  // Docker Desktop stopped on the laptop says nothing about the workstation's
+  // containers — and the reverse. A single global check would get one wrong.
+  const stale = await staleRunningSandboxIds(
+    [
+      sandbox("laptop"),
+      sandbox("ws-dead", { dockerHost: "ssh://omarchy" }),
+      sandbox("ws-alive", { dockerHost: "ssh://omarchy" }),
+    ],
+    {
+      dockerAvailable: async (t) => t.host === "ssh://omarchy",
+      containerRunning: async (c, t) => {
+        assert.equal(t.host, "ssh://omarchy", "the laptop's daemon was never asked");
+        return !c.includes("dead");
+      },
+    },
+  );
+  assert.deepEqual(stale, ["ws-dead"]);
 });
 
 test("a probe that throws leaves the sandbox alone", async () => {

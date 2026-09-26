@@ -247,6 +247,14 @@ export async function startBrowserSession(
   if (!sandboxReachable(sandbox)) {
     throw new Error("The sandbox is not running");
   }
+  // The bridge is published on the remote's loopback; reaching it needs an
+  // SSH forward to that machine (spec 26 phase 3). Refuse rather than start a
+  // session the panel could never connect to.
+  if (sandbox.provider === "local" && sandbox.dockerHost) {
+    throw new Error(
+      "The browser session isn't available yet for sandboxes on another machine's Docker.",
+    );
+  }
 
   // A restart must not leave the previous forward holding a local port.
   stopForward(sandboxId);

@@ -14,6 +14,7 @@ import {
   PATCH as patchRoute,
 } from "./docker-endpoints/[endpointId]/route";
 import { POST as checkRoute } from "./docker-endpoints/[endpointId]/check/route";
+import { POST as launchRoute } from "./projects/[projectId]/sandboxes/route";
 
 const HEALTHY = {
   ok: true,
@@ -45,6 +46,7 @@ after(async () => {
 
 beforeEach(async () => {
   await prisma.sandbox.deleteMany({ where: { projectId } });
+  await prisma.repository.deleteMany({ where: { projectId } });
   await prisma.dockerEndpoint.deleteMany({});
   process.env.NEXUX_TEST_DOCKER_PROBE = JSON.stringify(HEALTHY);
 });
@@ -169,4 +171,35 @@ test("unknown ids are 404", async () => {
     (await patchRoute(json("PATCH", "http://test/x", { name: "x" }), params("nope"))).status,
     404,
   );
+});
+
+// --- launching onto an endpoint ---------------------------------------------
+
+const launch = (body: unknown) =>
+  launchRoute(json("POST", `http://test/api/projects/${projectId}/sandboxes`, body), {
+    params: Promise.resolve({ projectId }),
+  });
+
+test("a repo with only a local folder can't launch on another machine, and the repo is named", async () => {
+  const ep = await (await create({ name: "omarchy", host: "ssh://omarchy" })).json();
+  await prisma.repository.create({
+    data: { projectId, name: "landing", localPath: "/Users/me/landing" },
+  });
+  const res = await launch({ provider: "local", dockerEndpointId: ep.id });
+  assert.equal(res.status, 400);
+  const { error } = await res.json();
+  assert.match(error, /"omarchy" can't see local folders: landing/);
+  // Refused before anything was created or any daemon was asked.
+  assert.equal(await prisma.sandbox.count({ where: { projectId } }), 0);
+});
+
+test("an endpoint on a cloud launch is refused, and so is a stale one", async () => {
+  const ep = await (await create({ name: "omarchy", host: "ssh://omarchy" })).json();
+  const cloud = await launch({ provider: "civo", dockerEndpointId: ep.id });
+  assert.equal(cloud.status, 400);
+  assert.match((await cloud.json()).error, /only applies to local sandboxes/);
+
+  const stale = await launch({ provider: "local", dockerEndpointId: "gone" });
+  assert.equal(stale.status, 400);
+  assert.match((await stale.json()).error, /no longer exists/);
 });

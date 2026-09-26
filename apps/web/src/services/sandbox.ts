@@ -465,11 +465,13 @@ export async function launchSandbox(
   provider: LaunchTarget = "civo",
   /** Blank or omitted lets the server generate `nexux-<project>-<id>`. */
   name?: string,
+  /** Local only: another machine's Docker (spec 26); omitted = this machine. */
+  dockerEndpointId?: string | null,
 ): Promise<SandboxSummary> {
   const res = await fetch(`/api/projects/${projectId}/sandboxes`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider, name }),
+    body: JSON.stringify({ provider, name, dockerEndpointId }),
   });
   if (!res.ok) return parseError(res, "Failed to launch sandbox");
   return res.json();
