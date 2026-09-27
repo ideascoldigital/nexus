@@ -1,6 +1,6 @@
 # 29 — Seed data: a sandbox starts with a real database
 
-Status: **phases 1–3 shipped** (2026-09-27) — seeds attach, every new sandbox restores them before its repos install, and a running one can be reset to them.
+Status: **shipped** (2026-09-27) — all four phases. The seed *file* does not travel in a config export (see phase 4 as built); a transfer between installs is a follow-up.
 
 ## Goal
 
@@ -281,3 +281,34 @@ decision a person makes.
   counted, setup green.
 - Not done from the spec: `nexux_list_sandboxes` does not carry per-sandbox
   seed info yet — resolving it costs a stack build per sandbox on every list.
+
+## As built (phase 4)
+
+- **Save as seed** (row menu → a dialog naming the service, its engine, and
+  the seed it replaces with its size): `renderSeedDump` writes the dump on
+  the instance in the format each restore reads best — `pg_dump -Fc`,
+  `mariadb-dump --single-transaction --routines --triggers` gzipped (the
+  whole server when no database is named), `mongodump --archive` gzipped —
+  then `fetchRemoteDir` brings it back and `ingestSeed` takes it like any
+  upload: bytes re-identified, service re-checked, swapped in once its row
+  exists. The replaced seed's `sensitive` flag carries over. Both dump
+  commands were run against real postgres:16 and mariadb:11 and their output
+  re-detected before shipping. The spec's "confirm naming both sizes" became
+  the old size in the dialog and both in the result: the new size only
+  exists once the dump has run.
+- **Export — changed from the spec.** An export is one JSON document (sealed
+  when it carries secrets); there is no bundle to put a file in, and a
+  multi-GB dump does not belong inlined in JSON. So a stack node carries its
+  seed's metadata (file name, format, size, sha256, sensitive) and never the
+  file; a template carries none. Import warns per node — "Seed data for
+  "db" in Shop (prod.dump, 3.0 MB) is not part of an export — attach it
+  again" — unless the destination already holds the same sha256. Moving the
+  file between installs (to a Nexus host, above all) is the follow-up.
+- **Cloud warning:** the wizard's Launch step, for a Civo/AWS destination
+  with an enabled `sensitive` seed, names the files and keeps Launch disabled
+  until "Send it to the cloud anyway" is switched on. A launch with nobody to
+  ask (MCP, a schedule) records the same fact in the sandbox log.
+- Walked on omarchy: a sandbox's orders cut to 777 plus a hand-made table,
+  saved as the seed from the UI (36 KB replacing 173 KB), and a new sandbox
+  booted with exactly that data; the Civo Launch step showed the warning with
+  Launch disabled (nothing was launched in the cloud).

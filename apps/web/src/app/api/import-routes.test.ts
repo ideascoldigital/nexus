@@ -677,3 +677,57 @@ test("a malformed body is a 400", async () => {
   );
   assert.equal(res.status, 400);
 });
+
+// --- seed data (spec 29) -------------------------------------------------------
+// The file never travels in an export; what the seed was does, so the
+// destination can say what is missing.
+
+test("an export carries what a seed was, never the file", async () => {
+  const workspace = await prisma.workspace.upsert({
+    where: { id: "ws-import-test" },
+    create: { id: "ws-import-test", name: "Import" },
+    update: {},
+  });
+  const project = await prisma.project.create({ data: { name: "Seeded", workspaceId: workspace.id } });
+  const node = await prisma.stackNode.create({
+    data: { projectId: project.id, kind: "service", name: "db", image: "postgres:17" },
+  });
+  await prisma.seedData.create({
+    data: {
+      projectId: project.id,
+      stackNodeId: node.id,
+      fileName: "prod.dump",
+      format: "pg-custom",
+      sizeBytes: BigInt(5 * 1024 * 1024),
+      sha256: "d".repeat(64),
+    },
+  });
+  const doc = (await (await exportGet(new NextRequest("http://test/api/export"))).json()) as ExportDocument;
+  const exported = doc.projects.find((p) => p.id === project.id)!.stack.nodes[0];
+  assert.deepEqual(exported.seed, {
+    fileName: "prod.dump",
+    format: "pg-custom",
+    sizeBytes: 5 * 1024 * 1024,
+    sha256: "d".repeat(64),
+    sensitive: true,
+  });
+  const template = (await (await exportGet(new NextRequest("http://test/api/export?template=true"))).json()) as ExportDocument;
+  assert.equal(template.projects.find((p) => p.id === project.id)!.stack.nodes[0].seed, null, "a template carries no one's data");
+});
+
+test("importing a project whose service had a seed says to attach it again", async () => {
+  const doc = structuredClone(sourceDoc);
+  doc.projects[0].stack.nodes[0].seed = {
+    fileName: "prod.dump",
+    format: "pg-custom",
+    sizeBytes: 3 * 1024 * 1024,
+    sha256: "e".repeat(64),
+    sensitive: true,
+  };
+  const plan = await planOf(await runImport({ dryRun: true, pathRoot: DEST_ROOT, data: doc }));
+  assert.ok(
+    plan.warnings.some((w) => /Seed data for ".+" .*\(prod\.dump, 3\.0 MB\) is not part of an export/.test(w)),
+    JSON.stringify(plan.warnings),
+  );
+  assert.equal(plan.ok, true, "a missing seed is a warning, not a refusal");
+});

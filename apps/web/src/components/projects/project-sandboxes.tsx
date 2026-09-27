@@ -164,6 +164,8 @@ import { dockerTerminalTarget } from "@/lib/terminal-target";
 import { ContextCheck } from "@/components/settings/credential-check";
 import { DockerEndpointPicker } from "@/components/projects/docker-endpoint-picker";
 import { SandboxSeedResetDialog } from "@/components/projects/sandbox-seed-reset";
+import { SandboxSeedSaveDialog } from "@/components/projects/sandbox-seed-save";
+import { getSeeds } from "@/services/seeds";
 import { parseDotenvWithDiagnostics } from "@/lib/stack/dotenv";
 import {
   applyWizardParams,
@@ -1247,6 +1249,17 @@ function SetupEditor({
     restored.destination,
   );
   const isLocal = destination === "local";
+  // Spec 29 — a cloud launch that would carry seed data marked as holding
+  // real people's data says so, and waits for an explicit yes.
+  const projectSeeds = useQuery({
+    queryKey: ["project-seeds", projectId],
+    queryFn: () => getSeeds(projectId),
+    enabled: !isLocal && config.includeStackServices,
+  });
+  const sensitiveSeeds = !isLocal && config.includeStackServices
+    ? (projectSeeds.data?.seeds ?? []).filter((s) => s.enabled && s.sensitive)
+    : [];
+  const [seedCloudAck, setSeedCloudAck] = useState(false);
   const steps = stepsFor(destination);
   const [stepKey, setStepKeyState] = useState<WizardStepKey>(restored.step);
   const setStepKey = (key: WizardStepKey) => setStepKeyState(key);
@@ -2302,6 +2315,22 @@ function SetupEditor({
               Everything is saved with the project — launch now or just save.
             </p>
           </div>
+          {sensitiveSeeds.length > 0 && (
+            <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs">
+              <p className="flex items-center gap-1.5 font-medium text-amber-500">
+                <AlertTriangle className="h-3.5 w-3.5" /> Seed data with real people&apos;s data leaves this machine
+              </p>
+              <p className="text-muted-foreground">
+                {sensitiveSeeds.map((s) => s.fileName).join(", ")} will be copied to a{" "}
+                {destination === "aws" ? "AWS" : "Civo"} VM and restored there. Launch it locally instead, or switch
+                off &ldquo;Restore into new sandboxes&rdquo; on the service in the Stack canvas.
+              </p>
+              <label className="flex items-center gap-2">
+                <Switch checked={seedCloudAck} onCheckedChange={setSeedCloudAck} disabled={busy} />
+                <span>Send it to the cloud anyway</span>
+              </label>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label className="text-sm">Name</Label>
             <Input
@@ -2452,7 +2481,7 @@ function SetupEditor({
               // — a local sandbox keeps the user's cloud provider on its saved
               // config, and launching that would ignore the Type step.
               onClick={() => launchMutation.mutate(destination)}
-              disabled={busy || !canLaunch}
+              disabled={busy || !canLaunch || (sensitiveSeeds.length > 0 && !seedCloudAck)}
               className="gap-1.5"
               title={
                 missingTokens.length > 0
@@ -4075,6 +4104,7 @@ function SandboxRow({
 
   // Spec 29 phase 3 — only offered where there are stack services to reset.
   const [seedResetOpen, setSeedResetOpen] = useState(false);
+  const [seedSaveOpen, setSeedSaveOpen] = useState(false);
   const hasStackServices =
     Array.isArray(sandbox.stackServices) && (sandbox.stackServices as unknown[]).length > 0;
 
@@ -4105,6 +4135,13 @@ function SandboxRow({
         sandboxName={sandbox.name}
         open={seedResetOpen}
         onOpenChange={setSeedResetOpen}
+      />
+      <SandboxSeedSaveDialog
+        projectId={projectId}
+        sandboxId={sandbox.id}
+        sandboxName={sandbox.name}
+        open={seedSaveOpen}
+        onOpenChange={setSeedSaveOpen}
       />
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <button
@@ -4292,6 +4329,11 @@ function SandboxRow({
               {sandbox.status === "running" && hasStackServices && (
                 <DropdownMenuItem onClick={() => setSeedResetOpen(true)}>
                   Reset data…
+                </DropdownMenuItem>
+              )}
+              {sandbox.status === "running" && hasStackServices && (
+                <DropdownMenuItem onClick={() => setSeedSaveOpen(true)}>
+                  Save data as seed…
                 </DropdownMenuItem>
               )}
               {sandbox.provider === "local" && (

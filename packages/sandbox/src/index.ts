@@ -15,14 +15,18 @@ export {
 } from "./docker-endpoint";
 // Spec 29 — seed data restored into stack services.
 export {
+  renderSeedDump,
   renderSeedReset,
   renderSeedRestore,
+  SEED_DUMP_DIR,
+  seedDumpShape,
   seedRemoteDir,
   seedRemoteShaCommand,
   seedWaitSeconds,
   SEED_READY_MARKER,
   SEEDS_DIR,
   type SandboxSeedSpec,
+  type SeedEngine as SandboxSeedEngine,
 } from "./template-seed";
 // Spec 24 piece 1 — structured per-step bootstrap results.
 export {

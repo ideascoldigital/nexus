@@ -25,6 +25,8 @@ import { formatBytes, seedFilePath } from "./store";
 
 export type LaunchSeed = {
   spec: SandboxSeedSpec;
+  /** Marked as holding real people's data — drives the cloud warning. */
+  sensitive: boolean;
   /** The directory holding just this seed's file, on this machine. */
   localDir: string;
 };
@@ -58,6 +60,7 @@ export async function seedsForLaunch(
       continue;
     }
     seeds.push({
+      sensitive: row.sensitive,
       localDir: path.dirname(file),
       spec: {
         service: byNode.get(row.stackNodeId)!,

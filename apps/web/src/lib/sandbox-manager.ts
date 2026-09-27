@@ -890,6 +890,13 @@ async function buildSpec(
       ? await seedsForLaunch(projectId, stack.services, (w) => stack.warnings.push(w.replace(/^\[nexux\] seed: /, "seed: ")))
       : [];
   if (seeds.length) spec.seeds = seeds.map((s) => s.spec);
+  // The UI asks before a cloud launch carries these; a launch from MCP or a
+  // schedule has nobody to ask, so it is at least on the record.
+  if (provider !== "local") {
+    for (const s of seeds.filter((x) => x.sensitive)) {
+      stack.warnings.push(`seed: ${s.spec.fileName} is marked as holding real people's data and is being sent to a ${provider} VM`);
+    }
+  }
 
   return { spec, stack, seeds };
 }

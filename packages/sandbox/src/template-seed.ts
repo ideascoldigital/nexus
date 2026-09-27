@@ -175,3 +175,54 @@ export function renderSeedReset(seed: SandboxSeedSpec): string {
 export function seedRemoteShaCommand(seed: Pick<SandboxSeedSpec, "service" | "fileName">): string {
   return `sha256sum ${shq(`${seedRemoteDir(seed.service)}/${seed.fileName}`)} 2>/dev/null | cut -d' ' -f1`;
 }
+
+// --- Save as seed (spec 29 phase 4) -----------------------------------------
+
+export type SeedEngine = "postgres" | "mysql" | "mongo";
+
+/** Where a dump is written on the instance before it is fetched. */
+export const SEED_DUMP_DIR = "/opt/nexus/.seed-dumps";
+
+/**
+ * What a dump of each engine is: always the format the restore reads best.
+ * Postgres gets the custom archive (compressed, and pg_restore --no-owner
+ * sidesteps roles); MySQL and Mongo are gzipped whole.
+ */
+export function seedDumpShape(engine: SeedEngine): { ext: string; format: SeedFormat; gzipped: boolean } {
+  if (engine === "postgres") return { ext: "dump", format: "pg-custom", gzipped: false };
+  if (engine === "mysql") return { ext: "sql.gz", format: "mysql-sql", gzipped: true };
+  return { ext: "archive.gz", format: "mongo-archive", gzipped: true };
+}
+
+const DUMP: Record<SeedEngine, string> = {
+  postgres:
+    `export ${PG_PASSWORD}; ${WAIT_READY("pg-custom")}` +
+    `pg_dump -Fc -h 127.0.0.1 -U "\${POSTGRES_USER:-postgres}" "\${POSTGRES_DB:-\${POSTGRES_USER:-postgres}}"`,
+  // With no database named, the whole server — the restore reads the
+  // CREATE DATABASE / USE lines the dump then carries.
+  mysql:
+    `${WAIT_READY("mysql-sql")}DB="\${MYSQL_DATABASE:-\${MARIADB_DATABASE:-}}"; ` +
+    `MYSQL_PWD="\${MYSQL_ROOT_PASSWORD:-\${MARIADB_ROOT_PASSWORD:-}}" "$(command -v mariadb-dump || command -v mysqldump)" ` +
+    `--single-transaction --routines --triggers -h127.0.0.1 -uroot \${DB:---all-databases}`,
+  mongo:
+    `${WAIT_READY("mongo-archive")}mongodump --quiet --archive ` +
+    `\${MONGO_INITDB_ROOT_USERNAME:+--username "$MONGO_INITDB_ROOT_USERNAME" --password "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin}`,
+};
+
+/**
+ * Dump a running service into `SEED_DUMP_DIR/<service>/<fileName>`, run as
+ * root on the instance. Prints the file's size in bytes as its last line.
+ */
+export function renderSeedDump(service: string, engine: SeedEngine, fileName: string): string {
+  assertService(service);
+  if (!/^[A-Za-z0-9._-]+$/.test(fileName)) throw new Error(`Invalid dump file name: ${JSON.stringify(fileName)}`);
+  const dir = `${SEED_DUMP_DIR}/${service}`;
+  const file = `${dir}/${fileName}`;
+  const { gzipped } = seedDumpShape(engine);
+  return [
+    `set -o pipefail`,
+    `rm -rf ${dir} && mkdir -p ${dir} && cd /opt/nexus/stack || exit 1`,
+    `docker compose -f ${STACK_COMPOSE} exec -T ${service} sh -c ${shq(DUMP[engine])}${gzipped ? " | gzip -c" : ""} > ${file} || { echo "the dump failed" >&2; exit 1; }`,
+    `stat -c %s ${file}`,
+  ].join("\n");
+}

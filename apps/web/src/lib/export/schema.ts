@@ -170,6 +170,22 @@ export const stackNodeSchema = z.object({
   phases: json,
   posX: z.number(),
   posY: z.number(),
+  /**
+   * The seed attached to this service (spec 29) — what it was, never the
+   * file. A dump can be gigabytes and hold real people's data; it does not
+   * belong in a JSON document that gets emailed. The destination is told to
+   * attach it again unless it already holds the same file.
+   */
+  seed: z
+    .object({
+      fileName: z.string(),
+      format: z.string(),
+      sizeBytes: z.number(),
+      sha256: z.string(),
+      sensitive: z.boolean(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const stackEdgeSchema = z.object({

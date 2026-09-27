@@ -93,7 +93,7 @@ export async function collectExport(
     orderBy: { createdAt: "asc" },
     include: {
       repositories: { orderBy: { createdAt: "asc" }, include: { setup: true } },
-      stackNodes: { orderBy: { createdAt: "asc" } },
+      stackNodes: { orderBy: { createdAt: "asc" }, include: { seed: true } },
       stackEdges: { orderBy: { id: "asc" } },
       sandboxConfig: { include: { llmCredentials: true } },
       envVars: { orderBy: [{ key: "asc" }, { id: "asc" }] },
@@ -217,6 +217,18 @@ export async function collectExport(
         phases: n.phases,
         posX: n.posX,
         posY: n.posY,
+        // Metadata only — the file never travels in an export (spec 29), and
+        // a template is structure, not anyone's data.
+        seed:
+          n.seed && !template
+            ? {
+                fileName: n.seed.fileName,
+                format: n.seed.format,
+                sizeBytes: Number(n.seed.sizeBytes),
+                sha256: n.seed.sha256,
+                sensitive: n.seed.sensitive,
+              }
+            : null,
       })),
       edges: p.stackEdges.map((e) => ({
         id: e.id,

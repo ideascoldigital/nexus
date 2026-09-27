@@ -121,3 +121,31 @@ export async function resetSandboxData(
     }),
   );
 }
+
+export type SandboxDatabase = {
+  service: string;
+  nodeId: string;
+  engine: "postgres" | "mysql" | "mongo";
+  seed: { fileName: string; sizeBytes: number; sensitive: boolean } | null;
+};
+
+export async function getSandboxDatabases(projectId: string, sandboxId: string): Promise<SandboxDatabase[]> {
+  const body = await json<{ databases: SandboxDatabase[] }>(
+    await fetch(`/api/projects/${projectId}/sandboxes/${sandboxId}/seed`),
+  );
+  return body.databases;
+}
+
+export async function saveSandboxDataAsSeed(
+  projectId: string,
+  sandboxId: string,
+  service: string,
+): Promise<{ seed: SeedSummary; previous: { fileName: string; sizeBytes: number } | null }> {
+  return json(
+    await fetch(`/api/projects/${projectId}/sandboxes/${sandboxId}/seed/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service }),
+    }),
+  );
+}
