@@ -1,6 +1,6 @@
 # 29 — Seed data: a sandbox starts with a real database
 
-Status: **draft** (2026-09-27)
+Status: **phase 1 shipped** (2026-09-27) — seeds attach and are checked; nothing reaches a sandbox yet.
 
 ## Goal
 
@@ -186,3 +186,31 @@ decision a person makes.
    one cloud VM.
 3. Reset data (UI, route, MCP tool).
 4. Save as seed; export rules; the cloud warning.
+
+## As built (phase 1)
+
+- `SeedData` (migration `20260928100000_seed_data`), plus `gzipped` as its own
+  column rather than a `.gz` suffix on `format` — the restorer branches on it.
+- `lib/seed/format.ts` (pure): `engineOfImage` (PostGIS, Timescale, MariaDB,
+  Percona count as what they are; `postgres-exporter` does not),
+  `detectSeedFormat` from the first 64 KB — decompressed when gzip — and
+  `seedMismatch`. Headerless SQL is taken as the target engine's SQL: plain
+  SQL carries no reliable dialect marker, and refusing hand-written seeds
+  would be worse than trusting the node.
+- `lib/seed/store.ts`: stream → staging dir with size + sha256 → detect →
+  check → row (replacing the old one in a transaction) → rename. A refused
+  file leaves nothing behind. A node deleted from the canvas cascades its row
+  and the next listing sweeps its directory; deleting a project removes the
+  whole `seeds/<projectId>` directory.
+- Upload is the raw request body (`application/octet-stream`, XHR on the
+  client for progress), capped by `NEXUX_SEED_MAX_BYTES` (default 2 GB),
+  checked against `Content-Length` before reading and again while streaming.
+- "Pick a file on this machine" is offered, and accepted, only when the
+  request's Host is localhost/127.0.0.1/[::1] and this is not a Nexus host.
+- The card sits in the stack inspector of a saved, docker-mode database
+  service node. A replacement keeps the current `sensitive` flag.
+- Tested: 6 format tests, 8 route tests (upload, gzip, mismatch leaves no
+  staging dir, non-database refused, replace removes the old file, path only
+  from this machine, orphan sweep, patch/delete). Walked in the browser on a
+  throwaway project: a gzipped pg dump attached by path, a MySQL dump refused
+  with both names, the upload endpoint over HTTP, cleanup on project delete.

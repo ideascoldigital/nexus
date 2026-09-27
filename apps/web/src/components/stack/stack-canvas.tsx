@@ -928,6 +928,7 @@ function CanvasInner({
           }}
         >
           <StackInspector
+            projectId={projectId}
             node={{
               ...selectedNode.data,
               posX: selectedNode.position.x,

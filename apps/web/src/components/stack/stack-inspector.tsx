@@ -34,6 +34,7 @@ import type {
   StackNodeInput,
   VolumeMapping,
 } from "@/lib/stack/types";
+import { SeedDataCard } from "./seed-data-card";
 import { StackPhaseEditor } from "./stack-phase-editor";
 
 function scriptCommand(
@@ -63,6 +64,7 @@ function makeTargetHint(target: MakeTarget | null): string | undefined {
 }
 
 type Props = {
+  projectId: string;
   node: StackNodeInput;
   onChange: (patch: Partial<StackNodeInput>) => void;
   onDelete: () => void;
@@ -211,6 +213,7 @@ const PHASE_COLUMNS: Array<keyof StackNodeInput> = [
 ];
 
 export function StackInspector({
+  projectId,
   node,
   onChange: onChangeRaw,
   onDelete,
@@ -522,6 +525,10 @@ export function StackInspector({
           placeholders={["pgdata", "/var/lib/..."]}
           onChange={(volumes) => onChange({ volumes })}
         />
+
+        {!isRepo && node.runMode === "docker" ? (
+          <SeedDataCard projectId={projectId} nodeId={node.id} image={node.image ?? null} />
+        ) : null}
 
         {isRepo ? (
           <>

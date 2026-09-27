@@ -52,6 +52,7 @@ model Project {
   stackNodes    StackNode[]
   stackEdges    StackEdge[]
   stackLocks    StackLock[]
+  seeds         SeedData[]
   taskSchedules TaskSchedule[]
 }
 
@@ -173,9 +174,38 @@ model StackNode {
   repository Repository? @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
   edgesFrom  StackEdge[] @relation("StackEdgeSource")
   edgesTo    StackEdge[] @relation("StackEdgeTarget")
+  seed       SeedData?
 
   @@index([projectId])
   @@index([repositoryId])
+}
+
+// SeedData - a database backup restored into one stack service when a sandbox
+// starts (spec 29). The file lives at <dataDir>/seeds/<projectId>/<id>/ —
+// never in this database and never in git.
+model SeedData {
+  id          String   @id @default(cuid())
+  projectId   String
+  stackNodeId String   @unique // one seed per service; replacing is re-uploading
+  fileName    String   // as given, for display
+  // What the file is, read from its bytes: pg-sql | pg-custom | mysql-sql |
+  // mongo-archive. Gzip is recorded separately; the restorer undoes it.
+  format      String
+  gzipped     Boolean  @default(false)
+  sizeBytes   BigInt
+  sha256      String
+  // A dump may carry real people's data. Drives the export rule and the cloud
+  // launch warning (spec 29). Defaults to true — assuming a dump is safe is
+  // the expensive mistake.
+  sensitive   Boolean  @default(true)
+  enabled     Boolean  @default(true) // attached but not restored, without deleting it
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stackNode StackNode @relation(fields: [stackNodeId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
 }
 
 // StackEdge - dependency between stack nodes. source depends_on target
