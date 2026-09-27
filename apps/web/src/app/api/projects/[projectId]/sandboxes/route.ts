@@ -36,6 +36,10 @@ export async function GET(_req: NextRequest, { params }: Params) {
       region: true,
       size: true,
       instanceId: true,
+      // Which daemon runs the container (spec 26). Without these the terminal
+      // target had no endpoint and exec'd on this machine: "No such container".
+      dockerEndpointId: true,
+      dockerHost: true,
       publicIp: true,
       tailscaleIp: true,
       previewUrl: true,

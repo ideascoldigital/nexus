@@ -3887,8 +3887,8 @@ function SandboxRow({
   // break the dev servers and the agent, which both run as nexux. Passwordless
   // sudo is configured for the rare step that genuinely needs root.
   // A container on another machine's Docker (spec 26). The terminal reaches
-  // it through its endpoint; VS Code still attaches through this machine's
-  // daemon only.
+  // it through its endpoint, and VS Code attaches with that daemon as its
+  // DOCKER_HOST.
   const onRemoteDocker = Boolean(sandbox.dockerHost);
   const terminalTarget =
     sandbox.provider === "local"
@@ -4247,8 +4247,7 @@ function SandboxRow({
                 </DropdownMenuItem>
               )}
               {sandbox.status === "running" &&
-                (sandbox.publicIp ||
-                  (sandbox.provider === "local" && !onRemoteDocker)) && (
+                (sandbox.publicIp || sandbox.provider === "local") && (
                   <DropdownMenuItem onClick={() => void openVsCode()}>
                     Open in VS Code
                   </DropdownMenuItem>

@@ -15,6 +15,7 @@ import {
 } from "./base-image";
 import type { LogSink, SandboxSpec } from "./types";
 import {
+  AGENT_USER,
   BOOTSTRAP_COMPLETE_MARKER,
   BOOTSTRAP_FAILED_MARKER,
   renderCloudInit,
@@ -323,6 +324,13 @@ export async function launchLocalSandbox(opts: {
       name,
       "--label",
       "nexux-sandbox=1",
+      // VS Code's Dev Containers reads this off the container when it
+      // attaches: open as the agent user, not root. /opt/nexus is its, and a
+      // root editor leaves root-owned node_modules/.next that break the dev
+      // servers and the agent — the terminal opens as that user for the same
+      // reason. Travels with the container, so it holds on any daemon.
+      "--label",
+      `devcontainer.metadata=${JSON.stringify([{ remoteUser: AGENT_USER }])}`,
       base.image,
       "sleep",
       "infinity",

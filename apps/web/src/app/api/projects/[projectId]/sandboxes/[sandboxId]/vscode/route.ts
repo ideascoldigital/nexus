@@ -14,7 +14,7 @@ import {
   writeCodeWorkspaceCommand,
 } from "@nexux/sandbox";
 
-import { launchVsCode } from "@/lib/vscode-launch";
+import { attachedContainerAuthority, launchVsCode } from "@/lib/vscode-launch";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +26,12 @@ export const dynamic = "force-dynamic";
  */
 async function ensureRemoteWorkspaceFile(
   projectId: string,
-  target: { container?: string; host?: string; dataDir: string },
+  target: {
+    container?: string;
+    dockerHost?: string | null;
+    host?: string;
+    dataDir: string;
+  },
 ): Promise<boolean> {
   const repositories = await prisma.repository.findMany({
     where: { projectId },
@@ -46,6 +51,7 @@ async function ensureRemoteWorkspaceFile(
     const res = await execRemote(command, {
       user: AGENT_USER,
       container: target.container,
+      dockerHost: target.dockerHost ?? null,
       host: target.host,
       privateKeyPath: target.container
         ? undefined
@@ -93,16 +99,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       : null;
 
   // Local Docker sandboxes have no sshd — attach with the Dev Containers
-  // extension instead: the authority is "attached-container+<hex(name)>".
+  // extension instead, on whichever daemon runs the container.
   if (sandbox.provider === "local") {
-    // Dev Containers attaches through this machine's daemon; one on another
-    // machine needs a docker context there first (spec 26, not yet).
-    if (sandbox.dockerHost) {
-      return NextResponse.json(
-        { error: "VS Code can't attach to a sandbox on another machine's Docker yet." },
-        { status: 409 },
-      );
-    }
     if (!sandbox.instanceId) {
       return NextResponse.json(
         { error: "Local sandbox has no container yet" },
@@ -113,11 +111,14 @@ export async function POST(req: NextRequest, { params }: Params) {
       !explicitPath &&
       (await ensureRemoteWorkspaceFile(projectId, {
         container: sandbox.instanceId,
+        dockerHost: sandbox.dockerHost,
         dataDir: getConfig().dataDir,
       }));
     const folder = resolveVsCodeFolder({ explicitPath, workspaceReady });
-    const hexName = Buffer.from(sandbox.instanceId, "utf8").toString("hex");
-    const uri = `vscode://vscode-remote/attached-container+${hexName}${folder}`;
+    const authority = attachedContainerAuthority(sandbox.instanceId, sandbox.dockerHost);
+    // Always a new window: without it the deep link can take over whichever
+    // window was last active — the user's own, with its unsaved workspace.
+    const uri = `vscode://vscode-remote/${authority}${folder}?windowId=_blank`;
     const launched = await launchVsCode(uri, true);
     return NextResponse.json({ uri, host: sandbox.instanceId, launched });
   }
