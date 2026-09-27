@@ -73,6 +73,9 @@ export type CloudCredentialSummary = {
    * control plane (Headscale). Null = Tailscale's own. Not a secret.
    */
   loginServer?: string | null;
+  /** The last Test result (spec 28); never contains the secret. */
+  lastCheck?: import("@/lib/credential-checks/types").CredentialCheck | null;
+  lastCheckedAt?: string | null;
 };
 
 export type NewCredentialInput =
@@ -958,6 +961,15 @@ export async function createCredential(
     body: JSON.stringify(input),
   });
   if (!res.ok) return parseError(res, "Failed to save credential");
+  return res.json();
+}
+
+/** Test a saved credential against its provider (spec 28). */
+export async function checkCredential(
+  credentialId: string,
+): Promise<import("@/lib/credential-checks/types").CredentialCheck> {
+  const res = await fetch(`/api/credentials/${credentialId}/check`, { method: "POST" });
+  if (!res.ok) return parseError(res, "Could not test the credential");
   return res.json();
 }
 
