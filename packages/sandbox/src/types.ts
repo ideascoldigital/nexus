@@ -106,6 +106,11 @@ export type SandboxSpec = {
   /** Compose service names, for log lines only. */
   stackServiceNames?: string[];
   /**
+   * Database backups to restore into stack services right after they start
+   * (spec 29). The files are pushed separately; the bootstrap waits for them.
+   */
+  seeds?: import("./template-seed").SandboxSeedSpec[];
+  /**
    * Local stack nodes whose command launches their own containers
    * (`make docker-up`). Unlike stackComposeYaml these are the repo's own
    * scripts, so they run after the checkouts exist.

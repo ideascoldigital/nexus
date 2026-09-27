@@ -13,6 +13,15 @@ export {
   type DockerTarget,
   type ProbeResult,
 } from "./docker-endpoint";
+// Spec 29 — seed data restored into stack services.
+export {
+  renderSeedRestore,
+  seedRemoteDir,
+  seedWaitSeconds,
+  SEED_READY_MARKER,
+  SEEDS_DIR,
+  type SandboxSeedSpec,
+} from "./template-seed";
 // Spec 24 piece 1 — structured per-step bootstrap results.
 export {
   assertStepName,

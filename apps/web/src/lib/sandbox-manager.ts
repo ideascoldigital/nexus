@@ -44,6 +44,7 @@ import {
   type SandboxStackCompose,
 } from "@/lib/stack/sandbox-compose";
 import { sandboxTarget } from "@/lib/agent-core";
+import { pushSeeds, pushSeedsWhenReachable, seedsForLaunch, type LaunchSeed } from "@/lib/seed/launch";
 import type { DockerTarget } from "@nexux/sandbox";
 import {
   gitProviderOfUrl,
@@ -691,7 +692,7 @@ async function buildSpec(
   projectId: string,
   instanceName: string,
   provider: SandboxProvider,
-): Promise<{ spec: SandboxSpec; stack: SandboxStackCompose }> {
+): Promise<{ spec: SandboxSpec; stack: SandboxStackCompose; seeds: LaunchSeed[] }> {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
@@ -883,7 +884,14 @@ async function buildSpec(
       })),
   };
 
-  return { spec, stack };
+  // Seed data (spec 29): only where the services it restores into will run.
+  const seeds =
+    stack.yaml && spec.installDocker
+      ? await seedsForLaunch(projectId, stack.services, (w) => stack.warnings.push(w.replace(/^\[nexux\] seed: /, "seed: ")))
+      : [];
+  if (seeds.length) spec.seeds = seeds.map((s) => s.spec);
+
+  return { spec, stack, seeds };
 }
 
 // Buffers terraform output in memory and flushes it to Sandbox.log at most
@@ -1150,7 +1158,7 @@ export async function launchSandbox(
   );
   const workDir = path.join(getConfig().dataDir, "sandboxes", sandboxId);
 
-  const { spec, stack } = await buildSpec(projectId, instanceName, provider);
+  const { spec, stack, seeds } = await buildSpec(projectId, instanceName, provider);
 
   const sandbox = await prisma.sandbox.create({
     data: {
@@ -1186,8 +1194,8 @@ export async function launchSandbox(
   activeOps.add(sandboxId);
   const provision =
     provider === "local"
-      ? runLocalProvision(sandboxId, spec, stackLog, target)
-      : runProvision(sandboxId, workDir, spec, resolved!.env, stackLog);
+      ? runLocalProvision(sandboxId, spec, stackLog, target, seeds)
+      : runProvision(sandboxId, workDir, spec, resolved!.env, stackLog, seeds);
   void provision.finally(() => activeOps.delete(sandboxId));
 
   return sandbox;
@@ -1204,8 +1212,10 @@ async function runLocalProvision(
   spec: SandboxSpec,
   extraLogLines: string[] = [],
   target: DockerTarget = { host: null },
+  seeds: LaunchSeed[] = [],
 ) {
   const log = createLogWriter(sandboxId);
+  let seedPush: Promise<unknown> = Promise.resolve();
   try {
     log.append(
       `[nexux] provisioning local container ${spec.name}${target.host ? ` on ${target.host}` : ""}`,
@@ -1228,6 +1238,16 @@ async function runLocalProvision(
       where: { id: sandboxId },
       data: { instanceId: containerName },
     });
+    // Beside the bootstrap, not before it: the restore step waits for each
+    // file's marker (spec 29).
+    if (seeds.length) {
+      seedPush = pushSeeds(seeds, { container: containerName, dockerHost: target.host }, (l) => log.append(l)).catch(
+        (err: unknown) =>
+          log.append(
+            `[nexux] WARN: seed data could not be sent (${err instanceof Error ? err.message : String(err)}) — the sandbox continues with an empty database`,
+          ),
+      );
+    }
 
     const deadline = Date.now() + 20 * 60_000;
     while (Date.now() < deadline) {
@@ -1261,6 +1281,26 @@ async function runLocalProvision(
       })
       .catch(() => undefined);
     void notifySandboxStatus(sandboxId).catch(() => undefined);
+  } finally {
+    // The copy may outlive a failed bootstrap; let it finish logging first.
+    await seedPush;
+    await log.close();
+  }
+}
+
+/** Send a VM its seed files once it answers over SSH, logging to its own writer. */
+async function pushCloudSeeds(sandboxId: string, seeds: LaunchSeed[]) {
+  const log = createLogWriter(sandboxId);
+  try {
+    await pushSeedsWhenReachable(
+      seeds,
+      async () => {
+        const sandbox = await prisma.sandbox.findUnique({ where: { id: sandboxId } }).catch(() => null);
+        if (!sandbox || sandbox.status !== "running" || !sandbox.publicIp) return null;
+        return sandboxTarget(sandbox, "/", "root");
+      },
+      (l) => log.append(l),
+    );
   } finally {
     await log.close();
   }
@@ -1334,6 +1374,7 @@ async function runProvision(
   spec: SandboxSpec,
   credentials: ProviderCredentials,
   extraLogLines: string[] = [],
+  seeds: LaunchSeed[] = [],
 ) {
   const log = createLogWriter(sandboxId);
   try {
@@ -1366,6 +1407,8 @@ async function runProvision(
     // died on `cd`. Watch from here instead of blocking: provisioning is
     // already done, and the watch only ever downgrades.
     void watchCloudBootstrap(sandboxId).catch(() => undefined);
+    // sshd may not answer yet; the push retries until it does (spec 29).
+    if (seeds.length) void pushCloudSeeds(sandboxId, seeds).catch(() => undefined);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.append(`[nexux] ERROR: ${message}`);

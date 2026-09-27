@@ -1,6 +1,6 @@
 # 29 — Seed data: a sandbox starts with a real database
 
-Status: **phase 1 shipped** (2026-09-27) — seeds attach and are checked; nothing reaches a sandbox yet.
+Status: **phases 1–2 shipped** (2026-09-27) — seeds attach, and every new sandbox restores them before its repos install.
 
 ## Goal
 
@@ -214,3 +214,36 @@ decision a person makes.
   from this machine, orphan sweep, patch/delete). Walked in the browser on a
   throwaway project: a gzipped pg dump attached by path, a MySQL dump refused
   with both names, the upload endpoint over HTTP, cleanup on project delete.
+
+## As built (phase 2)
+
+- `packages/sandbox/src/template-seed.ts` renders one `seed:<service>` step
+  per seed, placed right after `stack:up` and before the setup script and the
+  repos. It waits for `.ready` (15 min + 1 min per 100 MB), checks the sha256,
+  and pipes the file (through `gunzip -c` when gzipped) into the service's
+  own client with `docker compose exec -T`.
+- **Readiness over TCP**, not the socket: the official postgres/mysql images
+  initialise on a temporary socket-only server and then restart, and a
+  restore into that one is killed halfway. `pg_isready -h 127.0.0.1` /
+  `mariadb-admin ping -h127.0.0.1` only answer from the final server. Mongo's
+  init server does bind 127.0.0.1, so it also waits for the entrypoint's
+  temporary config file to be gone.
+- **Errors are counted, not fatal.** Plain SQL runs without ON_ERROR_STOP and
+  MySQL with `--force`: a production dump's `ALTER … OWNER TO prod_user`
+  fails where that role does not exist, and stopping there would drop every
+  row after it. The step reports `restored in Ns, N error line(s)`.
+- Credentials are `${POSTGRES_PASSWORD}`-style references expanded inside the
+  service container — the bootstrap runs under `set -x`, and its log shows
+  the references, never the values.
+- `apps/web/src/lib/seed/launch.ts`: `seedsForLaunch` (enabled seeds of the
+  services this sandbox runs, by compose name — `SandboxStackService` now
+  carries its `nodeId`; a seed whose file is gone here is dropped with a
+  warning) and `pushSeeds` (mkdir → `pushLocalDir` → `.ready`). A local
+  container is pushed as soon as it exists, beside the bootstrap; a VM once
+  sshd answers, retrying every 15 s for ten minutes.
+- Walked end to end on omarchy (a local sandbox on a Docker endpoint) with
+  real dumps of a 5 000-customer / 20 000-order database made by
+  `pg_dump`: the `-Fc` archive restored clean; the gzipped plain dump
+  restored the same rows and reported its 4 `OWNER TO` failures. Bootstrap
+  order confirmed in the log: services → seed → clone. **Not yet walked on a
+  cloud VM** — the scp path is the one attachments already use.

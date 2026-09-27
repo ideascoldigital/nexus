@@ -1,8 +1,8 @@
 "use client";
 
 // Seed data for a database service node (spec 29): the backup every new
-// sandbox restores into this service. Phase 1 attaches and checks the file;
-// restoring on launch is phase 2.
+// sandbox restores into this service, right after it starts and before the
+// repos run their migrations.
 
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";

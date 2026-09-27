@@ -6,6 +6,7 @@ import {
 import { renderStepHelpers, stepChain } from "./bootstrap-report";
 import { manifestFromSpec, renderNexusCliSection } from "./nexus-cli";
 import { openCodeMcpServers } from "./mcp-config";
+import { renderSeedRestore } from "./template-seed";
 import { renderBrowserInstallSection } from "./template-browser";
 import { safeSlug, shq } from "./slug";
 import type { SandboxProvider, SandboxRepoSpec, SandboxSpec } from "./types";
@@ -934,6 +935,13 @@ if command -v docker >/dev/null 2>&1; then
 else
   echo "[nexux] WARN: docker not available — stack services skipped (enable the Docker toggle)"
 fi`);
+  }
+
+  // Seed data (spec 29): after the services are up, before the setup script
+  // and the repos — their install commands run the migrations, which should
+  // meet the seeded database rather than an empty one.
+  if (stackYaml && spec.seeds?.length) {
+    sections.push(renderSeedRestore(spec.seeds));
   }
 
   if (spec.installClaudeCode) {
