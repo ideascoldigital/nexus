@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useResolvedTheme } from "@/hooks/use-resolved-theme";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -403,6 +404,7 @@ function CatalogSidebar({
 }
 
 function CanvasInner({ projectId }: { projectId: string }) {
+  const theme = useResolvedTheme();
   const qc = useQueryClient();
   const { toast } = useToast();
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -780,7 +782,9 @@ function CanvasInner({ projectId }: { projectId: string }) {
             onNodesDelete={onNodesDelete}
             onEdgesChange={handleEdgesChange}
             onConnect={onConnect}
-            colorMode="dark"
+            // Follows the page: pinned to dark, a light theme got light node text on
+            // white cards (the nodes are bg-card, React Flow colours the text).
+            colorMode={theme}
             fitView
             deleteKeyCode={["Backspace", "Delete"]}
           >
@@ -789,7 +793,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
             <MiniMap
               pannable
               zoomable
-              maskColor="rgba(0,0,0,0.6)"
+              maskColor={theme === "dark" ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.12)"}
               nodeColor={(n) =>
                 n.type === "agent"
                   ? ((n.data as { color?: string } | undefined)?.color ?? "#3b82f6")

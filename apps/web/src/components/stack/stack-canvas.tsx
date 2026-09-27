@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useResolvedTheme } from "@/hooks/use-resolved-theme";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -188,6 +189,7 @@ function CanvasInner({
   projectId: string;
   onOpenSandboxes?: () => void;
 }) {
+  const theme = useResolvedTheme();
   const qc = useQueryClient();
   const { toast } = useToast();
   const { screenToFlowPosition, fitView } = useReactFlow();
@@ -824,7 +826,9 @@ function CanvasInner({
               onEdgesChange={handleEdgesChange}
               onConnect={onConnect}
               onSelectionChange={handleSelectionChange}
-              colorMode="dark"
+              // Follows the page: pinned to dark, a light theme got light node text on
+              // white cards (the nodes are bg-card, React Flow colours the text).
+              colorMode={theme}
               fitView
               // Default fitView caps at zoom 1, so a two-node stack sits tiny
               // in the middle of the canvas. Let it scale up and keep a small
@@ -840,7 +844,7 @@ function CanvasInner({
               <MiniMap
                 pannable
                 zoomable
-                maskColor="rgba(0,0,0,0.6)"
+                maskColor={theme === "dark" ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.12)"}
                 nodeColor={(n) => (n.type === "repo" ? "#3b82f6" : "#a855f7")}
                 className="!m-2 !h-20 !w-32 rounded-md border border-border/60 !bg-background/80"
               />
