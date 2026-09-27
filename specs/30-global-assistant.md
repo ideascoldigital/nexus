@@ -1,6 +1,6 @@
 # 30 — One assistant, on every page, with the MCP tools
 
-Status: **draft** (2026-09-27)
+Status: **phase 1 shipped** (2026-09-27) — the loop, the write gate, threads and their API; no UI yet.
 
 ## Goal
 
@@ -218,3 +218,41 @@ project.
 2. The global panel: ⌘I, route context, threads, action cards.
 3. Watches wired to the notify hooks; watch reports; SSE streaming.
 4. Native function calling where the provider supports it, behind the loop.
+
+## As built (phase 1)
+
+- `lib/assistant/loop.ts`: `runToolLoop` (text protocol, 6 rounds, 24 k
+  result cap), `renderToolCatalog` (generated from the tools, `[WRITE]` on
+  writes, each input schema inline), `parseToolRequest` against the live
+  list. A write stops the turn and comes back as `pending`; it is never run
+  there. A tool that throws surfaces (MCP answers errors as results).
+- `lib/assistant/tools.ts`: `mcpTools(scopes, ctx)` over `toolsFor` +
+  `callTool`, read/write by scope suffix; `contextTools(projectId)` — the
+  Stack assistant's three tools, moved here.
+- **The Stack assistant runs on the loop** with its context tools plus the
+  MCP reads (`projects:read`, `sandboxes:read`, `tasks:read`) — so it can
+  now validate/describe the stack and read sandboxes and task logs. No
+  writes there: its panel has no approval cards. Its 43 existing tests pass
+  unchanged.
+- `lib/assistant/threads.ts` + tables `AssistantThread/Event/Action/Watch`
+  (the watch table is used from phase 3). History is rebuilt from events —
+  the verbatim texts the model saw — every turn. Approve is claimed
+  atomically (`pending → running` with `updateMany`), so a double click runs
+  once; cancel records a TOOL_RESULT saying it was declined and starts no
+  turn. A turn while an action is pending is refused (409). The page a
+  message comes from moves the thread's focus (`context.projectId`), which
+  adds the project's context tools and a focus line to the prompt.
+- Routes: `GET|POST /api/assistant/threads`, `GET|DELETE …/[threadId]`,
+  `POST …/turn`, `POST …/actions/[actionId]/approve|cancel`.
+- **Found against the real model:** told to "say what it will do before
+  asking", it asked for permission in prose and waited — a second
+  confirmation on top of the card. The prompt now says requesting a [WRITE]
+  tool *is* the question. After that, "launch a local galtex sandbox on
+  omarchy called asistente-prueba" and, on a galtex-focused thread, "pause
+  the sandbox running in this project" each became one pending action with
+  the right arguments (both cancelled; nothing launched or paused). A read
+  question chained `nexux_list_projects` → `nexux_list_sandboxes` and
+  answered in Spanish.
+- Tests: 5 loop tests with a scripted model; 6 thread tests on the test DB
+  with a fake MCP context (write not run, approve once, cancel runs no turn,
+  history verbatim across turns, read-only scopes never offer a write).

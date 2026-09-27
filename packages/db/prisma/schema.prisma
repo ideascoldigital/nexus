@@ -1221,3 +1221,72 @@ model StackLock {
 
   @@index([projectId, createdAt])
 }
+
+// ---------------------------------------------------------------------------
+// Global assistant (spec 30). A thread is workspace-level: Conversation
+// requires a project and is Claude-session shaped, so these are their own.
+// ---------------------------------------------------------------------------
+
+model AssistantThread {
+  id          String   @id @default(cuid())
+  workspaceId String
+  title       String?
+  // The project it was started from — context for the model, not a boundary.
+  projectId   String?
+  // Scope[] the thread's tools are limited to (packages/mcp SCOPES).
+  scopes      Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  events  AssistantEvent[]
+  actions AssistantAction[]
+  watches AssistantWatch[]
+
+  @@index([workspaceId])
+}
+
+/// The transcript, in order: user | assistant | tool_call | tool_result | action | watch_report | error.
+model AssistantEvent {
+  id        String   @id @default(cuid())
+  threadId  String
+  kind      String
+  content   Json
+  createdAt DateTime @default(now())
+
+  thread AssistantThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+}
+
+/// A write tool the model asked for, waiting on the user (spec 30: reads run, writes ask).
+model AssistantAction {
+  id        String    @id @default(cuid())
+  threadId  String
+  tool      String
+  args      Json
+  summary   String
+  status    String    @default("pending") // pending | running | done | failed | cancelled
+  result    Json?
+  createdAt DateTime  @default(now())
+  decidedAt DateTime?
+
+  thread AssistantThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, status])
+}
+
+/// Something the assistant keeps an eye on after its turn ends (spec 30 phase 3).
+model AssistantWatch {
+  id        String   @id @default(cuid())
+  threadId  String
+  kind      String // task | sandbox
+  targetId  String
+  until     String // finished | needs_input | running | any_change
+  status    String   @default("open") // open | fired | expired | cancelled
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  thread AssistantThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([status, kind, targetId])
+}
