@@ -1926,10 +1926,12 @@ function SetupEditor({
               Claude Code&apos;s native <code>mcpServers</code> JSON — written
               to <code>~/.claude.json</code> (agent user and root) at
               bootstrap, so headless runs, the dev console and the terminal
-              all load them. Applies to sandboxes launched after saving.
+              all load them. With OpenCode it is translated into its{" "}
+              <code>opencode.json</code> too. Applies to sandboxes launched
+              after saving.
               Auth: save the secret as a project env var and reference it as{" "}
               <code>{"${MY_KEY}"}</code> in <code>env</code>/<code>headers</code>{" "}
-              — Claude Code expands it; stdio servers also inherit the sandbox
+              — both brains expand it; stdio servers also inherit the sandbox
               env. OAuth-only MCPs don&apos;t work headless — prefer the API-key
               variant.
             </p>

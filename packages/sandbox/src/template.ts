@@ -5,6 +5,7 @@ import {
 } from "./boot-probe";
 import { renderStepHelpers, stepChain } from "./bootstrap-report";
 import { manifestFromSpec, renderNexusCliSection } from "./nexus-cli";
+import { openCodeMcpServers } from "./mcp-config";
 import { renderBrowserInstallSection } from "./template-browser";
 import { safeSlug, shq } from "./slug";
 import type { SandboxProvider, SandboxRepoSpec, SandboxSpec } from "./types";
@@ -1004,11 +1005,15 @@ chown -R ${AGENT_USER}:${AGENT_USER} /home/${AGENT_USER}/.claude /home/${AGENT_U
     // Both accounts, like Claude Code: agent user runs tasks, root is the
     // in-app terminal.
     const model = spec.openCodeModel?.trim();
+    // The project's MCP servers, in OpenCode's shape — see mcp-config.ts.
+    const { mcp, skipped } = openCodeMcpServers(spec.mcpServers);
+    const mcpCount = Object.keys(mcp).length;
     const openCodeConfig = JSON.stringify(
       {
         $schema: "https://opencode.ai/config.json",
         permission: { "*": "allow" },
         ...(model ? { model } : {}),
+        ...(mcpCount ? { mcp } : {}),
       },
       null,
       2,
@@ -1018,8 +1023,17 @@ chown -R ${AGENT_USER}:${AGENT_USER} /home/${AGENT_USER}/.claude /home/${AGENT_U
         "opencode config contains the heredoc sentinel NEXUX_OPENCODE_EOF",
       );
     }
+    const mcpLog = [
+      mcpCount ? `echo "[nexux] configuring ${mcpCount} MCP server(s) for OpenCode"` : "",
+      skipped.length
+        ? `echo ${shq(`[nexux] WARN: MCP server(s) with no command or url, not configured: ${skipped.join(", ")}`)}`
+        : "",
+    ]
+      .filter(Boolean)
+      .map((l) => `\n${l}`)
+      .join("");
     sections.push(`echo "[nexux] installing OpenCode"
-npm install -g opencode-ai || echo "[nexux] WARN: opencode install failed"
+npm install -g opencode-ai || echo "[nexux] WARN: opencode install failed"${mcpLog}
 for h in /root /home/${AGENT_USER}; do
   mkdir -p "$h/.config/opencode"
   cat > "$h/.config/opencode/opencode.json" <<'NEXUX_OPENCODE_EOF'

@@ -97,7 +97,8 @@ export type SandboxSpec = {
   /**
    * Claude Code MCP servers (native `mcpServers` shape) — merged into
    * ~/.claude.json for the agent user and root at bootstrap, so headless
-   * runs, the dev console and the in-app terminal all load them.
+   * runs, the dev console and the in-app terminal all load them. With
+   * OpenCode installed, also translated into its opencode.json (mcp-config.ts).
    */
   mcpServers?: Record<string, unknown> | null;
   /** docker-compose YAML for stack services; started before repos are cloned. */

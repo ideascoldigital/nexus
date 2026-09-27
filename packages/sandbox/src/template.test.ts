@@ -1234,6 +1234,29 @@ test("no mcpServers â†’ onboarding-only .claude.json, no mcp mention", () =
   assert.ok(!script.includes("mcpServers"));
 });
 
+test("with OpenCode, the project's MCP servers land in opencode.json too", () => {
+  const script = renderCloudInit(
+    baseSpec({
+      installOpenCode: true,
+      mcpServers: {
+        context7: { command: "npx", args: ["-y", "@upstash/context7-mcp"] },
+        broken: {},
+      },
+    }),
+  );
+  const opencode = script.slice(script.indexOf("installing OpenCode"));
+  assert.ok(opencode.includes('"mcp"'));
+  assert.ok(opencode.includes('"type": "local"'));
+  assert.ok(opencode.includes("configuring 1 MCP server(s) for OpenCode"));
+  assert.ok(opencode.includes("not configured: broken"));
+});
+
+test("OpenCode without MCP servers gets no mcp key", () => {
+  const script = renderCloudInit(baseSpec({ installOpenCode: true }));
+  const opencode = script.slice(script.indexOf("installing OpenCode"));
+  assert.ok(!opencode.includes('"mcp"'));
+});
+
 test("bootstrap installs both gh and glab CLIs", () => {
   const script = renderCloudInit(baseSpec());
   assert.ok(script.includes("installing GitHub CLI"));
