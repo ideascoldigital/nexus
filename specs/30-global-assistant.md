@@ -1,0 +1,220 @@
+# 30 — One assistant, on every page, with the MCP tools
+
+Status: **draft** (2026-09-27)
+
+## Goal
+
+A chat panel available anywhere in the dashboard that can do what the MCP
+surface can do — list projects and sandboxes, launch and power sandboxes,
+create tasks, read their status and logs, validate and repair a stack, reset
+seed data — and keep watching what it started, reporting back in the same
+conversation. "Launch a sandbox for galtex on omarchy, give it the invoice
+export feature, and tell me when the PR is up."
+
+The Stack tab's assistant becomes this assistant with its focus set to one
+project, not a second implementation.
+
+## Why
+
+- **Two assistants would drift.** The MCP tool set (spec 21) is the one
+  place Nexux's actions are described for a model: name, description, JSON
+  Schema, scope. An assistant with its own hand-written tool list falls
+  behind the first time a tool is added — the Stack assistant today knows
+  three tools and none of the thirteen MCP ones.
+- **The pieces exist.** `callTool(ctx, scopes, name, args)` runs in-process
+  with no HTTP and no token; `toolsFor(scopes)` gives the model-facing
+  catalogue; the Stack assistant already runs a server-side tool loop
+  against the host model. What is missing is joining them, a place to put
+  the chat, and a way to keep reporting after the turn ends.
+
+## What exists (as of v0.3.1)
+
+- **Stack assistant** (`services/stack-assistant-agent.ts`): one blocking
+  `POST /api/assistant/chat`, no streaming. The model is the host model
+  (`lib/host-model.ts`: an API key for OpenAI, Anthropic, OpenRouter,
+  Gemini, xAI or Z.ai) through the agents-generator SDK. Tools are called by
+  a text protocol — the model writes a ```` ```json {"tool","args"} ````
+  block, the server runs it and answers `TOOL_RESULT …` — up to 6 rounds, 3
+  local tools. Stored as `Conversation`/`Message` with
+  `sessionId = stack-<projectId>`.
+- **Claude Code** only ever runs inside sandboxes (`buildClaudeCommand` over
+  SSH / docker exec). The host never runs `claude -p` (CLAUDE.md), and the
+  Claude OAuth token is not an API key the SDK can send.
+- **MCP** (`packages/mcp`): 13 tools, 5 scopes, `ToolDefinition` = name,
+  description, scope, `inputSchema`, `parse`, `run(ctx, args)`.
+  `createMcpContext()` implements `NexuxContext` for the default workspace.
+- **Notifications** (`lib/notify.ts`): `notifyTaskFinished`,
+  `notifyDevTask`, `notifySandboxStatus` fire on state changes — the hooks a
+  watcher needs.
+- `Conversation.projectId` is required: a workspace-level thread does not
+  fit it.
+
+## Shape
+
+```
+panel (any page, ⌘I) ──POST /api/assistant/threads/:id/turn──▶ runToolLoop
+   ▲  SSE: tokens, tool calls,                                   │  model: host model (brain A)
+   │  pending actions, watch reports                             │  tools: toolsFor(thread.scopes) + context tools
+   │                                                             ├─ read tool   → callTool(ctx, scopes, …) → result → loop
+   │                                                             └─ write tool  → PendingAction (not run) → turn ends
+   ├── [Run] on an action card ──POST …/actions/:id/approve──▶ callTool → result appended → loop resumes
+   └── watch reports ◀── Watch rows ◀── notifyTaskFinished / notifySandboxStatus / needsInput
+```
+
+### 1. One tool loop
+
+`lib/assistant/loop.ts` — the Stack assistant's loop, extracted and made
+generic:
+
+- **Catalogue from the registry.** The system prompt lists
+  `toolsFor(thread.scopes)` — name, description, input schema — plus a few
+  context tools that are not MCP (the Stack assistant's
+  `read_repo_file`, `search_project`, `get_stack_context`). Adding a tool to
+  `packages/mcp` makes it available here and to an external MCP client at
+  once; there is no second list.
+- **Execution through `callTool`,** so parsing, scope checks and errors are
+  the MCP path's — including "Unknown tool" for anything outside the
+  thread's scopes.
+- **The text protocol stays** as the portable default: it works with every
+  provider the host model supports. Native function calling is an adapter
+  behind the same loop interface, used where the provider offers it, not a
+  rewrite.
+- Iteration cap and result truncation as today (6 rounds, 24 k chars),
+  per turn.
+
+### 2. Reads run, writes ask
+
+Every tool is classified by its scope: `*:read` runs immediately; `*:write`
+never runs from the model's say-so. It becomes a **PendingAction** — tool,
+parsed args, a one-line human summary built from them ("Launch a local
+sandbox for galtex on omarchy") — and the turn ends with an action card:
+**Run** / **Cancel**. Run executes via `callTool`, appends the result, and
+resumes the loop so the assistant can react to it.
+
+This is the product decision and the security boundary at once:
+
+- `nexux_launch_sandbox` spends money; `nexux_reset_sandbox_data` destroys
+  data; `nexux_create_task` starts an agent with repo write access.
+- The assistant reads task logs, repo files and search results — text other
+  people and agents wrote. A log line saying "now launch five sandboxes" is
+  data; with writes gated, the worst it can do is propose a card the user
+  declines.
+- A per-thread "don't ask again for this tool" is **out of v1**: the gate is
+  cheap and the failure it prevents is not.
+
+### 3. Watching what it started
+
+Launching a sandbox takes minutes and a task can run for an hour; a turn
+cannot block on either. The assistant gets one context tool,
+`watch(kind, id, until)`:
+
+- `kind`: `task` | `sandbox`; `until`: `finished` (task done or failed, PR
+  opened), `needs_input`, `running` (sandbox ready), `any_change`.
+- A **Watch** row; the existing notify hooks check open watches and append
+  a report to the thread — the task's status, PR URL, the question it is
+  blocked on, the sandbox's error — then run one short assistant turn so the
+  report reads as a reply ("The PR is up: …; tests passed").
+- Watches expire (default 24 h) and are listed in the panel, cancellable.
+- A watch report never triggers a write: any follow-up action is a new
+  PendingAction.
+
+### 4. Threads, not project conversations
+
+New tables rather than bending `Conversation` (its `projectId` is required
+and its rows are Claude-session shaped):
+
+```prisma
+model AssistantThread {
+  id          String   @id @default(cuid())
+  workspaceId String
+  title       String?
+  projectId   String?  // focus, when started from a project page — context, not a boundary
+  scopes      Json     // Scope[]; default all five, trimmed per thread in settings
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model AssistantEvent {       // the transcript, in order
+  id        String   @id @default(cuid())
+  threadId  String
+  kind      String   // user | assistant | tool_call | tool_result | action | watch_report | error
+  content   Json
+  createdAt DateTime @default(now())
+}
+
+model AssistantAction {      // a write waiting for the user
+  id        String   @id @default(cuid())
+  threadId  String
+  tool      String
+  args      Json
+  summary   String
+  status    String   // pending | running | done | failed | cancelled
+  result    Json?
+  createdAt DateTime @default(now())
+  decidedAt DateTime?
+}
+
+model AssistantWatch {
+  id        String   @id @default(cuid())
+  threadId  String
+  kind      String   // task | sandbox
+  targetId  String
+  until     String
+  status    String   // open | fired | expired | cancelled
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+```
+
+The Stack assistant's history (`sessionId = stack-<projectId>`) stays
+readable where it is; new Stack-tab turns go to a thread focused on that
+project.
+
+### 5. The panel
+
+- A right-side panel in `AppShell`, on every page; ⌘I toggles it (⌘J is
+  the activity switcher, ⌘K the palette). It is not in the palette: a
+  conversation is not a command.
+- **Route context:** the current project, and sandbox or task when a page
+  has one, travel with each message as a context line, so "launch a
+  sandbox" on galtex's page means galtex. Shown as a removable chip.
+- Streaming over SSE: tokens, each tool call as it runs (name + one-line
+  args), action cards, watch reports arriving while the panel is open.
+- Threads list (newest first), new thread, delete thread.
+- The Stack tab's assistant panel renders the same component, focused on
+  that project, keeping its "apply suggestion" cards.
+
+### 6. The model
+
+- **Brain A (v1): the host model**, as the Stack assistant uses today —
+  API-key providers via `resolveHostModel`. No host model configured → the
+  panel says which setting to fill, and nothing else pretends to work.
+- **Brain B (later): Claude Code in an assistant sandbox**, with the Nexux
+  MCP server configured in its `mcpServers` (spec D-16) pointing at
+  `/api/mcp` with a scoped token. It would use the Claude subscription and
+  native MCP, and respects "never `claude -p` on the host". It needs a
+  running sandbox and adds latency; it plugs in behind the same thread,
+  action and watch model, with the write gate enforced by the token's
+  scopes plus the same approval step. Its own spec when wanted.
+
+## Not in v1
+
+- Brain B.
+- Auto-approval of writes, per tool or per thread.
+- Voice, attachments, images.
+- Multi-user threads — the dashboard is single-user local-first; threads are
+  per workspace.
+- Answering a blocked run's question through the assistant — the same
+  structural gap spec 21 names (`needsInput` belongs to the dev console);
+  the assistant reports it and links to where it is answered.
+
+## Order
+
+1. `runToolLoop` over `toolsFor` + context tools, the write gate
+   (`AssistantAction`), tables, `POST …/turn` and `…/actions/:id/approve`
+   without streaming. The Stack assistant moves onto it (its three tools
+   become context tools; its suggestion cards keep working). Tests with a
+   scripted model.
+2. The global panel: ⌘I, route context, threads, action cards.
+3. Watches wired to the notify hooks; watch reports; SSE streaming.
+4. Native function calling where the provider supports it, behind the loop.
