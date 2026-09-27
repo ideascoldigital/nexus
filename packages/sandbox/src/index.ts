@@ -78,6 +78,8 @@ export {
 export {
   renderHostCloudInit,
   renderHostCompose,
+  renderEndpointUpdater,
+  endpointHostProject,
   parseHostMarker,
   safeHostName,
   isValidImageRef,

@@ -17,6 +17,8 @@ import {
   registryHost,
   renderHostCloudInit,
   renderHostCompose,
+  renderEndpointUpdater,
+  endpointHostProject,
   HOST_WORKSPACE_DIR,
   safeHostName,
   type NexusHostSpec,
@@ -640,11 +642,39 @@ test("an endpoint host's secrets are variables, never values", () => {
   assert.ok(!compose.includes("tskey-"));
 });
 
-test("an endpoint host has no root-side updater and says so to the app", () => {
+test("only the updater holds the docker socket — the app can only leave a note", () => {
   const compose = endpointCompose();
-  assert.ok(!compose.includes("/host-control"));
-  assert.ok(!compose.includes("docker.sock"));
+  const service = (name: string) =>
+    compose.split(`\n  ${name}:\n`)[1].split(/\n {2}[a-z]+:\n|\nvolumes:\n/)[0];
+  // Root on the endpoint lives in exactly one container.
+  assert.equal(compose.split("\n").filter((l) => l.includes("/var/run/docker.sock")).length, 1);
+  assert.ok(service("updater").includes("/var/run/docker.sock:/var/run/docker.sock"));
+  assert.ok(!service("nexux").includes("docker.sock"));
+  // The app's side of the channel is the same path a VM host uses, so the same
+  // Settings button works on both.
+  assert.ok(service("nexux").includes("- host-control:/host-control"));
+  assert.ok(service("updater").includes("- host-control:/control"));
+  assert.ok(!service("nexux").includes("host-config"), "the app never sees the stack's secrets file");
   assert.ok(compose.includes('NEXUX_HOST_KIND: "endpoint"'));
+  // The app is not root; the updater opens the channel for it.
+  assert.ok(service("updater").includes("chmod 1777 /control"));
+});
+
+test("the updater consumes the request, never recreates itself, and logs like a VM host", () => {
+  const script = renderEndpointUpdater(endpointHostProject("Home Box"));
+  assert.ok(script.includes("docker compose -p nexus-host-home-box"));
+  // Consumed before acting, or the loop would fire again mid-update.
+  assert.ok(script.indexOf("rm -f /control/update-requested") < script.indexOf("pull $SERVICES"));
+  // Its own container is left out of pull and up: recreating itself would
+  // kill the run halfway.
+  assert.match(script, /SERVICES="tailscale nexux ollama"/);
+  assert.ok(!/up -d(?! \$SERVICES)/.test(script), "every up names its services");
+  // Never down: the volumes are the host's data.
+  assert.ok(!/compose[^\n]* down/.test(script));
+  // The markers self-update-log.ts parses.
+  for (const marker of ["[nexus-update] started", "[nexus-update] finished", "[nexus-update] FAILED"]) {
+    assert.ok(script.includes(marker), marker);
+  }
 });
 
 test("the node keeps its identity across recreation, under a safe hostname", () => {
