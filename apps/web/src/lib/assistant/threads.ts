@@ -66,9 +66,19 @@ function focusLine(projectId: string | null, projectName: string | null): string
     : "The user is not on a project page; ask which project when it matters.";
 }
 
-/** One line a person can decide on — built from the tool and its arguments. */
-export function summarizeAction(tool: string, args: Record<string, unknown>): string {
-  const s = (k: string) => (typeof args[k] === "string" ? (args[k] as string) : null);
+/**
+ * One line a person can decide on — built from the tool and its arguments.
+ * `names` swaps ids for what the user calls things; an id nobody resolved
+ * stays an id rather than being guessed at.
+ */
+export function summarizeAction(
+  tool: string,
+  args: Record<string, unknown>,
+  names: { sandbox?: string | null; project?: string | null } = {},
+): string {
+  const raw = (k: string) => (typeof args[k] === "string" ? (args[k] as string) : null);
+  const s = (k: string) =>
+    k === "sandboxId" && names.sandbox ? names.sandbox : k === "projectId" && names.project ? names.project : raw(k);
   switch (tool) {
     case "nexux_launch_sandbox":
       return `Launch a ${s("provider") ?? "new"} sandbox${s("dockerEndpoint") ? ` on ${s("dockerEndpoint")}` : ""}${s("name") ? ` named ${s("name")}` : ""} for project ${s("projectId")}`;
@@ -180,7 +190,7 @@ async function persistLoop(threadId: string, turn: LoopResult) {
     );
   }
   if (turn.pending) {
-    const summary = summarizeAction(turn.pending.tool, turn.pending.args);
+    const summary = summarizeAction(turn.pending.tool, turn.pending.args, await namesFor(turn.pending.args));
     const action = await prisma.assistantAction.create({
       data: {
         threadId,
@@ -205,6 +215,16 @@ async function persistLoop(threadId: string, turn: LoopResult) {
   }
   await prisma.assistantThread.update({ where: { id: threadId }, data: { updatedAt: new Date() } });
   return created;
+}
+
+/** The names behind the ids a write names, for its card. */
+async function namesFor(args: Record<string, unknown>) {
+  const id = (k: string) => (typeof args[k] === "string" ? (args[k] as string) : null);
+  const [sandbox, project] = await Promise.all([
+    id("sandboxId") ? prisma.sandbox.findUnique({ where: { id: id("sandboxId")! }, select: { name: true } }) : null,
+    id("projectId") ? prisma.project.findUnique({ where: { id: id("projectId")! }, select: { name: true } }) : null,
+  ]);
+  return { sandbox: sandbox?.name ?? null, project: project?.name ?? null };
 }
 
 export class AssistantError extends Error {

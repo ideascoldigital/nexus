@@ -113,3 +113,16 @@ test("a thread limited to read scopes never offers a write", async () => {
   assert.equal(thread!.actions.length, 0, "the tool is not in its list, so the reply is prose");
   assert.equal(rec.launches.length, 0);
 });
+
+test("an action names what the user calls things, and keeps an unknown id as is", async () => {
+  const { summarizeAction } = await import("./threads");
+  assert.equal(
+    summarizeAction("nexux_sandbox_power", { sandboxId: "s1", action: "pause" }, { sandbox: "nexux-galtex-de693d" }),
+    "Pause sandbox nexux-galtex-de693d",
+  );
+  assert.equal(summarizeAction("nexux_sandbox_power", { sandboxId: "s1", action: "resume" }), "Resume sandbox s1");
+  assert.match(
+    summarizeAction("nexux_launch_sandbox", { projectId: "p1", provider: "local" }, { project: "galtex" }),
+    /for project galtex$/,
+  );
+});

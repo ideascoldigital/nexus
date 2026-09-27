@@ -14,8 +14,9 @@
 
 import { useEffect, useState } from "react";
 
-import { ArrowUpCircle, Check, Loader2 } from "lucide-react";
+import { ArrowUpCircle, Check, Loader2, Sparkles } from "lucide-react";
 
+import { OPEN_ASSISTANT_EVENT } from "@/components/assistant/assistant-panel";
 import { SystemMeters } from "@/components/layout/system-meters";
 import { ZoomControl } from "@/components/layout/zoom-control";
 import { getVersion, type AppVersion } from "@/services/hosts";
@@ -198,6 +199,14 @@ export function StatusBar() {
           constantly and the version is looked up deliberately. */}
       <SystemMeters />
       <span className="ml-auto" />
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ASSISTANT_EVENT))}
+        className="flex items-center gap-1 hover:text-foreground"
+        title="Open the assistant (⌘I)"
+      >
+        <Sparkles className="h-3 w-3" /> Assistant
+      </button>
       <ZoomControl />
       <UpdateBadge native={native} />
       {version && (

@@ -1,6 +1,6 @@
 # 30 — One assistant, on every page, with the MCP tools
 
-Status: **phase 1 shipped** (2026-09-27) — the loop, the write gate, threads and their API; no UI yet.
+Status: **phases 1–2 shipped** (2026-09-27) — the loop, the write gate, threads and the global panel. Watches and streaming are next.
 
 ## Goal
 
@@ -256,3 +256,27 @@ project.
 - Tests: 5 loop tests with a scripted model; 6 thread tests on the test DB
   with a fake MCP context (write not run, approve once, cancel runs no turn,
   history verbatim across turns, read-only scopes never offer a write).
+
+## As built (phase 2)
+
+- `components/assistant/assistant-panel.tsx`, docked in `AppShell` beside
+  the page (a full-screen sheet under `md`), toggled with ⌘I or the
+  **Assistant** button in the status bar (`OPEN_ASSISTANT_EVENT`); whether
+  it is open, and which thread, are remembered per browser.
+- **Route context:** `/projects/<id>` becomes a "Project: <name>" chip sent
+  with each message; it can be dropped and comes back on the next page.
+- Transcript: user bubbles, markdown replies, each read folded into one
+  line (tool + args, result on expand), **action cards** with the summary,
+  the tool, the status, and Run / Cancel while pending — the input is
+  locked until the card is decided. Thread picker: new, switch, delete.
+- Action summaries now name things: the sandbox and project behind their
+  ids are looked up when the card is made ("Pause sandbox
+  nexux-galtex-de693d"); an id nothing resolves stays an id.
+- Walked in the browser on galtex's page against the real model: "which
+  sandboxes are running here? if there's one, pause it" listed them and
+  produced a pause card; Cancel recorded; "mejor sí, pausalo" produced a
+  new card by name — cancelled again, nothing paused.
+- **Deferred:** the Stack tab's own assistant panel still renders its
+  existing component (now on the shared loop, reads only). Moving it onto
+  this panel, focused on the project and keeping its apply-suggestion
+  cards, is left for when its conversation history moves to threads.
