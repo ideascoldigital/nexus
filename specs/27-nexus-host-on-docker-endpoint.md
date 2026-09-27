@@ -145,11 +145,8 @@ dashboard via the control dir + systemd unit. On an endpoint:
 - **From the install that created it:** `docker -H … compose pull && up -d`
   with the same compose file. Volumes kept (never `down -v`). This is
   `updateHost`'s endpoint branch.
-- **From the host's own dashboard:** not possible — it has no docker socket
-  (D-34) and there is no root-side unit to ask. The Update button there says
-  so and names the install to update from, instead of offering an action that
-  cannot work. (The host knows it runs on an endpoint via an env var the
-  compose sets, `NEXUX_HOST_KIND=endpoint`.)
+- **From the host's own dashboard:** through the stack's `updater` service
+  (phase 5, below) — the endpoint's stand-in for a VM's root systemd unit.
 
 ### Destroy
 
@@ -179,7 +176,6 @@ hosts.
   so its "local" sandboxes cannot exist; it can use cloud sandboxes, or —
   later — register its own endpoint over SSH, which needs a key inside the
   container and is its own decision.
-- **Self-update from the host's dashboard** (see Updates).
 - **Kernel-mode Tailscale** (better throughput) — opt-in later if userspace
   proves slow for the terminal or the browser session.
 - **Keeping data on destroy.** A "stop, keep volumes" action is plausible;
@@ -221,6 +217,7 @@ hosts.
 3. ✅ Update and destroy branches; terminal target for endpoint hosts; the host
    dashboard's Update button explains itself.
 4. ✅ Manual E2E on a real endpoint (destroy pending — see As built).
+5. ✅ Self-update from the host's own Settings: an `updater` service.
 
 ## As built (phase 1)
 
@@ -287,3 +284,34 @@ On `omarchy` (x86_64, Docker 29, reached as `ssh://omarchy`):
   date" (the image had just been pulled), and the app kept answering.
 - **Destroy:** not run on this host yet — it is in use. The unit tests cover
   the command; walk it when the host is retired.
+
+## Phase 5 — self-update from the host's own Settings
+
+A VM host updates itself through a note in `/host-control` that a root
+systemd unit acts on (D-34: the app never gets the docker socket). An endpoint
+host had nothing on its machine to act on the note, so phase 3 sent updates
+through the install that created it. Phase 5 puts the stand-in *in the
+stack*:
+
+- **`updater` service** (`docker:cli`): the only container with
+  `/var/run/docker.sock` — root on the endpoint, as the unit is on a VM — and
+  it acts on exactly one thing, `update-requested` in the shared
+  `host-control` volume. The app mounts that volume at `/host-control`, the
+  VM path, so the same Settings button and log reader work on both.
+- **The script** (`renderEndpointUpdater`) consumes the request first, pulls
+  and `up -d`s `tailscale nexux ollama` — never itself, since recreating its
+  own container kills the run — never `down`, and logs `[nexus-update]
+  started/finished/FAILED` like the VM updater. It opens `/control` `1777`:
+  the app runs as `nexux`, and sticky keeps it from removing the log.
+- **Its config** (`compose.yml`, `.env`, registry login, the script) lives in
+  a `host-config` volume only it mounts, written after every `up -d` through
+  `docker exec -i` on stdin. **This is the one place the host's secrets rest
+  on the endpoint** — inside a Docker volume, never visible to the app.
+  Accepted in exchange for self-update (the machine is the user's own).
+- **Hosts from before phase 5** gain the updater the first time they are
+  updated from the install that created them; until then their button says so.
+
+Walked on `omarchy`: an update from here recreated the stack with the updater
+(data survived: projects still there), its files arrived `600`, `/control`
+`1777`; a note written as `nexux` inside the app container was consumed and
+the stack pulled and recreated, logged in the VM format.
