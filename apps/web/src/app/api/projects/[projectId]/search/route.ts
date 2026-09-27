@@ -3,6 +3,8 @@ import { searchProject } from "@nexux/embeddings";
 import type { SourceType } from "@nexux/embeddings/chunker";
 import { OllamaUnavailableError } from "@nexux/embeddings/embedder";
 
+import { ollamaHostForProject } from "@/lib/ollama-host";
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ projectId: string }> },
@@ -23,11 +25,13 @@ export async function POST(
   const provider = body?.provider ?? "ollama-nomic";
 
   try {
+    const { host } = await ollamaHostForProject(projectId);
     const grouped = await searchProject(projectId, query, {
       k,
       sourceTypes,
       repoIds,
       provider,
+      ollamaHost: host,
     });
     return NextResponse.json(grouped);
   } catch (err) {

@@ -3,6 +3,8 @@ import { prisma } from "@nexux/db";
 import { indexProject, dropProjectIndex } from "@nexux/embeddings";
 import { OllamaUnavailableError } from "@nexux/embeddings/embedder";
 
+import { ollamaHostForProject } from "@/lib/ollama-host";
+
 // Coalesce concurrent builds per project: opening a project auto-indexes, so
 // two tabs (or open + manual click) must share one build instead of racing on
 // the LanceDB dir. Survives dev hot reloads like the prisma global.
@@ -42,9 +44,9 @@ export async function POST(
   try {
     let run = inflight.get(projectId);
     if (!run) {
-      run = indexProject(projectId, { mode, provider }).finally(() =>
-        inflight.delete(projectId),
-      );
+      run = ollamaHostForProject(projectId)
+        .then(({ host }) => indexProject(projectId, { mode, provider, ollamaHost: host }))
+        .finally(() => inflight.delete(projectId));
       inflight.set(projectId, run);
     }
     const report = await run;

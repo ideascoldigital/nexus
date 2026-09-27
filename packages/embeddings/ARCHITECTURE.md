@@ -26,11 +26,17 @@ Repo keys are derived from the repository identity (normalised remote URL, else 
 - `dropProjectIndex` drops the project-data and conversations stores but only deletes this project's `EmbeddingIndex` tracking rows — the repo store is left intact because another project may still be using it (`index.ts:315`).
 - `searchProject` re-attaches the *current* project's `repoId` onto hits returned from a shared store (`index.ts:385`).
 
+## Which Ollama
+
+`resolveOllamaHost(saved?)` picks the address: the saved "Ollama URL" setting (passed in by the caller), else `OLLAMA_URL`, else `http://localhost:11434`. It returns `{ host, source }` so the UI can say which knob set it. Resolved per call, not at module load, so a setting saved while the server runs applies to the next request. A saved value that is not an absolute http(s) URL falls through to the next source rather than breaking search.
+
+This package does **not** read the setting — it has no business knowing about workspaces. The web layer looks it up (`apps/web/src/lib/ollama-host.ts`) and threads the host down: `Embedder({ ollamaHost })`, `getEmbedder(provider, host)`, `checkEmbedderHealth(provider, host)`, `getOllamaPullStream(host)`, and `ollamaHost` in `IndexOptions` / `SearchOptions` (forwarded through `deps.getEmbedder`). Omitted, everything falls back to the environment-only answer.
+
 ## Key files
 
 | File | Role |
 |---|---|
-| `src/embedder.ts` | `Embedder` over Ollama: `ensureReady()` (pulls model), `embed()`, health check. Only `ollama-nomic` implemented; other providers throw |
+| `src/embedder.ts` | `Embedder` over Ollama: `ensureReady()` (pulls model), `embed()`, health check, `resolveOllamaHost`. Only `ollama-nomic` implemented; other providers throw |
 | `src/store.ts` | `VectorStore` over LanceDB: upsert/delete/search/dropAll, `bucketDir()` path derivation, self-healing on corruption |
 | `src/chunker.ts` | `chunkCode` / `chunkMarkdown` / `chunkPlain`, caps tuned to 8192-token context |
 | `src/scan.ts` | `scanRepo` walk with hard-excludes + text-extension/size filters |

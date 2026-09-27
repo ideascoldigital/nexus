@@ -23,6 +23,8 @@ _Last updated: 2026-09-26._
 
 ## Milestones (timeline by PR)
 
+- **2026-09-26** — The "Ollama URL" saved in Settings → AI Providers now reaches the embedder. It never did: `@nexux/embeddings` froze `OLLAMA_URL` into a module constant at load, so a saved URL still got `localhost:11434`. `resolveOllamaHost` (setting → `OLLAMA_URL` → localhost, per call) lives in the package; the workspace lookup lives in `apps/web/src/lib/ollama-host.ts` and is threaded into health, install, the Settings "try it", search, indexing and the assistant services, keeping the package free of setting reads. The Embeddings card says which knob set the address it shows. 23 new tests.
+
 - **2026-09-26** — Spec 26 complete: metrics cover every Docker daemon (phase 4). `/api/metrics?sandboxes=1` measures this machine and each endpoint in parallel and labels rows by endpoint; each daemon reports whether it answered, so an unreachable endpoint no longer reads as one with no sandboxes. Settings → System groups by daemon once there are two. Checked against a real LAN endpoint. 10 metrics tests.
 
 - **2026-09-26** — Terminal and browser session reach sandboxes on another machine's Docker (spec 26 phase 3). Terminal targets carry an endpoint id (`docker://<id>@<container>`), resolved to a host inside the terminal server through an injected resolver — the browser never sends a host, and the package stays free of the database. The browser session reads the remote published port with `docker -H … port` and forwards to it with `ssh -L` through the endpoint, authenticating with the user's own ssh config rather than the sandbox key; loopback on both ends. Smoke-tested on a LAN box with a throwaway container. 1434 web + 39 terminal + 349 sandbox tests.

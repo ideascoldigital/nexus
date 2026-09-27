@@ -10,6 +10,7 @@ import { z } from "zod";
 import { checkEmbedderHealth, getEmbedder } from "@nexux/embeddings/embedder";
 
 import { cosineSimilarity, type EmbeddingTestResult } from "@/lib/embedding-test";
+import { activeOllamaHost } from "@/lib/ollama-host";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,7 +28,8 @@ export async function POST(req: NextRequest) {
 
   // Say which of the two preconditions is missing, instead of letting the
   // embed call fail with Ollama's own message.
-  const health = await checkEmbedderHealth("ollama-nomic");
+  const { host } = await activeOllamaHost();
+  const health = await checkEmbedderHealth("ollama-nomic", host);
   if (!health.ollamaReachable) {
     return NextResponse.json(
       { error: `Ollama isn't answering at ${health.host}.`, health },
@@ -41,7 +43,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const embedder = getEmbedder("ollama-nomic");
+  const embedder = getEmbedder("ollama-nomic", host);
   const vectors: number[][] = [];
   const results: EmbeddingTestResult["results"] = [];
   try {

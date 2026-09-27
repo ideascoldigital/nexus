@@ -1,10 +1,13 @@
 import { getOllamaPullStream } from "@nexux/embeddings/embedder";
 
+import { activeOllamaHost } from "@/lib/ollama-host";
+
 export const runtime = "nodejs";
 
 export async function POST() {
   try {
-    const stream = await getOllamaPullStream();
+    const { host } = await activeOllamaHost();
+    const stream = await getOllamaPullStream(host);
     const encoder = new TextEncoder();
 
     const readable = new ReadableStream({

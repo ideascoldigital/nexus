@@ -9,6 +9,7 @@ import type { InlineMessage } from "@ideascol/agents-generator-sdk";
 import { searchProject } from "@nexux/embeddings";
 
 import { createAgentClient } from "./agents-generator";
+import { ollamaHostForProject } from "@/lib/ollama-host";
 import { workspaceIdOfProject } from "@/lib/workspace";
 
 /** A handoff the SDK reports after routing a turn to a sub-agent. */
@@ -75,7 +76,8 @@ export function defaultAgentDeps(): AgentDeps {
       });
     },
     search: async (projectId, query, k) => {
-      const results = await searchProject(projectId, query, { k });
+      const { host } = await ollamaHostForProject(projectId);
+      const results = await searchProject(projectId, query, { k, ollamaHost: host });
       return { repos: results.repos, projectData: results.projectData };
     },
     workspaceIdOfProject,

@@ -23,6 +23,7 @@ import {
   defaultAgentDeps,
   type RunnableAgent,
 } from "./agent-deps";
+import { ollamaHostForProject } from "@/lib/ollama-host";
 import { detectRepo } from "@/lib/stack/detect";
 import { parseStackSuggestions } from "@/lib/stack/suggestions";
 import type { StackSuggestion } from "@/lib/stack/types";
@@ -100,7 +101,8 @@ async function toolSearchProject(
   if (!query) return { error: "query is required" };
   const k = typeof args.k === "number" ? Math.min(args.k, 20) : 8;
   try {
-    const grouped = await searchProject(projectId, query, { k });
+    const { host } = await ollamaHostForProject(projectId);
+    const grouped = await searchProject(projectId, query, { k, ollamaHost: host });
     const hits = [...grouped.repos, ...grouped.projectData].map((h) => ({
       filePath: h.filePath,
       lines: h.startLine != null ? `${h.startLine}-${h.endLine}` : undefined,

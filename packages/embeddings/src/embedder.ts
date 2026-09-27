@@ -25,7 +25,7 @@ const PROVIDER_DIMS: Record<EmbeddingProvider, number> = {
 };
 
 const OLLAMA_MODEL = "nomic-embed-text";
-const DEFAULT_HOST = getConfig().llm.ollamaUrl;
+const LOCAL_OLLAMA = "http://localhost:11434";
 // nomic-embed-text context = 8192 tokens. Worst case ~1.5 chars/token (code, base64) → cap at 8000 chars hard.
 const MAX_EMBED_CHARS = 8000;
 const MIN_EMBED_CHARS = 200;
@@ -41,15 +41,60 @@ export function dimensionsFor(provider: EmbeddingProvider): number {
   return PROVIDER_DIMS[provider];
 }
 
+/** Where a resolved Ollama address came from, so the UI can say which knob to turn. */
+export type OllamaHostSource = "setting" | "env" | "default";
+
+export type ResolvedOllamaHost = {
+  host: string;
+  source: OllamaHostSource;
+};
+
+/**
+ * Normalize a user-supplied Ollama address, or null if it is not one. Only
+ * absolute http(s) URLs pass: `localhost:11434` parses as a URL with protocol
+ * `localhost:`, and handing that to the client fails far from the setting.
+ */
+function usableHost(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  } catch {
+    return null;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+/**
+ * The Ollama address to use: the saved "Ollama URL" setting, else OLLAMA_URL,
+ * else localhost. This package does not read the database — the caller looks
+ * the setting up (the web app does it per workspace) and passes it in; with no
+ * argument this is the environment-only answer.
+ *
+ * Resolved per call rather than at module load, so a setting saved while the
+ * server runs takes effect on the next request without a restart. An unusable
+ * value falls through to the next source instead of breaking search.
+ */
+export function resolveOllamaHost(saved?: string | null): ResolvedOllamaHost {
+  const fromSetting = usableHost(saved);
+  if (fromSetting) return { host: fromSetting, source: "setting" };
+  const fromEnv = usableHost(getConfig().llm.ollamaUrl);
+  if (fromEnv && fromEnv !== LOCAL_OLLAMA) return { host: fromEnv, source: "env" };
+  return { host: LOCAL_OLLAMA, source: "default" };
+}
+
 export class Embedder {
   private ollama: Ollama;
   readonly provider: EmbeddingProvider;
   readonly dimensions: number;
+  readonly host: string;
 
   constructor(config: EmbedderConfig) {
     this.provider = config.provider;
     this.dimensions = PROVIDER_DIMS[config.provider];
-    this.ollama = new Ollama({ host: config.ollamaHost ?? DEFAULT_HOST });
+    this.host = config.ollamaHost ?? resolveOllamaHost().host;
+    this.ollama = new Ollama({ host: this.host });
   }
 
   async ensureReady(): Promise<void> {
@@ -62,7 +107,7 @@ export class Embedder {
       list = await this.ollama.list();
     } catch (err) {
       throw new OllamaUnavailableError(
-        `Cannot reach Ollama at ${DEFAULT_HOST}. Install from https://ollama.com/download and start the daemon.`
+        `Cannot reach Ollama at ${this.host}. Install from https://ollama.com/download and start the daemon.`
       );
     }
 
@@ -103,8 +148,11 @@ export class Embedder {
   }
 }
 
-export function getEmbedder(provider: EmbeddingProvider = "ollama-nomic"): Embedder {
-  return new Embedder({ provider });
+export function getEmbedder(
+  provider: EmbeddingProvider = "ollama-nomic",
+  ollamaHost?: string,
+): Embedder {
+  return new Embedder({ provider, ollamaHost });
 }
 
 export type EmbedderHealth = {
@@ -118,8 +166,9 @@ export type EmbedderHealth = {
 
 export async function checkEmbedderHealth(
   provider: EmbeddingProvider = "ollama-nomic",
+  ollamaHost?: string,
 ): Promise<EmbedderHealth> {
-  const host = DEFAULT_HOST;
+  const host = ollamaHost ?? resolveOllamaHost().host;
   const base: EmbedderHealth = {
     provider,
     ollamaReachable: false,
@@ -146,7 +195,7 @@ export async function checkEmbedderHealth(
   }
 }
 
-export function getOllamaPullStream(host = DEFAULT_HOST) {
+export function getOllamaPullStream(host = resolveOllamaHost().host) {
   const client = new Ollama({ host });
   return client.pull({ model: OLLAMA_MODEL, stream: true });
 }

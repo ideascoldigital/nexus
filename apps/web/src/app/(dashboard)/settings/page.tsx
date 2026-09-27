@@ -413,6 +413,8 @@ function SettingsPageContent() {
       // A new token changes who the app cards say they're connected as.
       queryClient.invalidateQueries({ queryKey: ["telegram-bot"] });
       queryClient.invalidateQueries({ queryKey: ["slack-status"] });
+      // A new Ollama URL moves the embedder the Embeddings card checks.
+      queryClient.invalidateQueries({ queryKey: ["embedder-health"] });
       setEditingKey(null);
       setFormData({});
     },
@@ -430,6 +432,7 @@ function SettingsPageContent() {
       queryClient.invalidateQueries({ queryKey: ["settings"] });
       queryClient.invalidateQueries({ queryKey: ["telegram-bot"] });
       queryClient.invalidateQueries({ queryKey: ["slack-status"] });
+      queryClient.invalidateQueries({ queryKey: ["embedder-health"] });
     },
   });
 

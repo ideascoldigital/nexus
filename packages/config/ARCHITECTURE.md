@@ -27,7 +27,7 @@ Never call `os.homedir()` directly in code that gets bundled into the Next.js se
 | `NEXUX_DATA_DIR` | `dataDir` | optional (default `~/.nexux`) |
 | `DATABASE_URL` | `databaseUrl` | **required** (throws on access) |
 | `ENCRYPTION_KEY` | `encryptionKey` | optional |
-| `OLLAMA_URL` | `llm` | optional (default `http://localhost:11434`) |
+| `OLLAMA_URL` | `llm` | optional (default `http://localhost:11434`); a saved "Ollama URL" setting overrides it for embeddings |
 | `ANTHROPIC_API_KEY` | `llm` | optional |
 | `OPENAI_API_KEY` / `OPENAPI_KEY` | `llm` | optional (first wins) |
 | `CODEX_API_URL` | `integrations` | optional (default `https://api.codex.com/v1`) |

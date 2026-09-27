@@ -4,6 +4,7 @@ import { prisma, type SandboxTask } from "@nexux/db";
 import { getConfig } from "@nexux/config";
 import { searchProject } from "@nexux/embeddings";
 import { notifyTaskFinished } from "@/lib/notify";
+import { ollamaHostForProject } from "@/lib/ollama-host";
 import {
   AGENT_USER,
   SANDBOX_ROOT,
@@ -153,7 +154,8 @@ export async function buildSearchContext(
   query: string,
 ): Promise<string | null> {
   try {
-    const results = await searchProject(projectId, query, { k: 6 });
+    const { host } = await ollamaHostForProject(projectId);
+    const results = await searchProject(projectId, query, { k: 6, ollamaHost: host });
     const clip = (s: string, n = 320) =>
       s.replace(/\s+/g, " ").trim().slice(0, n);
     const repoLines = results.repos

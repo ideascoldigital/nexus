@@ -293,6 +293,8 @@ export type EmbedderHealth = {
   modelPresent: boolean;
   modelName: string;
   host: string;
+  /** Which knob set `host`: the saved Ollama URL, OLLAMA_URL, or neither. */
+  hostSource?: "setting" | "env" | "default";
   error?: string;
 };
 

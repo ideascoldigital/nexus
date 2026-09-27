@@ -85,7 +85,8 @@ export type IndexDb = {
 
 export type EmbeddingDeps = {
   db: IndexDb;
-  getEmbedder(provider: EmbeddingProvider): IndexEmbedder;
+  /** `ollamaHost` is the caller's resolved address; omitted, the env default. */
+  getEmbedder(provider: EmbeddingProvider, ollamaHost?: string): IndexEmbedder;
   openStore(
     bucket: Bucket,
     key: string,
@@ -182,7 +183,7 @@ export function defaultDeps(): EmbeddingDeps {
         await db().embeddingIndex.deleteMany({ where });
       },
     },
-    getEmbedder: (provider) => getEmbedder(provider),
+    getEmbedder: (provider, ollamaHost) => getEmbedder(provider, ollamaHost),
     openStore: (bucket, key, dimensions) =>
       VectorStore.open(bucket, key, dimensions),
     scanRepo,

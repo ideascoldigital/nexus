@@ -19,10 +19,30 @@ import {
   getEmbedderHealth,
   installEmbeddingModel,
   testEmbeddings,
+  type EmbedderHealth,
   type InstallProgress,
 } from "@/services/projects";
 
 const QUERY_KEY = ["embedder-health"];
+
+/**
+ * Where the address came from, so a wrong one is fixed in the right place:
+ * the saved Ollama URL wins over OLLAMA_URL, which wins over localhost.
+ */
+function hostHint(source: EmbedderHealth["hostSource"]) {
+  if (source === "setting") {
+    return <>The address is the Ollama URL saved under AI Providers above.</>;
+  }
+  const from =
+    source === "env" ? (
+      <>
+        the <code>OLLAMA_URL</code> environment variable of this server
+      </>
+    ) : (
+      <>the default, since neither an Ollama URL nor <code>OLLAMA_URL</code> is set</>
+    );
+  return <>The address comes from {from}; set an Ollama URL under AI Providers to point elsewhere.</>;
+}
 
 /**
  * The local embedding model behind semantic search and ⌘K: whether it is
@@ -86,8 +106,7 @@ export function EmbeddingsSection() {
         </div>
         {h && !h.ollamaReachable && (
           <p className="text-xs text-muted-foreground">
-            Start Ollama (the app, or <code>ollama serve</code>). The address comes from the{" "}
-            <code>OLLAMA_URL</code> environment variable of this server.
+            Start Ollama (the app, or <code>ollama serve</code>). {hostHint(h.hostSource)}
           </p>
         )}
         {h?.ollamaReachable && !h.modelPresent && (

@@ -87,6 +87,8 @@ type Harness = {
     k: number;
     filters?: { sourceTypes?: string[]; repoIds?: string[] };
   }[];
+  /** The Ollama host each getEmbedder call was handed. */
+  embedderHosts: (string | undefined)[];
   ensureReadyCalls: number;
 };
 
@@ -111,6 +113,7 @@ function harness(opts: {
   const openedStores: string[] = [];
   const openedDimensions: number[] = [];
   const searches: Harness["searches"] = [];
+  const embedderHosts: (string | undefined)[] = [];
   let ensureReadyCalls = 0;
 
   for (const e of opts.entries ?? []) {
@@ -169,15 +172,18 @@ function harness(opts: {
         deletedEntries.push(where);
       },
     },
-    getEmbedder: () => ({
-      ensureReady: async () => {
-        ensureReadyCalls++;
-      },
-      embed: async (text) => {
-        embedCalls.push(text);
-        return { vector: [0.1, 0.2, 0.3] };
-      },
-    }),
+    getEmbedder: (_provider, ollamaHost) => {
+      embedderHosts.push(ollamaHost);
+      return {
+        ensureReady: async () => {
+          ensureReadyCalls++;
+        },
+        embed: async (text) => {
+          embedCalls.push(text);
+          return { vector: [0.1, 0.2, 0.3] };
+        },
+      };
+    },
     openStore: async (bucket, key, dimensions) => {
       const storeKey = `${bucket}:${key}`;
       openedStores.push(storeKey);
@@ -206,6 +212,7 @@ function harness(opts: {
     openedStores,
     openedDimensions,
     searches,
+    embedderHosts,
     get ensureReadyCalls() {
       return ensureReadyCalls;
     },
@@ -254,6 +261,18 @@ test("the embedder is made ready before anything is embedded", async () => {
   });
   await indexProject("p1", {}, h.deps);
   assert.equal(h.ensureReadyCalls, 1);
+});
+
+test("the caller's Ollama host reaches the embedder", async () => {
+  const h = harness({ project: buildProject() });
+  await indexProject("p1", { ollamaHost: "http://gpu-box:11434" }, h.deps);
+  assert.deepEqual(h.embedderHosts, ["http://gpu-box:11434"]);
+});
+
+test("without a host, indexing leaves the choice to the embedder", async () => {
+  const h = harness({ project: buildProject() });
+  await indexProject("p1", {}, h.deps);
+  assert.deepEqual(h.embedderHosts, [undefined]);
 });
 
 test("an empty project reports zero work", async () => {
@@ -736,6 +755,12 @@ test("the query is embedded once and that vector drives every store", async () =
   assert.equal(h.ensureReadyCalls, 1);
   assert.equal(h.searches.length, 3);
   assert.ok(h.searches.every((s) => JSON.stringify(s.vector) === JSON.stringify([0.1, 0.2, 0.3])));
+});
+
+test("search embeds the query on the caller's Ollama host", async () => {
+  const h = harness({ repos: [] });
+  await searchProject("p1", "q", { ollamaHost: "http://gpu-box:11434" }, h.deps);
+  assert.deepEqual(h.embedderHosts, ["http://gpu-box:11434"]);
 });
 
 test("all three buckets are searched for a project with one repo", async () => {
