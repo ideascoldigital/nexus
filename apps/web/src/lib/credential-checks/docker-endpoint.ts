@@ -78,9 +78,11 @@ export async function checkEndpointForSandboxes(
       : { label: "DNS on the default bridge", ok: false, detail: "the sandbox container itself cannot resolve names — check `dns` in /etc/docker/daemon.json" },
   );
 
-  // A compose-style network, as the sandbox's stack services (and Nexus
-  // hosts) get. Docker isolates these from docker0, so a resolver bound only
-  // there answers the default bridge and nothing else.
+  // A compose-style network, as a Nexus host's stack gets. The sandbox
+  // container itself sits on the default bridge, and its own services resolve
+  // through it, so this failing does not stop a sandbox — it stops anything
+  // run with compose on this daemon. Docker isolates these networks from
+  // docker0, so a resolver bound only there answers the default bridge alone.
   const network = `nexux-check-${randomBytes(4).toString("hex")}`;
   let netOk = false;
   const created = await run([...H, "network", "create", network], { timeoutMs: 30_000 });
@@ -99,7 +101,7 @@ export async function checkEndpointForSandboxes(
           label: "DNS on a compose-style network",
           ok: false,
           detail: bridgeOk
-            ? "names resolve on the default bridge but not on user-defined networks — typically `dns` in /etc/docker/daemon.json points at a resolver only docker0 can reach (like 172.17.0.1). Point it at your router or a public resolver and restart Docker."
+            ? "names resolve on the default bridge but not on user-defined networks — sandboxes still work, but a Nexus host (or anything run with compose) here cannot reach the internet by name. Typically `dns` in /etc/docker/daemon.json points at a resolver only docker0 can reach (like 172.17.0.1); point it at your router or a public resolver and restart Docker."
             : "no DNS here either — check `dns` in /etc/docker/daemon.json",
         },
   );

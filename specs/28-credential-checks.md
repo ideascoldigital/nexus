@@ -158,7 +158,7 @@ throwaway `busybox` containers (`--rm`) on that daemon:
 | daemon answers, not rootless | the existing probe | — |
 | runs privileged containers | `run --privileged busybox true` | the sandbox is Docker-in-Docker |
 | DNS on the default bridge | `nslookup github.com` | the sandbox container itself |
-| DNS on a user-defined network | same, on a temporary `docker network create` | the sandbox's own stack services (compose), and Nexus hosts |
+| DNS on a user-defined network | same, on a temporary `docker network create` | anything run with compose on this daemon — a Nexus host above all. A sandbox itself sits on the default bridge and its inner services resolve through it, so this alone does not stop sandboxes |
 | reaches the internet | `nc -z github.com 443` | clone, install, APIs |
 | disk space for Docker | `df` of `DockerRootDir`, mounted read-only | images and DinD storage — warn under 10 GB |
 
