@@ -38,6 +38,9 @@ export const CHECKABLE_PROVIDERS: ReadonlySet<string> = new Set([
   "google",
   "xai-llm",
   "zai",
+  "civo",
+  "aws",
+  "tailscale",
 ]);
 
 /** Days before expiry at which a working token turns into a warning. */

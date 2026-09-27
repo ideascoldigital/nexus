@@ -54,7 +54,7 @@ test("a GitHub credential is tested, stored, and listed without its secret", asy
 
 test("a provider without a check says so instead of pretending", async () => {
   const cred = await prisma.cloudCredential.create({
-    data: { workspaceId: "ws-cred-check", name: "civo", provider: "civo", data: { token: "x" } },
+    data: { workspaceId: "ws-cred-check", name: "mystery", provider: "mystery", data: { token: "x" } },
   });
   const res = await post(cred.id);
   assert.equal(res.status, 422);

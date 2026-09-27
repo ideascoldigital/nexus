@@ -137,7 +137,7 @@ test("llm: openrouter reports credit, and warns when it runs out", async () => {
 });
 
 test("llm: an unknown provider has no check", async () => {
-  assert.equal(await checkLlmKey("civo", "x"), null);
+  assert.equal(await checkLlmKey("mystery", "x"), null);
 });
 
 // --- wiring -----------------------------------------------------------------------
@@ -148,8 +148,11 @@ test("every provider the UI offers Test for has a check behind it", async () => 
     throw new Error("offline");
   }) as unknown as typeof fetch;
   for (const provider of CHECKABLE_PROVIDERS) {
-    const r = await checkCredential({ provider, data: { token: "x", apiKey: "x" } }, { fetch: nope, now: () => NOW });
+    const r = await checkCredential(
+      { provider, data: { token: "x", apiKey: "x", accessKeyId: "AKIAX", secretAccessKey: "s", authKey: "tskey-auth-x" } },
+      { fetch: nope, now: () => NOW },
+    );
     assert.ok(r, `${provider} is offered but has no check`);
   }
-  assert.equal(await checkCredential({ provider: "civo", data: { token: "x" } }), null);
+  assert.equal(await checkCredential({ provider: "mystery", data: { token: "x" } }), null);
 });

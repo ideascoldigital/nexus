@@ -18,6 +18,7 @@ const PREFIXES: Record<string, string[]> = {
   openrouter: ["sk-or-"],
   "xai-llm": ["xai-"],
   google: ["AIza"],
+  aws: ["AKIA", "ASIA"],
 };
 
 export type ShapeProblem = { fatal: boolean; message: string };

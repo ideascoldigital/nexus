@@ -19,7 +19,18 @@ export async function POST(_req: NextRequest, { params }: Params) {
   const cred = await prisma.cloudCredential.findUnique({ where: { id: credentialId } });
   if (!cred) return NextResponse.json({ error: "Credential not found" }, { status: 404 });
 
-  const result = await checkCredential(cred);
+  // An AWS check asks about EC2 in the region sandboxes launch in: the one a
+  // project using this credential is configured for, when there is one.
+  const awsRegion =
+    cred.provider === "aws"
+      ? ((
+          await prisma.sandboxConfig.findFirst({
+            where: { credentialId, provider: "aws" },
+            select: { region: true },
+          })
+        )?.region ?? null)
+      : null;
+  const result = await checkCredential(cred, {}, { awsRegion });
   if (!result) {
     return NextResponse.json(
       { error: `Testing ${cred.provider} credentials isn't available yet.` },
