@@ -24,11 +24,13 @@ import { prisma } from "@nexux/db";
 import {
   execRemote,
   HOST_DIR,
+  shq,
   HOST_UPDATE_LOG,
   sandboxPrivateKeyPath,
 } from "@nexux/sandbox";
 import { getConfig } from "@nexux/config";
 
+import { composeImageSwapScript } from "@/lib/host-channel";
 import { hostSshAddress, hostSshUser } from "@/lib/host-ssh";
 
 /** Where the control directory is mounted inside the host's own container. */
@@ -101,6 +103,33 @@ export async function readSelfUpdateLog(): Promise<string | null> {
 }
 
 /**
+ * Pull and restart a host. With `imageRef`, move it to that image first — a
+ * release channel switch (host-channel.ts). The row's imageRef records what
+ * was actually pulled, so it only changes once the new image is running; a
+ * failed switch leaves the host, and the row, on the old one.
+ */
+export async function updateHost(
+  hostId: string,
+  opts: { imageRef?: string } = {},
+): Promise<HostUpdateResult> {
+  const found = await prisma.nexusHost.findUnique({ where: { id: hostId } });
+  if (!found) throw new Error("Host not found");
+  if (found.status !== "running") {
+    throw new Error(
+      `This host is ${found.status}, not running — there is nothing to update yet.`,
+    );
+  }
+  const imageRef = opts.imageRef?.trim() || found.imageRef;
+  const switching = imageRef !== found.imageRef;
+  const host = { ...found, imageRef };
+  const result = await updateHostRow(host, switching ? found.imageRef : null);
+  if (result.ok && switching) {
+    await prisma.nexusHost.update({ where: { id: hostId }, data: { imageRef } });
+  }
+  return result;
+}
+
+/**
  * Update a host from this install, over SSH.
  *
  * Runs the pull directly rather than poking the systemd unit: this side has a
@@ -108,17 +137,15 @@ export async function readSelfUpdateLog(): Promise<string | null> {
  * `up -d` still races the connection — recreating the container does not touch
  * sshd, so unlike the self-update path the command survives its own effect.
  */
-export async function updateHost(hostId: string): Promise<HostUpdateResult> {
-  const host = await prisma.nexusHost.findUnique({ where: { id: hostId } });
-  if (!host) throw new Error("Host not found");
-  if (host.status !== "running") {
-    throw new Error(
-      `This host is ${host.status}, not running — there is nothing to update yet.`,
-    );
-  }
+async function updateHostRow(
+  host: NonNullable<Awaited<ReturnType<typeof prisma.nexusHost.findUnique>>>,
+  /** The image being switched away from, when switching; null otherwise. */
+  previousImageRef: string | null,
+): Promise<HostUpdateResult> {
   if (host.provider === "docker-endpoint") {
     // No SSH to a box we do not own: the same pull + up -d, through the
-    // endpoint's Docker (spec 27).
+    // endpoint's Docker (spec 27). It re-renders the compose file from
+    // host.imageRef, so a switch needs nothing more.
     const { updateHostOnEndpoint } = await import("@/lib/host-manager");
     return updateHostOnEndpoint(host);
   }
@@ -131,12 +158,19 @@ export async function updateHost(hostId: string): Promise<HostUpdateResult> {
   }
 
   const privateKeyPath = sandboxPrivateKeyPath(getConfig().dataDir);
+  // A VM host's compose file lives on the VM, written at bootstrap: a switch
+  // rewrites its app image line there, and puts it back if the pull or the
+  // restart fails, so the file never names an image the host is not running.
+  const pullAndUp = "docker compose pull && docker compose up -d";
+  const step = previousImageRef
+    ? composeImageSwapScript(previousImageRef, host.imageRef, pullAndUp, shq)
+    : pullAndUp;
   const result = await execRemote(
     // The image id of the running container, echoed before and after: "did
     // this update change anything" is otherwise unanswerable — a pull that
     // found nothing and a pull that replaced the stack print near-identical
     // output, and the UI needs to say "already up to date" for one of them.
-    `cd ${HOST_DIR} && echo "nexus-image-before=$(docker compose images --quiet nexux | head -1)" && docker compose pull && docker compose up -d && echo "nexus-image-after=$(docker compose images --quiet nexux | head -1)"`,
+    `cd ${HOST_DIR} && echo "nexus-image-before=$(docker compose images --quiet nexux | head -1)" && ${step} && echo "nexus-image-after=$(docker compose images --quiet nexux | head -1)"`,
     {
       host: address.host,
       user: hostSshUser(host),

@@ -177,8 +177,16 @@ export async function getVersion(): Promise<AppVersion | null> {
 }
 
 /** Pull the newer image on a host and restart its stack, over SSH. */
-export async function updateHost(hostId: string): Promise<HostUpdateResult> {
-  const res = await fetch(`/api/hosts/${hostId}/update`, { method: "POST" });
+export async function updateHost(
+  hostId: string,
+  /** Also move the host to this release channel (edge / latest). */
+  channel?: "edge" | "latest",
+): Promise<HostUpdateResult> {
+  const res = await fetch(`/api/hosts/${hostId}/update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(channel ? { channel } : {}),
+  });
   if (!res.ok) throw new Error(await errorFrom(res));
   return res.json();
 }

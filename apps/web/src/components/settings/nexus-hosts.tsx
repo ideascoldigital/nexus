@@ -67,6 +67,7 @@ import {
 import { HostSshAccess } from "@/components/settings/host-ssh-access";
 import { EndpointHostAccess } from "@/components/settings/endpoint-host-access";
 import { ContextCheck } from "@/components/settings/credential-check";
+import { channelOf, HOST_CHANNELS, withChannel, type HostChannel } from "@/lib/host-channel";
 import {
   lastUpdateFailed,
   lastUpdateFinished,
@@ -573,6 +574,10 @@ function HostRow({
   // Kept in state rather than refetched: the pull's output exists only in the
   // response to the request that caused it.
   const [updateLog, setUpdateLog] = useState<string | null>(null);
+  const qc = useQueryClient();
+  // A channel picked but not yet confirmed — switching pulls and restarts.
+  const [switchTo, setSwitchTo] = useState<HostChannel | null>(null);
+  const channel = channelOf(host.imageRef);
   const busy = HOST_IN_FLIGHT.includes(host.status);
 
   // Only fetched while the row is moving or the user opened the log — it is the
@@ -588,9 +593,12 @@ function HostRow({
   // already set up. Unlike the host's own button this side has a shell, so it
   // reports what the pull actually did.
   const update = useMutation({
-    mutationFn: () => updateHost(host.id),
+    mutationFn: (channel?: HostChannel) => updateHost(host.id, channel),
     onSuccess: (res) => {
       setUpdateLog(res.log ?? null);
+      setSwitchTo(null);
+      // A channel switch changes the row's image.
+      void qc.invalidateQueries({ queryKey: ["hosts"] });
       toast({
         title: !res.ok
           ? "The update failed"
@@ -625,12 +633,49 @@ function HostRow({
           </p>
           {/* Which image the host runs — the tag Update pulls. Whether a newer
               build of it exists is what the Update button answers. */}
-          <p
-            className="text-xs font-mono text-muted-foreground truncate"
-            title={host.imageRef}
-          >
-            {host.imageRef}
-          </p>
+          <div className="flex min-w-0 items-center gap-2">
+            {/* Release channel: the tag Update pulls. Stable = release tags,
+                Edge = every merge to main (host-channel.ts). */}
+            <div className="flex shrink-0 rounded-md border p-0.5" role="group" aria-label="Release channel">
+              {HOST_CHANNELS.map((c) => (
+                <button
+                  key={c.value}
+                  type="button"
+                  title={c.detail}
+                  disabled={host.status !== "running" || update.isPending}
+                  onClick={() => setSwitchTo(c.value === channel ? null : c.value)}
+                  className={`rounded px-2 py-0.5 text-xs transition-colors disabled:opacity-50 ${
+                    (switchTo ?? channel) === c.value
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            <p
+              className="text-xs font-mono text-muted-foreground truncate"
+              title={host.imageRef}
+            >
+              {host.imageRef}
+            </p>
+          </div>
+          {switchTo && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-xs">
+              <span className="text-muted-foreground">
+                Pull <code className="font-mono">{withChannel(host.imageRef, switchTo)}</code> and restart.
+                {switchTo === "latest" &&
+                  " If Edge is ahead of the last release, this runs older code on a database newer code may have migrated."}
+              </span>
+              <Button size="sm" className="h-6 px-2 text-xs" disabled={update.isPending} onClick={() => update.mutate(switchTo)}>
+                {update.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Switch"}
+              </Button>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={update.isPending} onClick={() => setSwitchTo(null)}>
+                Cancel
+              </Button>
+            </div>
+          )}
           {url ? (
             <div className="flex items-center gap-2 pt-1">
               <a
@@ -659,7 +704,7 @@ function HostRow({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => update.mutate()}
+            onClick={() => update.mutate(undefined)}
             // Only a running host has a stack to pull into; anything else is
             // still being built or taken down.
             disabled={host.status !== "running" || update.isPending}
@@ -1046,8 +1091,20 @@ function CreateHostForm({
           onChange={(e) => setImageRef(e.target.value)}
           className="font-mono text-sm"
         />
-        <p className="text-sm text-muted-foreground">
-          Pulled at boot. A private package needs a registry credential below.
+        <p className="flex flex-wrap items-center gap-x-2 text-sm text-muted-foreground">
+          <span>Channel:</span>
+          {HOST_CHANNELS.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              onClick={() => setImageRef(withChannel(imageRef || defaultImage, c.value))}
+              className={`underline-offset-2 hover:underline ${channelOf(imageRef) === c.value ? "font-medium text-foreground" : ""}`}
+              title={c.detail}
+            >
+              {c.label}
+            </button>
+          ))}
+          <span>· pulled at boot. A private package needs a registry credential below.</span>
         </p>
       </div>
 
