@@ -1,6 +1,7 @@
 # 28 — Test a credential before something needs it
 
-Status: **draft** (2026-09-27). Nothing implemented.
+Status: **phase 1 shipped** (2026-09-27) — GitHub checks, the Test button and
+status dot. Phases 2–4 remain.
 
 ## Goal
 
@@ -113,9 +114,28 @@ unit-tested against recorded responses without a network.
 
 ## Order
 
-1. `CredentialCheck` type, storage columns, `POST …/check`; GitHub (incl.
+1. ✅ `CredentialCheck` type, storage columns, `POST …/check`; GitHub (incl.
    the obvious-mistake detection) with tests; the Test button and status
    dot for git credentials.
 2. GitLab, Bitbucket, Claude, LLM keys.
 3. Civo, AWS, Tailscale.
 4. Context checks: project repos, registry image; check-on-save.
+
+## As built (phase 1)
+
+- `apps/web/src/lib/credential-checks/`: `types.ts` (incl. `CHECKABLE_PROVIDERS`
+  so the client knows where to offer Test), `shape.ts` (the obvious mistakes),
+  `github.ts`, `index.ts` (dispatch; other providers return null → 422).
+- A pasted shell command is refused **without sending it anywhere**; other
+  shape problems (whitespace, unknown prefix) are shown and the check still
+  runs.
+- Missing `repo` warns (every sandbox needs it); missing `read:packages` or
+  `workflow` shows ✗ on its line with why it would matter, and does not
+  change the status.
+- **Found on first real run:** of four saved GitHub tokens, three were
+  rejected outright by GitHub. The Nexus host's registry check had reported
+  them as "needs read:packages" — the pull would indeed fail, but for being
+  invalid. Phase 4's image check should run this check first so the message
+  names the real cause.
+- A running dev server keeps its Prisma client in memory: after the
+  migration it answered `Unknown argument lastCheck` until restarted.
