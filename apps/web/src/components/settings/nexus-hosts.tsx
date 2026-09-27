@@ -214,10 +214,10 @@ export function NexusHostsSection() {
   // A host creating hosts is confusing and almost certainly unintended — but
   // updating *itself* is exactly what someone standing on the host wants.
   if (readiness?.isHost) {
-    // A host on a Docker endpoint has nothing on its machine to ask for an
-    // update (spec 27); say where updates come from instead of offering a
-    // button that cannot work.
-    return readiness.hostKind === "endpoint" ? <EndpointHostSelfCard /> : <SelfUpdateCard />;
+    // VM and endpoint hosts update themselves the same way: a note in
+    // /host-control that a root-side helper acts on — a systemd unit on a VM,
+    // the stack's updater service on an endpoint (spec 27 phase 5).
+    return <SelfUpdateCard />;
   }
 
   // Two ways to get a machine: a cloud VM (terraform + a cloud credential),
@@ -383,37 +383,6 @@ function buildKey(v: AppVersion | null | undefined): string {
  * the build identity (/api/version) from before and after: changed means
  * updated, unchanged means the pull found nothing newer.
  */
-/** What Settings shows on a host that runs on someone's Docker endpoint. */
-function EndpointHostSelfCard() {
-  const { data: version } = useQuery({ queryKey: ["app-version"], queryFn: getVersion });
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Server className="h-5 w-5" />
-          This Nexus host
-        </CardTitle>
-        <CardDescription>
-          This install is a Nexus host running as containers on a Docker
-          endpoint — a machine you already had. It can&apos;t update itself: it
-          has no access to that machine&apos;s Docker, by design. Update it from
-          the install that created it (Settings → Backup &amp; migration →
-          Update); the database, credentials and search indexes live in volumes
-          and survive the update.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <p className="text-sm text-muted-foreground">
-          Running{" "}
-          <span className="font-mono text-foreground">
-            {version ? describeVersion(version) : "…"}
-          </span>
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
-
 function SelfUpdateCard() {
   const { toast } = useToast();
   const queryClient = useQueryClient();

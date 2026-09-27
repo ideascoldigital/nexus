@@ -62,16 +62,6 @@ export function isHostInstall(): boolean {
  * operation completed.
  */
 export async function requestSelfUpdate(): Promise<HostUpdateResult> {
-  // A host on a Docker endpoint (spec 27) has no root-side updater to ask and
-  // no docker socket of its own: it is updated from the install that created
-  // it. Say so rather than write a request nothing reads.
-  if (process.env.NEXUX_HOST_KIND === "endpoint") {
-    return {
-      ok: false,
-      message:
-        "This host runs on a Docker endpoint, so it can't update itself — update it from the install that created it (Settings → Backup & migration → Update).",
-    };
-  }
   const request = `${CONTROL_MOUNT}/update-requested`;
   try {
     await fs.writeFile(request, `${new Date().toISOString()}\n`);
@@ -82,7 +72,12 @@ export async function requestSelfUpdate(): Promise<HostUpdateResult> {
       ok: false,
       message:
         (err as { code?: string }).code === "ENOENT"
-          ? `This host has no update helper — it was created before self-update existed. Update it from your local install, or run \`${HOST_DIR}/update.sh\` on the machine.`
+          ? process.env.NEXUX_HOST_KIND === "endpoint"
+            ? // An endpoint host from before spec 27 phase 5: its stack has no
+              // updater service yet. One update from the install that created
+              // it adds one.
+              "This host has no update helper yet. Update it once from the install that created it (Settings → Backup & migration → Update) — that also installs the helper, and from then on this button works."
+            : `This host has no update helper — it was created before self-update existed. Update it from your local install, or run \`${HOST_DIR}/update.sh\` on the machine.`
           : `Could not write the update request: ${
               err instanceof Error ? err.message : String(err)
             }`,

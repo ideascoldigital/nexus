@@ -96,7 +96,8 @@ test("the stack comes up in order: pull, tailscale, then the app on its tailnet 
   for (const c of docker.calls) {
     assert.deepEqual(c.args.slice(0, 2), ["-H", "ssh://omarchy"]);
   }
-  assert.ok(docker.calls.every((c) => c.args.includes(endpointHostProject("home"))));
+  const composeCalls = docker.calls.filter((c) => c.args.includes("compose"));
+  assert.ok(composeCalls.every((c) => c.args.includes(endpointHostProject("home"))));
 
   // The app started only once the origin was the tailnet address.
   const env = fs.readFileSync(path.join(workDir, ".env"), "utf8");
@@ -199,8 +200,12 @@ test("update pulls and recreates, never takes the stack down, and says whether a
   );
   assert.equal(res.ok, true);
   assert.equal(res.updated, true);
-  const verbs = docker.calls.map((c) => c.slice(c.indexOf("--env-file") + 2).join(" "));
+  const verbs = docker.calls
+    .filter((c) => c.includes("compose"))
+    .map((c) => c.slice(c.indexOf("--env-file") + 2).join(" "));
   assert.deepEqual(verbs, ["images --quiet nexux", "pull", "up -d", "images --quiet nexux"]);
+  // …and the updater's copy is refreshed after the restart.
+  assert.ok(docker.calls.some((c) => c.includes("exec") && c.includes("nexus-host-home-updater-1")));
   assert.ok(!verbs.some((v) => v.startsWith("down")), "volumes must survive an update");
   // The compose file is re-rendered, so template changes reach old hosts.
   assert.ok(fs.readFileSync(path.join(workDir, "compose.yml"), "utf8").includes("network_mode: service:tailscale"));
@@ -268,4 +273,28 @@ test("a destroy the endpoint refuses keeps the local files and says why", async 
     /Could not remove the stack.*Cannot connect/,
   );
   assert.equal(fs.existsSync(path.join(workDir, ".env")), true);
+});
+
+test("the updater gets its config on stdin, secrets never in argv, update.sh last", async () => {
+  const docker = fakeDocker();
+  await provisionEndpointHost(
+    spec({ registry: { host: "ghcr.io", username: "octo", password: REG_PASSWORD } }),
+    io(docker.run).io,
+  );
+  const writes = docker.calls.filter((c) => c.args.includes("exec") && c.args.includes("-i"));
+  const files = writes.map((w) => w.args.at(-1)!.split("cat > /config/")[1]);
+  assert.deepEqual(files, ["compose.yml", ".env", "docker/config.json", "update.sh"]);
+  for (const w of writes) {
+    assert.deepEqual(w.args.slice(0, 2), ["-H", "ssh://omarchy"]);
+    assert.ok(w.args.includes("nexus-host-home-updater-1"));
+    const argv = w.args.join(" ");
+    assert.ok(!argv.includes(AUTH_KEY) && !argv.includes(REG_PASSWORD), argv);
+  }
+  const env = writes.find((w) => w.args.at(-1)!.endsWith("/config/.env"))!;
+  assert.match(env.input ?? "", new RegExp(AUTH_KEY));
+  const login = JSON.parse(writes.find((w) => w.args.at(-1)!.endsWith("config.json"))!.input!);
+  assert.equal(
+    Buffer.from(login.auths["ghcr.io"].auth, "base64").toString(),
+    `octo:${REG_PASSWORD}`,
+  );
 });

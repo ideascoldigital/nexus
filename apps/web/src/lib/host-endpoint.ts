@@ -18,7 +18,14 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-import { dockerHostArgs, renderHostCompose, safeHostName } from "@nexux/sandbox";
+import {
+  dockerHostArgs,
+  endpointHostProject,
+  renderEndpointUpdater,
+  renderHostCompose,
+} from "@nexux/sandbox";
+
+export { endpointHostProject };
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 
@@ -61,11 +68,6 @@ export const runDocker: DockerRunner = (args, opts = {}) =>
     child.stdin.end(opts.input ?? "");
   });
 
-/** The compose project a host's stack runs as on its endpoint. */
-export function endpointHostProject(name: string): string {
-  return `nexus-host-${safeHostName(name)}`;
-}
-
 /** `docker -H <host> compose -p <project> -f … --env-file …` — the fixed prefix. */
 export function endpointComposeArgs(opts: {
   dockerHost: string;
@@ -98,6 +100,62 @@ export function renderEndpointEnv(vars: Record<string, string>): string {
       })
       .join("\n") + "\n"
   );
+}
+
+/**
+ * What the updater service needs to recreate the stack without this machine
+ * (spec 27 phase 5): the compose file, its `.env`, the updater script, and
+ * the registry login a private image pulls with. Written into its config
+ * volume through `docker exec -i` — on stdin, so neither the auth key nor the
+ * registry token ever appears in argv.
+ *
+ * This is where the host's secrets come to rest on the endpoint: inside a
+ * Docker volume only the updater mounts. The app container never sees it.
+ */
+export async function syncUpdaterConfig(
+  spec: {
+    project: string;
+    dockerHost: string;
+    workDir: string;
+    registry: { host: string; username: string; password: string } | null;
+  },
+  run: DockerRunner,
+): Promise<void> {
+  const container = `${spec.project}-updater-1`;
+  const auths = spec.registry
+    ? {
+        [spec.registry.host]: {
+          auth: Buffer.from(`${spec.registry.username}:${spec.registry.password}`).toString("base64"),
+        },
+      }
+    : {};
+  const files: Array<[string, string]> = [
+    ["compose.yml", fs.readFileSync(path.join(spec.workDir, "compose.yml"), "utf8")],
+    [".env", fs.readFileSync(path.join(spec.workDir, ".env"), "utf8")],
+    // Written even when empty: a registry login removed since must not linger.
+    ["docker/config.json", JSON.stringify({ auths }) + "\n"],
+    // Last: the updater waits for this file, so it only starts once the rest
+    // is in place.
+    ["update.sh", renderEndpointUpdater(spec.project)],
+  ];
+  for (const [file, content] of files) {
+    const res = await run(
+      [
+        ...dockerHostArgs({ host: spec.dockerHost }),
+        "exec",
+        "-i",
+        container,
+        "sh",
+        "-c",
+        // Fixed paths only; the content arrives on stdin.
+        `umask 077 && mkdir -p /config/docker && cat > /config/${file}`,
+      ],
+      { input: content, timeoutMs: 60_000 },
+    );
+    if (res.code !== 0) {
+      throw new Error(`Could not hand the updater its ${file}: ${res.stderr.trim().slice(-300)}`);
+    }
+  }
 }
 
 /** Read `Self.DNSName` out of `tailscale status --json`, without the trailing dot. */
@@ -233,6 +291,11 @@ export async function provisionEndpointHost(
   // 3. The app, now that its origin is known.
   writeEnv(`http://${ip}:3030`);
   await must("starting the stack", [...compose, "up", "-d"], { timeoutMs: 300_000 });
+  // So the host can update itself from its own Settings (phase 5).
+  await syncUpdaterConfig(
+    { project, dockerHost: spec.dockerHost, workDir: spec.workDir, registry: spec.registry },
+    run,
+  );
 
   let healthy = false;
   // `node`, because it is the one binary the image is certain to have.
@@ -354,6 +417,16 @@ export async function updateEndpointHost(
       message: "The images were pulled but the stack did not restart cleanly.",
       log: log.trim().slice(-8000),
     };
+  }
+  // Keeps the updater's copy current — and gives a host created before
+  // phase 5 its updater the first time it is updated from here.
+  try {
+    await syncUpdaterConfig(
+      { project, dockerHost: spec.dockerHost, workDir: spec.workDir, registry: spec.registry },
+      run,
+    );
+  } catch (err) {
+    log += `\n[nexus-host] WARN: the host was updated, but its self-updater could not be refreshed: ${err instanceof Error ? err.message : String(err)}\n`;
   }
   const after = await imageId();
   // Only claim "nothing changed" when both ids were actually read.
