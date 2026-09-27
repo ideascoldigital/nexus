@@ -84,11 +84,14 @@ export async function POST(req: NextRequest, { params }: Params) {
       : "civo";
   // Absent or blank both mean "generate one" — a cleared input posts "".
   const name = typeof body?.name === "string" ? body.name : undefined;
-  // Another machine's Docker (spec 26); absent = this machine.
+  // Another machine's Docker (spec 26). Absent = the project's saved choice;
+  // null or "" = this machine, explicitly.
   const dockerEndpointId =
-    typeof body?.dockerEndpointId === "string" && body.dockerEndpointId
-      ? body.dockerEndpointId
-      : null;
+    body && "dockerEndpointId" in body
+      ? typeof body.dockerEndpointId === "string" && body.dockerEndpointId
+        ? body.dockerEndpointId
+        : null
+      : undefined;
 
   try {
     const sandbox = await launchSandbox(projectId, provider, name, dockerEndpointId);

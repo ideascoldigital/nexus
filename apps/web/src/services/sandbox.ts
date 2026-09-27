@@ -167,6 +167,8 @@ export type SandboxConfigInput = {
   provider: SandboxProvider;
   credentialId?: string | null;
   githubCredentialId?: string | null;
+  /** provider "local": which machine's Docker (spec 26); null = this one. */
+  dockerEndpointId?: string | null;
   claudeCredentialId?: string | null;
   region: string;
   size: string;
@@ -325,7 +327,12 @@ export async function getProjectSetup(
 
 export async function saveProjectSetup(
   projectId: string,
-  data: { config?: SandboxConfigInput; repoSetups?: RepoSetupInput[] },
+  data: {
+    // Saved with the destination as its provider — "local" included — while
+    // the form's own `provider` stays the cloud whose fields it edits.
+    config?: Omit<SandboxConfigInput, "provider"> & { provider: LaunchTarget };
+    repoSetups?: RepoSetupInput[];
+  },
 ): Promise<void> {
   const res = await fetch(`/api/projects/${projectId}/setup`, {
     method: "PUT",

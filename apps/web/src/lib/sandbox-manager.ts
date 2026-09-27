@@ -961,6 +961,11 @@ export async function launchSandbox(
   projectId: string,
   providerOverride?: SandboxProvider,
   requestedName?: string,
+  /**
+   * Which machine's Docker, for a local sandbox. `undefined` = the project's
+   * saved choice (so a scheduled launch lands where the user set it); `null`
+   * = this machine, explicitly.
+   */
   dockerEndpointId?: string | null,
 ): Promise<Sandbox> {
   const [readiness, project] = await Promise.all([
@@ -982,7 +987,13 @@ export async function launchSandbox(
   if (dockerEndpointId && provider !== "local") {
     throw new Error("A Docker endpoint only applies to local sandboxes.");
   }
-  const endpoint = await resolveDockerEndpoint(dockerEndpointId);
+  const endpoint = await resolveDockerEndpoint(
+    dockerEndpointId !== undefined
+      ? dockerEndpointId
+      : provider === "local"
+        ? (project.sandboxConfig?.dockerEndpointId ?? null)
+        : null,
+  );
   const target: DockerTarget = endpoint?.target ?? { host: null };
 
   // A bind mount names a path on the daemon's disk. Another machine cannot see

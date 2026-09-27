@@ -312,6 +312,12 @@ model SandboxConfig {
   githubCredentialId   String? // saved GitHub token injected as GITHUB_TOKEN (project env var wins; null = first github credential)
   claudeCredentialId   String? // saved Claude Code token injected as CLAUDE_CODE_OAUTH_TOKEN (project env var wins; null = first claude credential)
   region               String   @default("NYC1") // provider region (Civo: NYC1..., AWS: us-east-1...)
+  // For provider "local": which machine's Docker (spec 26). Null = this one.
+  // Saved with the rest, so the choice survives reopening the drawer and a
+  // scheduled launch uses it too. SET NULL: removing the endpoint falls back
+  // to this machine rather than failing every future launch.
+  dockerEndpointId     String?
+  dockerEndpoint       DockerEndpoint? @relation(fields: [dockerEndpointId], references: [id], onDelete: SetNull)
   size                 String   @default("g3.medium")
   diskImage            String   @default("ubuntu-jammy")
   branch               String? // base branch: cloned in the sandbox, task branches and PRs start from it (null = repo default)
@@ -426,8 +432,9 @@ model DockerEndpoint {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  sandboxes  Sandbox[]
-  nexusHosts NexusHost[]
+  sandboxes      Sandbox[]
+  nexusHosts     NexusHost[]
+  sandboxConfigs SandboxConfig[]
 }
 
 // SandboxProcess - one long-running command started on a sandbox instance

@@ -955,6 +955,7 @@ function SetupEditor({
     captureScreenshots: initialConfig.captureScreenshots,
     livePreview: initialConfig.livePreview,
     previewPort: initialConfig.previewPort,
+    dockerEndpointId: initialConfig.dockerEndpointId ?? null,
     claudeModel: initialConfig.claudeModel ?? null,
     brain: initialConfig.brain === "opencode" ? "opencode" : "claude",
     openCodeModel: initialConfig.openCodeModel ?? null,
@@ -999,8 +1000,6 @@ function SetupEditor({
   // be created, not to the project's saved configuration, so typing one must
   // not mark the form dirty.
   const [sandboxName, setSandboxName] = useState("");
-  // Local only: another machine's Docker (spec 26). Null = this machine.
-  const [dockerEndpointId, setDockerEndpointId] = useState<string | null>(null);
   const namePreview = previewSandboxName(sandboxName);
 
   useEffect(() => {
@@ -1032,7 +1031,14 @@ function SetupEditor({
       mcpServers = parsed as Record<string, Record<string, unknown>>;
     }
     return saveProjectSetup(projectId, {
-      config: { ...config, mcpServers },
+      // The destination is saved as the provider, "local" included, so the
+      // drawer reopens where it was left and a scheduled launch goes there too.
+      // `config.provider` stays the cloud the form edits (see its initializer).
+      config: {
+        ...config,
+        provider: destination === "local" ? "local" : config.provider,
+        mcpServers,
+      },
       repoSetups: Object.entries(repoSetups).map(([repositoryId, s]) => ({
         repositoryId,
         ...s,
@@ -1130,7 +1136,9 @@ function SetupEditor({
           projectId,
           provider,
           sandboxName,
-          provider === "local" ? dockerEndpointId : null,
+          // The choice is saved with the config (save() above ran first); sent
+          // explicitly too, so this launch cannot race a stale saved value.
+          provider === "local" ? (config.dockerEndpointId ?? null) : null,
         );
     },
     onSuccess: () => {
@@ -1222,8 +1230,9 @@ function SetupEditor({
   // Launch step surfaces whatever is still missing.
   // Both the step and the Type step's answer are restored from the URL. The
   // destination has to come from there rather than from the saved config:
-  // SandboxConfig.provider is civo | aws, so "local" has nowhere else to live
-  // and a reload used to flip a local wizard back to a cloud instance.
+  // the saved provider is only what was last *saved*, and a reload mid-edit
+  // must keep the unsaved pick. Without one in the URL, the saved provider
+  // ("local" included — save() stores the destination) decides.
   // Read once on mount — afterwards this state is the truth and the URL mirrors it.
   const restored = useState(() =>
     restoreWizardState(
@@ -1392,8 +1401,8 @@ function SetupEditor({
           </div>
           {isLocal && (
             <DockerEndpointPicker
-              value={dockerEndpointId}
-              onChange={setDockerEndpointId}
+              value={config.dockerEndpointId ?? null}
+              onChange={(dockerEndpointId) => setConfig({ ...config, dockerEndpointId })}
               mountOnlyRepos={repositories
                 .filter((r) => !r.repoUrl && r.localPath)
                 .map((r) => r.name)}

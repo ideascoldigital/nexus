@@ -234,6 +234,8 @@ const configSchema = z.object({
   credentialId: z.string().nullable().optional(),
   githubCredentialId: z.string().nullable().optional(),
   claudeCredentialId: z.string().nullable().optional(),
+  // provider "local": which machine's Docker (spec 26); null = this one.
+  dockerEndpointId: z.string().nullable().optional(),
   region: z.string().min(1),
   size: z.string().min(1),
   diskImage: z.string().min(1),
@@ -322,12 +324,26 @@ export async function PUT(req: NextRequest, { params }: Params) {
     const tailscaleCredentialId = await checkCredential(
       config.tailscaleCredentialId,
     );
+    // Same rule: a removed endpoint means this machine, not a failed save.
+    // Saved whatever the provider: the drawer keeps "local" as its destination
+    // rather than in config.provider, and the endpoint only applies when a
+    // sandbox launches locally anyway.
+    const dockerEndpointId =
+      config.dockerEndpointId
+        ? ((
+            await prisma.dockerEndpoint.findUnique({
+              where: { id: config.dockerEndpointId },
+              select: { id: true },
+            })
+          )?.id ?? null)
+        : null;
 
     const data = {
       provider: config.provider,
       credentialId,
       githubCredentialId,
       claudeCredentialId,
+      dockerEndpointId,
       region: config.region,
       size: config.size,
       diskImage: config.diskImage,

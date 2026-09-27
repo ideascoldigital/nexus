@@ -4,10 +4,10 @@
  * The drawer restores itself from the URL (`?sandboxSetup=1&sandboxStep=…`),
  * so what a step *shows* has to survive a reload as faithfully as which step
  * is open. That is the part that was wrong: the step key round-tripped, but
- * the Type step's answer — local vs a cloud provider — did not, because
- * `SandboxConfig.provider` only stores `civo | aws`. A user who picked Local,
- * walked to Code and refreshed came back to Code with the destination quietly
- * flipped to a cloud instance.
+ * the Type step's answer — local vs a cloud provider — did not. A user who
+ * picked Local, walked to Code and refreshed came back to Code with the
+ * destination quietly flipped to a cloud instance. Saving now stores the
+ * destination as the provider, so a fresh open lands on the saved one too.
  *
  * Lives here, outside the component, so these rules can be unit-tested without
  * a DOM (this app's tests run under `tsx --test`).

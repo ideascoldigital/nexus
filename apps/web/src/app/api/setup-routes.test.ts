@@ -574,3 +574,20 @@ test("a project with no repo urls still shows the selected credential", async ()
   const keys = credentialRows(await body(await get())).map((v) => v.key);
   assert.ok(keys.includes("GITLAB_TOKEN"));
 });
+
+test("the chosen Docker endpoint is kept, and a deleted one reads back as this machine", async () => {
+  const endpoint = await prisma.dockerEndpoint.create({
+    data: { name: "omarchy", host: "ssh://omarchy" },
+  });
+  let res = await put({ config: validConfig({ dockerEndpointId: endpoint.id }) });
+  assert.equal(res.status, 200);
+  assert.equal((await body(await get())).config?.dockerEndpointId, endpoint.id);
+
+  res = await put({ config: validConfig({ dockerEndpointId: "gone" }) });
+  assert.equal(res.status, 200, "a stale id does not fail the save");
+  assert.equal((await body(await get())).config?.dockerEndpointId, null);
+
+  await put({ config: validConfig({ dockerEndpointId: endpoint.id }) });
+  await prisma.dockerEndpoint.delete({ where: { id: endpoint.id } });
+  assert.equal((await body(await get())).config?.dockerEndpointId, null);
+});
