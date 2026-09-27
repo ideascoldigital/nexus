@@ -444,12 +444,14 @@ function CredentialRow({
   cred,
   onDelete,
   deleting,
+  justSaved = false,
 }: {
   cred: CloudCredentialSummary;
   onDelete: () => void;
   deleting: boolean;
+  justSaved?: boolean;
 }) {
-  const check = useCredentialCheck(cred);
+  const check = useCredentialCheck(cred, justSaved);
   return (
     <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2">
       <div className="flex items-center gap-3">
@@ -522,6 +524,8 @@ function CredentialsCard({
   const [provider, setProvider] = useState<CredentialProvider>(
     providers[0].value,
   );
+  // The row saved last tests itself once (spec 28 phase 4).
+  const [justSavedId, setJustSavedId] = useState<string | null>(null);
 
   const credentials = useQuery({
     queryKey: ["cloud-credentials"],
@@ -564,6 +568,7 @@ function CredentialsCard({
                 cred={cred}
                 onDelete={() => deleteMutation.mutate(cred.id)}
                 deleting={deleteMutation.isPending}
+                justSaved={cred.id === justSavedId}
               />
             ))}
           </div>
@@ -595,7 +600,13 @@ function CredentialsCard({
               </SelectContent>
             </Select>
           )}
-          <NewCredentialForm provider={provider} onSaved={invalidate} />
+          <NewCredentialForm
+            provider={provider}
+            onSaved={(created) => {
+              setJustSavedId(created.id);
+              invalidate();
+            }}
+          />
         </div>
       </CardContent>
     </Card>

@@ -66,6 +66,7 @@ import {
 } from "@/components/settings/cloud-credentials";
 import { HostSshAccess } from "@/components/settings/host-ssh-access";
 import { EndpointHostAccess } from "@/components/settings/endpoint-host-access";
+import { ContextCheck } from "@/components/settings/credential-check";
 import {
   lastUpdateFailed,
   lastUpdateFinished,
@@ -1061,6 +1062,13 @@ function CreateHostForm({
           showProvider
           empty={`No saved git token logs in to ${imageRegistry}. Add one in Settings → Git — set its registry host if it is a self-hosted install. Only needed if the image is private.`}
           hint={`The token the host runs docker login with against ${imageRegistry}. It needs registry read access to that image; a public image needs none.`}
+        />
+      )}
+      {needsRegistryLogin && (
+        <ContextCheck
+          credentialId={registryCredentialId}
+          image={imageRef.trim()}
+          label="Check it can pull this image"
         />
       )}
 

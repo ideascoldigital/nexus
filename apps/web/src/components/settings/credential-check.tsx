@@ -6,7 +6,7 @@
  * line per thing Nexux uses the credential for.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { Check, Loader2, Minus, ShieldCheck, X } from "lucide-react";
@@ -23,7 +23,11 @@ const DOT: Record<CredentialCheck["status"], string> = {
 };
 
 /** The dot and the button, for the credential's row. */
-export function useCredentialCheck(cred: CloudCredentialSummary) {
+export function useCredentialCheck(
+  cred: CloudCredentialSummary,
+  /** Test once on mount — for a credential that was just saved (spec 28). */
+  autoRun = false,
+) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const run = useMutation({
@@ -36,6 +40,16 @@ export function useCredentialCheck(cred: CloudCredentialSummary) {
   });
   const result = run.data ?? cred.lastCheck ?? null;
   const checkable = CHECKABLE_PROVIDERS.has(cred.provider);
+
+  // Checked on save, so a bad value is on screen before the user walks away.
+  // It never blocks saving: a self-hosted instance may be unreachable from here.
+  const ran = useRef(false);
+  useEffect(() => {
+    if (autoRun && checkable && !ran.current) {
+      ran.current = true;
+      run.mutate();
+    }
+  }, [autoRun, checkable, run]);
 
   const controls = checkable ? (
     <>
@@ -118,6 +132,46 @@ export function CheckDetails({ result, error }: { result: CredentialCheck | null
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * Test a credential *where it is used* (spec 28 phase 4): a git token against
+ * a project's repos, or against the image a host pulls. Shown next to the
+ * picker that chose the credential.
+ */
+export function ContextCheck({
+  credentialId,
+  projectId,
+  image,
+  label,
+}: {
+  credentialId: string | null;
+  projectId?: string;
+  image?: string;
+  label: string;
+}) {
+  const run = useMutation({
+    mutationFn: () => checkCredential(credentialId!, { projectId, image }),
+  });
+  if (!credentialId) return null;
+  return (
+    <div>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="h-7 px-2 text-xs"
+        onClick={() => run.mutate()}
+        disabled={run.isPending}
+      >
+        {run.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
+        {label}
+      </Button>
+      {(run.data || run.isError) && (
+        <CheckDetails result={run.data ?? null} error={run.isError ? (run.error as Error).message : null} />
+      )}
     </div>
   );
 }

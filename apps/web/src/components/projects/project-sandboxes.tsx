@@ -161,6 +161,7 @@ import {
   type StackServiceSummary,
 } from "@/services/sandbox";
 import { dockerTerminalTarget } from "@/lib/terminal-target";
+import { ContextCheck } from "@/components/settings/credential-check";
 import { DockerEndpointPicker } from "@/components/projects/docker-endpoint-picker";
 import { parseDotenvWithDiagnostics } from "@/lib/stack/dotenv";
 import {
@@ -1987,6 +1988,12 @@ function SetupEditor({
               onChange={(githubCredentialId) =>
                 setConfig({ ...config, githubCredentialId })
               }
+            />
+            {/* Valid is half the answer; this is the other half (spec 28). */}
+            <ContextCheck
+              credentialId={config.githubCredentialId ?? null}
+              projectId={projectId}
+              label="Check access to this project's repos"
             />
             {config.brain === "claude" && (
               <CredentialPicker

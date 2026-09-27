@@ -964,11 +964,18 @@ export async function createCredential(
   return res.json();
 }
 
-/** Test a saved credential against its provider (spec 28). */
+/**
+ * Test a saved credential against its provider (spec 28) — and, with a
+ * project or an image, whether it reaches those repos / can pull that image.
+ */
 export async function checkCredential(
   credentialId: string,
+  context: { projectId?: string; image?: string } = {},
 ): Promise<import("@/lib/credential-checks/types").CredentialCheck> {
-  const res = await fetch(`/api/credentials/${credentialId}/check`, { method: "POST" });
+  const qs = new URLSearchParams(
+    Object.entries(context).filter((e): e is [string, string] => Boolean(e[1])),
+  ).toString();
+  const res = await fetch(`/api/credentials/${credentialId}/check${qs ? `?${qs}` : ""}`, { method: "POST" });
   if (!res.ok) return parseError(res, "Could not test the credential");
   return res.json();
 }

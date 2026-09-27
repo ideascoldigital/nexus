@@ -40,6 +40,7 @@ import {
   resolveTailscaleKey,
 } from "@/lib/sandbox-manager";
 import { probe as probeEndpoint } from "@/lib/docker-endpoints";
+import { checkCredential } from "@/lib/credential-checks";
 import {
   destroyEndpointHost,
   provisionEndpointHost,
@@ -475,6 +476,38 @@ export function ociArch(dockerArch: string): string {
   return a;
 }
 
+/**
+ * `assertImagePullable`, with the failure diagnosed when it was a chosen
+ * credential that failed. The pull check cannot tell "this token lacks
+ * read:packages" from "this token is dead" — both are a refused manifest — and
+ * it used to report expired tokens as a missing scope. Asking the provider
+ * about the token itself (spec 28) names the real cause.
+ */
+async function assertPullableDiagnosed<T extends { username: string; password: string; name: string; credentialId: string }>(
+  imageRef: string,
+  registry: T | null,
+  chosen: boolean,
+): ReturnType<typeof assertImagePullable<T>> {
+  try {
+    return await assertImagePullable(imageRef, registry, chosen);
+  } catch (err) {
+    if (registry) {
+      const cred = await prisma.cloudCredential.findUnique({ where: { id: registry.credentialId } });
+      const verdict = cred ? await checkCredential(cred).catch(() => null) : null;
+      // Only a definite rejection replaces the pull check's message. "Could
+      // not reach the provider" says nothing about the token, and reporting it
+      // as dead would be the same misdiagnosis in the other direction.
+      const rejected = verdict?.checks.find((c) => c.ok === false && /accepts (it|them)$/.test(c.label));
+      if (rejected) {
+        throw new Error(
+          `“${registry.name}” doesn't work at all — ${rejected.detail ?? "the provider rejected it."} Replace it in Settings → Git.`,
+        );
+      }
+    }
+    throw err;
+  }
+}
+
 export type HostReadiness = {
   terraformInstalled: boolean;
   hasCloudCredential: boolean;
@@ -599,7 +632,7 @@ export async function createHost(input: CreateHostInput) {
     imageRef,
     input.registryCredentialId,
   );
-  const { registry } = await assertImagePullable(
+  const { registry } = await assertPullableDiagnosed(
     imageRef,
     resolved,
     Boolean(input.registryCredentialId),
@@ -707,7 +740,7 @@ async function createEndpointHost(input: CreateHostInput) {
   }
 
   const resolved = await resolveHostRegistryAuth(imageRef, input.registryCredentialId);
-  const { registry, platforms } = await assertImagePullable(
+  const { registry, platforms } = await assertPullableDiagnosed(
     imageRef,
     resolved,
     Boolean(input.registryCredentialId),
