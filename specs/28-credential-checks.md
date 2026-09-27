@@ -1,7 +1,7 @@
 # 28 — Test a credential before something needs it
 
-Status: **phases 1–3 and 5 shipped** (2026-09-27) — every credential provider,
-and Docker endpoints as sandbox targets. Phase 4 (context checks) remains.
+Status: **shipped** (2026-09-27) — every credential provider, checks where a
+credential is used, check-on-save, and Docker endpoints as sandbox targets.
 
 ## Goal
 
@@ -119,7 +119,7 @@ unit-tested against recorded responses without a network.
    dot for git credentials.
 2. ✅ GitLab, Bitbucket, Claude, LLM keys.
 3. ✅ Civo, AWS, Tailscale.
-4. Context checks: project repos, registry image; check-on-save.
+4. ✅ Context checks: project repos, registry image; check-on-save.
 5. ✅ Docker endpoints: can this machine host a sandbox (below).
 
 ## As built (phase 1)
@@ -179,3 +179,21 @@ result uses the same `CredentialCheck` shape and is stored on the endpoint
   missing because of it.
 - Real accounts: AWS answered with its IAM user ARN and DryRunOperation;
   Civo with quota headroom; Tailscale's control plane answered `/key`.
+
+## As built (phase 4)
+
+- **Check-on-save runs after saving**, through the saved row's own Test,
+  rather than on an unsaved body through a second endpoint: the row that
+  just appeared tests itself once and expands its result. Same outcome
+  (on screen before the user walks away, never blocking), one code path.
+- `?projectId=` / `?image=` on the check route add context lines; they are
+  returned but never stored, and skipped with one line when the token itself
+  is rejected.
+- The Nexus host precondition (`assertPullableDiagnosed`) asks about the
+  token when a chosen credential fails the pull check, and replaces the
+  message only on an explicit rejection (a line `… accepts it` failing) —
+  the pre-commit test gate caught a first cut that also did it when the
+  provider was merely unreachable.
+- Run on real data: the galtex project's selected git token is one GitHub
+  rejects — its sandboxes would fail to clone — and the working token can
+  push to all four of its repos and pull the host image.
