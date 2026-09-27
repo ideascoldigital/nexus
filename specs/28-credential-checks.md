@@ -1,7 +1,7 @@
 # 28 — Test a credential before something needs it
 
-Status: **phases 1–2 and 5 shipped** (2026-09-27) — git hosts, Claude Code,
-LLM keys, and Docker endpoints as sandbox targets. Phases 3–4 remain.
+Status: **phases 1–3 and 5 shipped** (2026-09-27) — every credential provider,
+and Docker endpoints as sandbox targets. Phase 4 (context checks) remains.
 
 ## Goal
 
@@ -118,7 +118,7 @@ unit-tested against recorded responses without a network.
    the obvious-mistake detection) with tests; the Test button and status
    dot for git credentials.
 2. ✅ GitLab, Bitbucket, Claude, LLM keys.
-3. Civo, AWS, Tailscale.
+3. ✅ Civo, AWS, Tailscale.
 4. Context checks: project repos, registry image; check-on-save.
 5. ✅ Docker endpoints: can this machine host a sandbox (below).
 
@@ -167,3 +167,15 @@ naming what it is set to) — Nexux reports, the user changes their machine.
 Everything it creates is removed, including the temporary network. The
 result uses the same `CredentialCheck` shape and is stored on the endpoint
 (`DockerEndpoint.lastCheck`).
+
+## As built (phase 3)
+
+- **AWS without the SDK:** `sigv4.ts` signs the two form-encoded POSTs
+  (STS, EC2 DryRun). The test recomputes the signature step by step from
+  AWS's documented construction. The EC2 region comes from a project's
+  `SandboxConfig` using that credential, else `us-east-1`.
+- **Tailscale** reads the key from `authKey` or `token` — older credentials
+  keep it in `token`, and the first real run reported a working key as
+  missing because of it.
+- Real accounts: AWS answered with its IAM user ARN and DryRunOperation;
+  Civo with quota headroom; Tailscale's control plane answered `/key`.
