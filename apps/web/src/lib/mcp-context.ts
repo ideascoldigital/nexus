@@ -2,6 +2,7 @@ import { prisma } from "@nexux/db";
 import type {
   ActivitySummary,
   CreateTaskInput,
+  DockerEndpointSummary,
   LaunchSandboxInput,
   NexuxContext,
   PowerAction,
@@ -95,9 +96,22 @@ type SandboxRow = {
   name: string;
   status: string;
   provider: string;
+  region: string;
+  dockerEndpointId: string | null;
+  dockerHost: string | null;
   previewUrl: string | null;
   createdAt: Date;
 };
+
+/**
+ * Where a sandbox runs, in words. A local sandbox on another machine's Docker
+ * records that endpoint's name as its region at launch — kept on the row, so
+ * it still reads right after the endpoint is renamed or removed.
+ */
+export function sandboxRunsOn(row: Pick<SandboxRow, "provider" | "region" | "dockerHost">): string {
+  if (row.provider === "local") return row.dockerHost ? row.region : "this machine";
+  return `${row.provider} ${row.region}`;
+}
 
 function toSandbox(row: SandboxRow): SandboxSummary {
   return {
@@ -106,6 +120,8 @@ function toSandbox(row: SandboxRow): SandboxSummary {
     name: row.name,
     status: row.status,
     provider: row.provider,
+    runsOn: sandboxRunsOn(row),
+    dockerEndpointId: row.dockerEndpointId,
     previewUrl: row.previewUrl,
     createdAt: row.createdAt.toISOString(),
   };
@@ -117,6 +133,9 @@ const SANDBOX_FIELDS = {
   name: true,
   status: true,
   provider: true,
+  region: true,
+  dockerEndpointId: true,
+  dockerHost: true,
   previewUrl: true,
   createdAt: true,
 } as const;
@@ -208,6 +227,23 @@ export function createMcpContext(): NexuxContext {
       return sandboxes.map(toSandbox);
     },
 
+    async listDockerEndpoints(): Promise<DockerEndpointSummary[]> {
+      const endpoints = await prisma.dockerEndpoint.findMany({
+        orderBy: { name: "asc" },
+      });
+      return endpoints.map((e) => {
+        const check = e.sandboxCheck as { status?: string } | null;
+        return {
+          id: e.id,
+          name: e.name,
+          host: e.host,
+          arch: e.arch,
+          memTotalMb: e.memTotalMb,
+          sandboxReady: check?.status ? check.status !== "fail" : null,
+        };
+      });
+    },
+
     async getTask(taskId: string): Promise<TaskSummary | null> {
       const task = await prisma.sandboxTask.findFirst({
         where: { id: taskId, sandbox: { project: { workspaceId } } },
@@ -254,10 +290,12 @@ export function createMcpContext(): NexuxContext {
         throw new Error("provider must be one of: civo, aws, local");
       }
 
+      const dockerEndpointId = await resolveEndpointArg(input.dockerEndpoint);
       const sandbox = await launchSandbox(
         input.projectId,
         input.provider as "civo" | "aws" | "local" | undefined,
         input.name,
+        dockerEndpointId,
       );
       return toSandbox(sandbox);
     },
@@ -317,4 +355,28 @@ export function createMcpContext(): NexuxContext {
       return toSandbox(sandbox);
     },
   };
+}
+
+/**
+ * `dockerEndpoint` as a caller gives it — an id, a name, or "this-machine" —
+ * as launchSandbox takes it: undefined (the project's saved choice), null
+ * (this machine) or an id. A name is what a person or an agent remembers; an
+ * unknown one is refused rather than quietly launched somewhere else.
+ */
+export async function resolveEndpointArg(
+  value: string | undefined,
+): Promise<string | null | undefined> {
+  const v = value?.trim();
+  if (!v) return undefined;
+  if (v === "this-machine") return null;
+  const endpoint = await prisma.dockerEndpoint.findFirst({
+    where: { OR: [{ id: v }, { name: v }] },
+    select: { id: true },
+  });
+  if (!endpoint) {
+    throw new Error(
+      `No Docker endpoint "${v}" — see nexux_list_docker_endpoints, or pass "this-machine".`,
+    );
+  }
+  return endpoint.id;
 }

@@ -49,6 +49,18 @@ export const listSandboxes: ToolDefinition<{ projectId: string }> = {
   run: (ctx, args) => ctx.listSandboxes(args.projectId),
 };
 
+export const listDockerEndpoints: ToolDefinition<Record<string, never>> = {
+  name: "nexux_list_docker_endpoints",
+  description:
+    "List the other machines' Docker daemons a local sandbox can run on, " +
+    "and whether each last passed the check that a sandbox would work there. " +
+    "Pass one's id or name as dockerEndpoint to nexux_launch_sandbox.",
+  scope: "sandboxes:read",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  parse: () => ({}),
+  run: (ctx) => ctx.listDockerEndpoints(),
+};
+
 export const taskStatus: ToolDefinition<{ taskId: string }> = {
   name: "nexux_task_status",
   description:
@@ -160,6 +172,7 @@ export const READ_TOOLS = [
   listProjects,
   activity,
   listSandboxes,
+  listDockerEndpoints,
   taskStatus,
   taskLogs,
   validateStack,

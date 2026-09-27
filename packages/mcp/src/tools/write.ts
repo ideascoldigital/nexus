@@ -81,6 +81,7 @@ export const launchSandbox: ToolDefinition<{
   projectId: string;
   provider?: string;
   name?: string;
+  dockerEndpoint?: string;
 }> = {
   name: "nexux_launch_sandbox",
   description:
@@ -102,6 +103,13 @@ export const launchSandbox: ToolDefinition<{
         type: "string",
         description: "Optional. Omit to let Nexus generate one.",
       },
+      dockerEndpoint: {
+        type: "string",
+        description:
+          "Optional, local sandboxes only. Which machine's Docker: an id or " +
+          "name from nexux_list_docker_endpoints, or \"this-machine\". Omit " +
+          "to use the project's saved choice.",
+      },
     },
     required: ["projectId"],
     additionalProperties: false,
@@ -114,6 +122,7 @@ export const launchSandbox: ToolDefinition<{
       // its configured credentials, and the host is what knows that.
       provider: optionalString(obj, "provider"),
       name: optionalString(obj, "name"),
+      dockerEndpoint: optionalString(obj, "dockerEndpoint"),
     };
   },
   run: (ctx, args) =>
@@ -121,6 +130,7 @@ export const launchSandbox: ToolDefinition<{
       projectId: args.projectId,
       provider: args.provider,
       name: args.name,
+      dockerEndpoint: args.dockerEndpoint,
     }),
 };
 

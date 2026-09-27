@@ -20,6 +20,7 @@ function stubContext(over: Partial<NexuxContext> = {}): {
     listProjects: unexpected("listProjects"),
     getActivity: unexpected("getActivity"),
     listSandboxes: unexpected("listSandboxes"),
+    listDockerEndpoints: unexpected("listDockerEndpoints"),
     getTask: unexpected("getTask"),
     getTaskLogs: unexpected("getTaskLogs"),
     createTask: unexpected("createTask"),
@@ -330,4 +331,26 @@ test("an absurd round count is refused before it spends anything", async () => {
     maxRounds: 50,
   });
   assert.equal(res.ok, false);
+});
+
+test("launch passes the chosen Docker endpoint through, and leaves it out when omitted", async () => {
+  const seen: unknown[] = [];
+  const { ctx } = stubContext({
+    launchSandbox: async (input) => {
+      seen.push(input);
+      return {} as never;
+    },
+  });
+  const launch = TOOLS.find((t) => t.name === "nexux_launch_sandbox")!;
+  await launch.run(ctx, launch.parse({ projectId: "p", provider: "local", dockerEndpoint: "omarchy" }));
+  await launch.run(ctx, launch.parse({ projectId: "p" }));
+  assert.deepEqual(seen, [
+    { projectId: "p", provider: "local", name: undefined, dockerEndpoint: "omarchy" },
+    { projectId: "p", provider: undefined, name: undefined, dockerEndpoint: undefined },
+  ]);
+});
+
+test("endpoints are listed under sandboxes:read, not projects:read", () => {
+  assert.ok(toolsFor(["sandboxes:read"]).some((t) => t.name === "nexux_list_docker_endpoints"));
+  assert.ok(!toolsFor(["projects:read"]).some((t) => t.name === "nexux_list_docker_endpoints"));
 });

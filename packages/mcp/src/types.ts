@@ -37,8 +37,30 @@ export type SandboxSummary = {
   name: string;
   status: string;
   provider: string;
+  /**
+   * Where it runs, in words: "this machine", a Docker endpoint's name (spec
+   * 26), or the cloud region. A caller choosing where to send work needs to
+   * tell a container on the LAN box from one on this laptop.
+   */
+  runsOn: string;
+  /** The Docker endpoint a local sandbox runs on; null = this machine / cloud. */
+  dockerEndpointId: string | null;
   previewUrl: string | null;
   createdAt: string;
+};
+
+/** Another machine's Docker that local sandboxes can run on (spec 26). */
+export type DockerEndpointSummary = {
+  id: string;
+  name: string;
+  host: string;
+  arch: string | null;
+  memTotalMb: number | null;
+  /**
+   * The last "can this host a sandbox" check (spec 28): true all green, false
+   * something failed, null never checked.
+   */
+  sandboxReady: boolean | null;
 };
 
 export type TaskSummary = {
@@ -78,6 +100,11 @@ export type LaunchSandboxInput = {
   /** Omitted lets the host apply the project's configured default. */
   provider?: string;
   name?: string;
+  /**
+   * Local sandboxes only: a Docker endpoint's id or name, or "this-machine".
+   * Omitted lets the host apply the project's saved choice.
+   */
+  dockerEndpoint?: string;
 };
 
 export type PowerAction = "pause" | "resume";
@@ -92,6 +119,7 @@ export type NexuxContext = {
   listProjects(): Promise<ProjectSummary[]>;
   getActivity(): Promise<ActivitySummary>;
   listSandboxes(projectId: string): Promise<SandboxSummary[]>;
+  listDockerEndpoints(): Promise<DockerEndpointSummary[]>;
   getTask(taskId: string): Promise<TaskSummary | null>;
   getTaskLogs(taskId: string, tailLines?: number): Promise<string | null>;
   createTask(input: CreateTaskInput): Promise<TaskSummary>;

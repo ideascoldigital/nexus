@@ -101,9 +101,10 @@ also being able to spend money on new ones.
 | `nexux_activity` | `tasks:read` | `getActivity()` (`services/activity.ts`) |
 | `nexux_task_status` | `tasks:read` | `SandboxTask` row |
 | `nexux_task_logs` | `tasks:read` | task log file, tail-limited |
-| `nexux_list_sandboxes` | `sandboxes:read` | sandboxes route logic + `reconcileLocalSandboxStatuses` |
+| `nexux_list_sandboxes` | `sandboxes:read` | sandboxes route logic + `reconcileLocalSandboxStatuses`; each carries `runsOn` ("this machine", an endpoint's name, "civo lon1") |
+| `nexux_list_docker_endpoints` | `sandboxes:read` | `DockerEndpoint` rows (spec 26) with `sandboxReady` from the spec 28 check |
 | `nexux_create_task` | `tasks:write` | `createTask()` (`lib/task-manager.ts`) |
-| `nexux_launch_sandbox` | `sandboxes:write` | `launchSandbox()` |
+| `nexux_launch_sandbox` | `sandboxes:write` | `launchSandbox()`; optional `dockerEndpoint` (id, name or `this-machine`), omitted = the project's saved choice |
 | `nexux_sandbox_power` | `sandboxes:write` | `pauseSandbox`/`resumeSandbox` |
 
 `nexux_create_task` calls `createTask` rather than reimplementing dispatch.

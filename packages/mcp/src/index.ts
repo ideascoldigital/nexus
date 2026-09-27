@@ -12,6 +12,7 @@ export {
   ToolInputError,
   type ActivitySummary,
   type CreateTaskInput,
+  type DockerEndpointSummary,
   type JsonSchema,
   type LaunchSandboxInput,
   type NexuxContext,
