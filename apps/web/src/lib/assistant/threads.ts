@@ -20,8 +20,16 @@ import { SCOPES, type NexuxContext, type Scope } from "@nexux/mcp";
 import { createMcpContext } from "@/lib/mcp-context";
 import { DEFAULT_WORKSPACE_ID } from "@/lib/workspace";
 import { defaultAgentDeps, type RunnableAgent } from "@/services/agent-deps";
-import { renderToolCatalog, runToolLoop, toolResultMessage, type LoopResult, type LoopTool } from "./loop";
+import {
+  renderToolCatalog,
+  runToolLoop,
+  toolResultMessage,
+  type LoopResult,
+  type LoopTool,
+  type LoopToolCall,
+} from "./loop";
 import { contextTools, mcpTools } from "./tools";
+import { watchTool } from "./watches";
 
 export type AssistantDeps = {
   defineAgent(spec: { name: string; instructions: string; workspaceId?: string }): Promise<RunnableAgent>;
@@ -53,7 +61,7 @@ How to work:
 - Ground answers in tool results; do not guess ids, names or states — look them up.
 - Before a write, make sure you have what it needs (the project id, the sandbox that should run it). Ask the user when a choice is theirs to make (which project, cloud or local, which endpoint).
 - One write at a time. Do not ask for permission in prose: requesting a [WRITE] tool IS asking — the user gets a card with Run / Cancel. When the request is clear, request the tool directly.
-- A task you create runs for minutes to an hour; tell the user how to follow it rather than claiming it finished.
+- A task runs for minutes to an hour and a sandbox takes minutes to come up. After one you started is accepted, call watch on it (a task until finished, a sandbox until running) unless the user said not to — you will be told here when it happens, and can report it then. Never claim it finished before that.
 - Be brief. Answer in the user's language.
 
 {{FOCUS}}
@@ -121,6 +129,7 @@ export async function getThread(threadId: string) {
     include: {
       events: { orderBy: { createdAt: "asc" } },
       actions: { orderBy: { createdAt: "asc" } },
+      watches: { where: { status: "open" }, orderBy: { createdAt: "asc" } },
     },
   });
 }
@@ -139,10 +148,15 @@ export function historyFromEvents(events: Array<{ kind: string; content: unknown
   return out;
 }
 
-async function addEvent(threadId: string, kind: EventKind, content: EventContent) {
-  return prisma.assistantEvent.create({
+/** Receives each event as it is stored — the SSE stream of a turn. */
+export type EventSink = (event: { id: string; kind: string; content: unknown; createdAt: Date }) => void;
+
+export async function addEvent(threadId: string, kind: EventKind, content: EventContent, emit?: EventSink) {
+  const event = await prisma.assistantEvent.create({
     data: { threadId, kind, content: content as unknown as Prisma.InputJsonValue },
   });
+  emit?.(event);
+  return event;
 }
 
 function threadScopes(thread: { scopes: unknown }): Scope[] {
@@ -150,11 +164,15 @@ function threadScopes(thread: { scopes: unknown }): Scope[] {
   return raw.filter((s): s is Scope => (SCOPES as readonly string[]).includes(s));
 }
 
-async function threadTools(thread: { scopes: unknown; projectId: string | null }, deps: AssistantDeps) {
-  return [...mcpTools(threadScopes(thread), deps.ctx()), ...(thread.projectId ? contextTools(thread.projectId) : [])];
+export async function threadTools(thread: { id: string; scopes: unknown; projectId: string | null }, deps: AssistantDeps) {
+  return [
+    ...mcpTools(threadScopes(thread), deps.ctx()),
+    ...(thread.projectId ? contextTools(thread.projectId) : []),
+    watchTool(thread.id),
+  ];
 }
 
-async function agentFor(thread: { projectId: string | null }, tools: LoopTool[], deps: AssistantDeps) {
+export async function agentFor(thread: { projectId: string | null }, tools: LoopTool[], deps: AssistantDeps) {
   const project = thread.projectId
     ? await prisma.project.findUnique({ where: { id: thread.projectId }, select: { name: true } })
     : null;
@@ -168,27 +186,20 @@ async function agentFor(thread: { projectId: string | null }, tools: LoopTool[],
   });
 }
 
-/**
- * Store what a loop run did: each read tool as a call + result, then either
- * the reply or the write it asked for (as a pending action).
- */
-async function persistLoop(threadId: string, turn: LoopResult) {
-  const created: string[] = [];
-  // The loop's history holds the verbatim exchange; pair each tool call's raw
-  // request with the TOOL_RESULT the model then saw.
-  for (const call of turn.toolCalls) {
-    const request = "```json\n" + JSON.stringify({ tool: call.tool, args: call.args }) + "\n```";
-    created.push((await addEvent(threadId, "tool_call", { text: request, tool: call.tool, args: call.args })).id);
-    created.push(
-      (
-        await addEvent(threadId, "tool_result", {
-          text: toolResultMessage(call.tool, call.result),
-          tool: call.tool,
-          result: call.result,
-        })
-      ).id,
-    );
-  }
+/** A read the loop ran: its verbatim request and the TOOL_RESULT the model then saw. */
+async function persistToolCall(threadId: string, call: LoopToolCall, emit?: EventSink) {
+  const request = "```json\n" + JSON.stringify({ tool: call.tool, args: call.args }) + "\n```";
+  await addEvent(threadId, "tool_call", { text: request, tool: call.tool, args: call.args }, emit);
+  await addEvent(
+    threadId,
+    "tool_result",
+    { text: toolResultMessage(call.tool, call.result), tool: call.tool, result: call.result },
+    emit,
+  );
+}
+
+/** How a loop run ended: the reply, or the write it asked for as a pending action. */
+async function persistOutcome(threadId: string, turn: LoopResult, emit?: EventSink) {
   if (turn.pending) {
     const summary = summarizeAction(turn.pending.tool, turn.pending.args, await namesFor(turn.pending.args));
     const action = await prisma.assistantAction.create({
@@ -199,22 +210,30 @@ async function persistLoop(threadId: string, turn: LoopResult) {
         summary,
       },
     });
-    created.push(
-      (
-        await addEvent(threadId, "action", {
-          text: turn.raw,
-          tool: turn.pending.tool,
-          args: turn.pending.args,
-          actionId: action.id,
-          summary,
-        })
-      ).id,
+    await addEvent(
+      threadId,
+      "action",
+      { text: turn.raw, tool: turn.pending.tool, args: turn.pending.args, actionId: action.id, summary },
+      emit,
     );
   } else {
-    created.push((await addEvent(threadId, "assistant", { text: turn.raw })).id);
+    await addEvent(threadId, "assistant", { text: turn.raw }, emit);
   }
   await prisma.assistantThread.update({ where: { id: threadId }, data: { updatedAt: new Date() } });
-  return created;
+}
+
+/** Run the loop with each read stored (and streamed) as it completes. */
+export async function loopAndPersist(
+  threadId: string,
+  opts: Omit<Parameters<typeof runToolLoop>[0], "onToolCall">,
+  emit?: EventSink,
+) {
+  try {
+    const turn = await runToolLoop({ ...opts, onToolCall: (call) => persistToolCall(threadId, call, emit) });
+    await persistOutcome(threadId, turn, emit);
+  } catch (err) {
+    await addEvent(threadId, "error", { text: err instanceof Error ? err.message : String(err) }, emit);
+  }
 }
 
 /** The names behind the ids a write names, for its card. */
@@ -240,7 +259,7 @@ export class AssistantError extends Error {
 export async function runThreadTurn(
   threadId: string,
   message: string,
-  opts: { context?: { projectId?: string | null } } = {},
+  opts: { context?: { projectId?: string | null }; emit?: EventSink } = {},
   deps: AssistantDeps = defaultAssistantDeps(),
 ) {
   const thread = await getThread(threadId);
@@ -258,20 +277,20 @@ export async function runThreadTurn(
   }
 
   const history = historyFromEvents(thread.events);
-  await addEvent(threadId, "user", { text: message, context: opts.context });
+  await addEvent(threadId, "user", { text: message, context: opts.context }, opts.emit);
   const tools = await threadTools(thread, deps);
   const agent = await agentFor(thread, tools, deps);
-  try {
-    const turn = await runToolLoop({ agent, tools, message, history });
-    await persistLoop(threadId, turn);
-  } catch (err) {
-    await addEvent(threadId, "error", { text: err instanceof Error ? err.message : String(err) });
-  }
+  await loopAndPersist(threadId, { agent, tools, message, history }, opts.emit);
   return getThread(threadId);
 }
 
 /** Run an approved write, record its result, and let the assistant react. */
-export async function approveAction(threadId: string, actionId: string, deps: AssistantDeps = defaultAssistantDeps()) {
+export async function approveAction(
+  threadId: string,
+  actionId: string,
+  deps: AssistantDeps = defaultAssistantDeps(),
+  emit?: EventSink,
+) {
   const thread = await getThread(threadId);
   if (!thread) throw new AssistantError("Thread not found", 404);
   const action = thread.actions.find((a) => a.id === actionId);
@@ -295,15 +314,10 @@ export async function approveAction(threadId: string, actionId: string, deps: As
   });
   const message = toolResultMessage(action.tool, result);
   const history = historyFromEvents(thread.events);
-  await addEvent(threadId, "tool_result", { text: message, tool: action.tool, result, actionId });
+  await addEvent(threadId, "tool_result", { text: message, tool: action.tool, result, actionId }, emit);
 
   const agent = await agentFor(thread, tools, deps);
-  try {
-    const turn = await runToolLoop({ agent, tools, message, history });
-    await persistLoop(threadId, turn);
-  } catch (err) {
-    await addEvent(threadId, "error", { text: err instanceof Error ? err.message : String(err) });
-  }
+  await loopAndPersist(threadId, { agent, tools, message, history }, emit);
   return getThread(threadId);
 }
 

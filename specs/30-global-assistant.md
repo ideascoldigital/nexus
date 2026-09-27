@@ -1,6 +1,6 @@
 # 30 — One assistant, on every page, with the MCP tools
 
-Status: **phases 1–2 shipped** (2026-09-27) — the loop, the write gate, threads and the global panel. Watches and streaming are next.
+Status: **phases 1–3 shipped** (2026-09-27) — the loop, the write gate, threads, the global panel, watches and streamed turns. Native function calling (phase 4) is open.
 
 ## Goal
 
@@ -280,3 +280,32 @@ project.
   existing component (now on the shared loop, reads only). Moving it onto
   this panel, focused on the project and keeping its apply-suggestion
   cards, is left for when its conversation history moves to threads.
+
+## As built (phase 3)
+
+- **Watches** (`lib/assistant/watches.ts`): a `watch` context tool on every
+  thread (a read — observing needs no approval) that refuses unknown
+  targets and answers `alreadyHappened` when the condition already holds.
+  `lib/notify.ts` gained the assistant as a third medium next to Telegram
+  and Slack: every task and sandbox change calls `fireAssistantWatches`,
+  which expires stale watches, checks the open ones on that target, claims
+  a met one atomically (two notifications report once), stores a
+  `watch_report` and runs one reply turn with **read tools only**.
+  `finished` also fires when a task blocks on a question — it will not
+  finish without the user. The prompt tells the model to watch what it
+  starts; it did so unprompted in the walk below.
+- **Streaming:** `turn` and `approve` answer Server-Sent Events when asked
+  (`Accept: text/event-stream`): each event as it is stored, then `done`
+  with the thread, or `failure`. Reads therefore appear one by one while
+  the turn runs; the model's reply arrives whole (the SDK call behind it is
+  not streamed). The panel consumes the stream, lists open watches with a
+  stop button (`DELETE …/watches/[id]`), and polls the thread every 4 s only
+  while a watch is open.
+- Walked end to end in the browser against the real model, on a throwaway
+  project: "launch a local sandbox on omarchy called asistente-e2e and tell
+  me when it's ready" → a launch card → Run → the model called `watch`
+  itself → ~1 min later the panel showed "Listo: el sandbox local
+  asistente-e2e ya está en running en omarchy" with no user action. All of
+  it destroyed afterwards.
+- Tests: 4 watch tests (conditions, the tool, report-once with a
+  reads-only reply turn, expiry), on top of phases 1–2's.

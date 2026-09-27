@@ -102,6 +102,8 @@ export async function runToolLoop(opts: {
   message: string;
   history: InlineMessage[];
   maxIterations?: number;
+  /** Each read as it completes — for persisting and streaming step by step. */
+  onToolCall?: (call: LoopToolCall) => Promise<void> | void;
 }): Promise<LoopResult> {
   const byName = new Map(opts.tools.map((t) => [t.name, t]));
   const known = new Set(byName.keys());
@@ -126,7 +128,9 @@ export async function runToolLoop(opts: {
     // and the context tools do the same, so a throw here is a bug to surface,
     // not a message for the model.
     const result2 = await tool.run(request.args);
-    toolCalls.push({ tool: request.tool, args: request.args, result: result2 });
+    const done: LoopToolCall = { tool: request.tool, args: request.args, result: result2 };
+    toolCalls.push(done);
+    await opts.onToolCall?.(done);
     message = toolResultMessage(request.tool, result2);
   }
   // Out of iterations while still calling tools: the last reply is a tool

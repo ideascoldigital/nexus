@@ -11,6 +11,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   ChevronDown,
+  Eye,
   Loader2,
   MessageSquarePlus,
   Play,
@@ -32,12 +33,14 @@ import { MarkdownReport } from "@/components/ui/markdown-report";
 import { Textarea } from "@/components/ui/textarea";
 import { getProject } from "@/services/projects";
 import {
+  cancelAssistantWatch,
   createAssistantThread,
   decideAssistantAction,
   deleteAssistantThread,
   getAssistantThread,
   listAssistantThreads,
-  sendAssistantMessage,
+  streamApproveAction,
+  streamAssistantMessage,
   type AssistantAction,
   type AssistantEvent,
   type AssistantThread,
@@ -100,6 +103,9 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
     queryFn: () => getAssistantThread(threadId!),
     enabled: !!threadId,
     retry: false,
+    // A watch report lands in the thread from the server's side; while one is
+    // open, look for it. Nothing to wait for → no polling.
+    refetchInterval: (q) => ((q.state.data?.watches?.length ?? 0) > 0 ? 4000 : false),
   });
   // A remembered thread that was deleted elsewhere: start fresh.
   useEffect(() => {
@@ -113,15 +119,24 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
     qc.setQueryData(["assistant-thread", t.id], t);
     void qc.invalidateQueries({ queryKey: ["assistant-threads"] });
   };
+  // Each step as the server stores it — the thread grows while the turn runs.
+  const appendEvent = (id: string) => (event: AssistantEvent) => {
+    if (event.kind === "user") setSentText(null);
+    qc.setQueryData<AssistantThread>(["assistant-thread", id], (prev) =>
+      prev && !prev.events.some((e) => e.id === event.id) ? { ...prev, events: [...prev.events, event] } : prev,
+    );
+  };
 
   const send = useMutation({
     mutationFn: async (message: string) => {
       let id = threadId;
       if (!id) {
-        id = (await createAssistantThread(contextProjectId)).id;
+        const created = await createAssistantThread(contextProjectId);
+        id = created.id;
+        qc.setQueryData<AssistantThread>(["assistant-thread", id], { ...created, events: [], actions: [], watches: [] });
         setThreadId(id);
       }
-      return sendAssistantMessage(id, message, contextProjectId);
+      return streamAssistantMessage(id, message, contextProjectId, appendEvent(id));
     },
     onMutate: (message) => {
       setError(null);
@@ -138,7 +153,9 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
 
   const decide = useMutation({
     mutationFn: ({ actionId, decision }: { actionId: string; decision: "approve" | "cancel" }) =>
-      decideAssistantAction(threadId!, actionId, decision),
+      decision === "approve"
+        ? streamApproveAction(threadId!, actionId, appendEvent(threadId!))
+        : decideAssistantAction(threadId!, actionId, decision),
     onMutate: () => setError(null),
     onSuccess: (t) => {
       setThread(t);
@@ -147,6 +164,11 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
       void qc.invalidateQueries({ queryKey: ["activity"] });
     },
     onError: (err: Error) => setError(err.message),
+  });
+
+  const unwatch = useMutation({
+    mutationFn: (watchId: string) => cancelAssistantWatch(threadId!, watchId),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["assistant-thread", threadId] }),
   });
 
   const remove = useMutation({
@@ -241,6 +263,28 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
       </div>
 
       <footer className="shrink-0 space-y-2 border-t p-3">
+        {(thread.data?.watches?.length ?? 0) > 0 && (
+          <div className="space-y-1">
+            {thread.data!.watches.map((w) => (
+              <div key={w.id} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Eye className="h-3 w-3 shrink-0 text-primary" />
+                <span className="min-w-0 flex-1 truncate">
+                  Watching {w.kind} <span className="font-mono">{w.targetId.slice(0, 12)}</span> until{" "}
+                  {w.until.replace("_", " ")}
+                </span>
+                <button
+                  type="button"
+                  title="Stop watching"
+                  className="hover:text-foreground"
+                  disabled={unwatch.isPending}
+                  onClick={() => unwatch.mutate(w.id)}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {contextProjectId && (
           <span className="inline-flex max-w-full items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 text-xs">
             <span className="truncate">Project: {contextProject.data?.name ?? "…"}</span>
@@ -298,11 +342,18 @@ function Transcript({
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
     if (e.kind === "user") items.push(<UserBubble key={e.id} text={e.content.text} />);
-    else if (e.kind === "assistant" || e.kind === "watch_report")
+    else if (e.kind === "assistant")
       items.push(
         <div key={e.id} className="prose-sm max-w-none">
           <MarkdownReport>{e.content.text}</MarkdownReport>
         </div>,
+      );
+    else if (e.kind === "watch_report")
+      // The raw report is for the model; the reply after it is for the user.
+      items.push(
+        <p key={e.id} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Eye className="h-3 w-3" /> Update on {e.content.tool} {String(e.content.args?.id ?? "").slice(0, 12)}
+        </p>,
       );
     else if (e.kind === "tool_call") {
       // A read and its result, folded together.
