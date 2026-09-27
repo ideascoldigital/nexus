@@ -1716,6 +1716,11 @@ function SetupEditor({
                     >
                       {g.applied ? "passed to every sandbox" : g.reason}
                     </span>
+                    {g.note && (
+                      <p className="basis-full text-[10px] text-amber-400">
+                        {g.note}
+                      </p>
+                    )}
                   </div>
                 ))}
                 <p className="text-[10px] text-muted-foreground">
@@ -1988,7 +1993,7 @@ function SetupEditor({
           <div className="grid gap-3">
             <CredentialPicker
               providers={["github", "gitlab", "bitbucket"]}
-              label="Git token"
+              label="Git token (fallback)"
               credentials={gitCredentials}
               value={config.githubCredentialId ?? null}
               legacyAvailable={envVars.some(
@@ -1998,6 +2003,10 @@ function SetupEditor({
                 setConfig({ ...config, githubCredentialId })
               }
             />
+            <p className="-mt-2 text-[10px] text-muted-foreground">
+              Each repo clones with the credential on its card; this one is
+              for repos that name none.
+            </p>
             {/* Valid is half the answer; this is the other half (spec 28). */}
             <ContextCheck
               credentialId={config.githubCredentialId ?? null}

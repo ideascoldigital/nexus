@@ -93,6 +93,8 @@ export async function GET(_req: NextRequest, { params }: Params) {
     reason: string | null;
     source: "settings" | "credential";
     credentialName: string | null;
+    /** Worth knowing even when applied — e.g. repos naming different tokens. */
+    note?: string | null;
   };
   const settingsEnvVars: GlobalEnvRow[] = globalSecrets
     .filter((row) => row.value?.trim())
@@ -124,7 +126,9 @@ export async function GET(_req: NextRequest, { params }: Params) {
   // was quietly also on the instance.
   const [gitTokens, claudeCred] = await Promise.all([
     resolveGitTokens(
-      project.repositories.map((r) => r.repoUrl),
+      // Main repo first (the query's order), as the launch orders them: it
+      // breaks a tie between repos naming different tokens.
+      project.repositories,
       project.sandboxConfig?.githubCredentialId,
     ),
     resolveClaudeCodeToken(project.sandboxConfig?.claudeCredentialId),
@@ -137,7 +141,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
     // Not everything derived from a credential is a secret: GITLAB_HOST is a
     // hostname, and masking it hides the one detail that says which instance
     // the token was wired to.
-    opts: { secret?: boolean } = {},
+    opts: { secret?: boolean; note?: string | null } = {},
   ) => {
     if (!key) return;
     const overridden = projectKeys.has(key);
@@ -148,10 +152,13 @@ export async function GET(_req: NextRequest, { params }: Params) {
       reason: overridden ? "overridden by a project env var" : null,
       source: "credential",
       credentialName,
+      note: opts.note ?? null,
     });
   };
   for (const git of gitTokens) {
-    pushCredentialVar(git.envKey, git.token, git.credentialName);
+    pushCredentialVar(git.envKey, git.token, git.credentialName, {
+      note: git.conflict,
+    });
     // Derived rather than configured, so without a row here the one value that
     // makes a self-hosted GitLab clone work appears nowhere in the UI.
     if (git.gitlabHost) {

@@ -151,6 +151,8 @@ export type GlobalEnvVar = {
   reason: string | null;
   source?: "settings" | "credential";
   credentialName?: string | null;
+  /** Worth knowing even when applied — e.g. repos naming different tokens. */
+  note?: string | null;
 };
 
 export type ProjectSetupData = {

@@ -46,6 +46,7 @@ import {
 import { sandboxTarget } from "@/lib/agent-core";
 import type { DockerTarget } from "@nexux/sandbox";
 import {
+  gitProviderOfUrl,
   gitProvidersForRepos,
   selfHostedGitLabHost,
   type GitProvider,
@@ -560,6 +561,18 @@ export type GitTokenInjection = {
   credentialName: string;
   /** The self-hosted instance this token also authenticates, if any. */
   gitlabHost: string | null;
+  /**
+   * Set when this provider's repos name different credentials: the sandbox
+   * gets one token per provider, so one of them wins and this says which.
+   */
+  conflict: string | null;
+};
+
+/** A repo as far as its git token goes. */
+export type GitTokenRepo = {
+  name?: string;
+  repoUrl?: string | null;
+  gitCredentialId?: string | null;
 };
 
 /**
@@ -573,10 +586,11 @@ export type GitTokenInjection = {
  * being the whole story the moment injection became host-scoped.
  */
 export async function resolveGitTokens(
-  repoUrls: Array<string | null | undefined>,
+  repos: GitTokenRepo[],
   selectedCredentialId?: string | null,
 ): Promise<GitTokenInjection[]> {
   const selected = await resolveGitCredential(selectedCredentialId);
+  const repoUrls = repos.map((r) => r.repoUrl);
   const needed = gitProvidersForRepos(repoUrls);
   if (selected) needed.add(selected.provider as GitProvider);
 
@@ -584,10 +598,18 @@ export async function resolveGitTokens(
   for (const provider of needed) {
     const envKey = GIT_TOKEN_ENV[provider];
     if (!envKey) continue;
+    // The credential on the repo card is the one the user picked for that
+    // repo, and the one Sync on this machine already clones with — a sandbox
+    // ignoring it cloned with a different, possibly dead, token while the card
+    // showed a working one. The sandbox's own "Git token" is the fallback for
+    // repos that name none.
+    const fromRepos = await repoCredentialsFor(provider, repos);
+    const winner = fromRepos[0];
     const cred =
-      selected?.provider === provider
+      winner?.cred ??
+      (selected?.provider === provider
         ? selected
-        : await resolveGitCredential(null, { provider });
+        : await resolveGitCredential(null, { provider }));
     if (!cred) continue;
     tokens.push({
       provider,
@@ -600,10 +622,37 @@ export async function resolveGitTokens(
         provider === "gitlab"
           ? selfHostedGitLabHost(repoUrls, cred.registryHost)
           : null,
+      conflict:
+        fromRepos.length > 1
+          ? `${provider} repos use different tokens (${fromRepos
+              .map((c) => `${c.cred.name}: ${c.repos.join(", ")}`)
+              .join("; ")}); the sandbox gets one ${envKey} — ${winner.cred.name}`
+          : null,
     });
   }
   // Stable order so the settings panel does not reshuffle between loads.
   return tokens.sort((a, b) => a.envKey.localeCompare(b.envKey));
+}
+
+/**
+ * The usable credentials this provider's repos name, most-used first (ties
+ * keep repo order, so the main repo — listed first — decides). A credential
+ * that is gone or belongs to another provider is skipped, not fatal.
+ */
+async function repoCredentialsFor(provider: GitProvider, repos: GitTokenRepo[]) {
+  const byId = new Map<string, string[]>();
+  for (const r of repos) {
+    if (!r.gitCredentialId || gitProviderOfUrl(r.repoUrl) !== provider) continue;
+    byId.set(r.gitCredentialId, [...(byId.get(r.gitCredentialId) ?? []), r.name ?? r.repoUrl ?? "?"]);
+  }
+  const found: Array<{ cred: NonNullable<Awaited<ReturnType<typeof resolveGitCredential>>>; repos: string[] }> = [];
+  for (const [id, names] of byId) {
+    const cred = await resolveGitCredential(id);
+    // resolveGitCredential falls back to any credential when the id is gone;
+    // only the one actually named counts here.
+    if (cred?.id === id && cred.provider === provider) found.push({ cred, repos: names });
+  }
+  return found.sort((a, b) => b.repos.length - a.repos.length);
 }
 
 export async function getSandboxReadiness() {
@@ -690,7 +739,13 @@ async function buildSpec(
   // uses while the real one stayed silently absent.
   const mainRepo = pickMainRepo(project.repositories);
 
-  for (const git of await resolveGitTokens(repoUrls, cfg.githubCredentialId)) {
+  for (const git of await resolveGitTokens(
+    // Main repo first: it breaks a tie between repos naming different tokens.
+    [mainRepo, ...project.repositories.filter((r) => r !== mainRepo)].filter(
+      (r): r is NonNullable<typeof r> => !!r,
+    ),
+    cfg.githubCredentialId,
+  )) {
     if (!envVars[git.envKey]) envVars[git.envKey] = git.token;
     // Without GITLAB_HOST a self-hosted clone carries no credential at all and
     // fails as `could not read Username for 'https://…'` — an error that blames

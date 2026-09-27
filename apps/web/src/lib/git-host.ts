@@ -64,11 +64,16 @@ export function gitProvidersForRepos(
 ): Set<GitProvider> {
   const providers = new Set<GitProvider>();
   for (const url of repoUrls) {
-    const host = gitHostOf(url);
-    if (!host) continue;
-    providers.add(KNOWN_HOSTS[host] ?? "gitlab");
+    const provider = gitProviderOfUrl(url);
+    if (provider) providers.add(provider);
   }
   return providers;
+}
+
+/** The provider a clone URL needs a token for; null for no URL. */
+export function gitProviderOfUrl(url?: string | null): GitProvider | null {
+  const host = gitHostOf(url);
+  return host ? (KNOWN_HOSTS[host] ?? "gitlab") : null;
 }
 
 /**
