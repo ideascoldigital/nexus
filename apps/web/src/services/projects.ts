@@ -406,3 +406,17 @@ export async function searchProject(
   }
   return res.json();
 }
+
+/** Embed one or two texts and compare them — see lib/embedding-test.ts. */
+export async function testEmbeddings(
+  texts: string[],
+): Promise<import("@/lib/embedding-test").EmbeddingTestResult> {
+  const res = await fetch("/api/embeddings/test", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ texts }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? "Embedding test failed");
+  return body;
+}

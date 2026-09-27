@@ -41,6 +41,7 @@ import { BackupMigrationSection } from "@/components/settings/backup-migration";
 import { HostModelSection } from "@/components/settings/host-model";
 import { AppearanceSection } from "@/components/settings/appearance";
 import { DesktopAppSection } from "@/components/settings/desktop-app";
+import { EmbeddingsSection } from "@/components/settings/embeddings";
 import { DockerEndpointsSection } from "@/components/settings/docker-endpoints";
 import { NexusHostsSection } from "@/components/settings/nexus-hosts";
 import { SandboxNamingSection } from "@/components/settings/sandbox-naming";
@@ -804,6 +805,9 @@ function SettingsPageContent() {
                       on this machine. Right below them, because the choice is
                       meaningless until at least one exists. */}
                   <HostModelSection />
+                  {/* The local model behind search and ⌘K — its status, and a
+                      way to try it rather than trust it. */}
+                  <EmbeddingsSection />
                   <p className="flex items-start gap-2 px-1 text-xs text-muted-foreground">
                     <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     Keys live in your local database and never leave this
