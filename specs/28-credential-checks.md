@@ -1,7 +1,7 @@
 # 28 — Test a credential before something needs it
 
-Status: **phase 1 shipped** (2026-09-27) — GitHub checks, the Test button and
-status dot. Phases 2–4 remain.
+Status: **phases 1–2 and 5 shipped** (2026-09-27) — git hosts, Claude Code,
+LLM keys, and Docker endpoints as sandbox targets. Phases 3–4 remain.
 
 ## Goal
 
@@ -117,9 +117,10 @@ unit-tested against recorded responses without a network.
 1. ✅ `CredentialCheck` type, storage columns, `POST …/check`; GitHub (incl.
    the obvious-mistake detection) with tests; the Test button and status
    dot for git credentials.
-2. GitLab, Bitbucket, Claude, LLM keys.
+2. ✅ GitLab, Bitbucket, Claude, LLM keys.
 3. Civo, AWS, Tailscale.
 4. Context checks: project repos, registry image; check-on-save.
+5. ✅ Docker endpoints: can this machine host a sandbox (below).
 
 ## As built (phase 1)
 
@@ -139,3 +140,30 @@ unit-tested against recorded responses without a network.
   names the real cause.
 - A running dev server keeps its Prisma client in memory: after the
   migration it answered `Unknown argument lastCheck` until restarted.
+
+## Phase 5 — can this Docker endpoint host a sandbox?
+
+Spec 26 lets a local sandbox run on another machine's Docker. The endpoint
+probe (reachable, not rootless) says the daemon answers; it cannot say the
+sandbox will *work* there. The case that prompted this: on `omarchy`,
+`daemon.json` pins container DNS to `172.17.0.1`, which only the default
+bridge can reach — every container on a compose-style network has no DNS, so
+a sandbox there could never clone, install or reach an API. Nothing said so.
+
+**Test** on an endpoint row (Settings → Cloud → Docker endpoints) runs, with
+throwaway `busybox` containers (`--rm`) on that daemon:
+
+| Line | How | Why a sandbox needs it |
+|---|---|---|
+| daemon answers, not rootless | the existing probe | — |
+| runs privileged containers | `run --privileged busybox true` | the sandbox is Docker-in-Docker |
+| DNS on the default bridge | `nslookup github.com` | the sandbox container itself |
+| DNS on a user-defined network | same, on a temporary `docker network create` | the sandbox's own stack services (compose), and Nexus hosts |
+| reaches the internet | `nc -z github.com 443` | clone, install, APIs |
+| disk space for Docker | `df` of `DockerRootDir`, mounted read-only | images and DinD storage — warn under 10 GB |
+
+A failed DNS line says what to change (`dns` in `/etc/docker/daemon.json`,
+naming what it is set to) — Nexux reports, the user changes their machine.
+Everything it creates is removed, including the temporary network. The
+result uses the same `CredentialCheck` shape and is stored on the endpoint
+(`DockerEndpoint.lastCheck`).

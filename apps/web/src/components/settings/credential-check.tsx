@@ -71,7 +71,7 @@ export function useCredentialCheck(cred: CloudCredentialSummary) {
   return { controls, details };
 }
 
-function CheckDetails({ result, error }: { result: CredentialCheck | null; error: string | null }) {
+export function CheckDetails({ result, error }: { result: CredentialCheck | null; error: string | null }) {
   if (error) return <p className="mt-2 text-xs text-destructive">{error}</p>;
   if (!result) return null;
   return (

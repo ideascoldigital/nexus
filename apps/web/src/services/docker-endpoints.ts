@@ -17,6 +17,8 @@ export type DockerEndpoint = {
   sandboxCount: number;
   /** Nexus hosts running on it (spec 27) — same rule. */
   hostCount: number;
+  /** Whether a sandbox would work there (spec 28 phase 5). */
+  sandboxCheck?: import("@/lib/credential-checks/types").CredentialCheck | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -54,6 +56,15 @@ export async function addDockerEndpoint(input: {
 
 export async function checkDockerEndpoint(id: string): Promise<DockerEndpoint> {
   const res = await fetch(`/api/docker-endpoints/${id}/check`, { method: "POST" });
+  if (!res.ok) throw new Error(await errorFrom(res));
+  return res.json();
+}
+
+/** Run throwaway containers on the endpoint: could a sandbox work there? */
+export async function checkEndpointForSandboxes(
+  id: string,
+): Promise<import("@/lib/credential-checks/types").CredentialCheck> {
+  const res = await fetch(`/api/docker-endpoints/${id}/sandbox-check`, { method: "POST" });
   if (!res.ok) throw new Error(await errorFrom(res));
   return res.json();
 }

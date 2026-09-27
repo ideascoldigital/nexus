@@ -419,6 +419,10 @@ model DockerEndpoint {
   memTotalMb    Int?
   lastCheckedAt DateTime?
   lastError     String?
+  // Whether a sandbox would actually work here (spec 28 phase 5): privileged
+  // containers, DNS on the default bridge and on a compose-style network,
+  // internet, disk. A CredentialCheck; the probe above only says it answers.
+  sandboxCheck  Json?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

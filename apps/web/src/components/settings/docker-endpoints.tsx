@@ -3,10 +3,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { Container, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Container, FlaskConical, Loader2, RefreshCw, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CheckDetails } from "@/components/settings/credential-check";
 import {
   Card,
   CardContent,
@@ -20,6 +21,7 @@ import { NO_AUTOFILL } from "@/lib/utils";
 import {
   addDockerEndpoint,
   checkDockerEndpoint,
+  checkEndpointForSandboxes,
   deleteDockerEndpoint,
   getDockerEndpoints,
   type DockerEndpoint,
@@ -161,6 +163,17 @@ function EndpointRow({
   onRemove: () => void;
 }) {
   const healthy = !ep.lastError;
+  const qc = useQueryClient();
+  const [showCheck, setShowCheck] = useState(false);
+  const sandboxTest = useMutation({
+    mutationFn: () => checkEndpointForSandboxes(ep.id),
+    onSettled: () => {
+      setShowCheck(true);
+      void qc.invalidateQueries({ queryKey: QUERY_KEY });
+    },
+  });
+  const check = sandboxTest.data ?? ep.sandboxCheck ?? null;
+  const dot = check ? { ok: "bg-emerald-400", warn: "bg-amber-400", fail: "bg-destructive" }[check.status] : null;
   return (
     <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -201,6 +214,27 @@ function EndpointRow({
               checked {formatDistanceToNow(new Date(ep.lastCheckedAt), { addSuffix: true })}
             </span>
           )}
+          {dot && (
+            <button
+              type="button"
+              onClick={() => setShowCheck((v) => !v)}
+              title={`Sandbox readiness: ${check!.status}`}
+              className="flex items-center"
+            >
+              <span className={`h-2 w-2 rounded-full ${dot}`} />
+            </button>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 px-2 text-xs"
+            onClick={() => sandboxTest.mutate()}
+            disabled={sandboxTest.isPending}
+            title="Run throwaway containers there: could a sandbox work on this machine?"
+          >
+            {sandboxTest.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <FlaskConical className="h-3 w-3" />}
+            {sandboxTest.isPending ? "Testing…" : "Test for sandboxes"}
+          </Button>
           <Button
             size="icon-sm"
             variant="ghost"
@@ -229,6 +263,12 @@ function EndpointRow({
         <pre className="mt-1.5 whitespace-pre-wrap text-[11px] text-destructive">
           {ep.lastError}
         </pre>
+      )}
+      {showCheck && (check || sandboxTest.isError) && (
+        <CheckDetails
+          result={check}
+          error={sandboxTest.isError ? (sandboxTest.error as Error).message : null}
+        />
       )}
     </div>
   );
