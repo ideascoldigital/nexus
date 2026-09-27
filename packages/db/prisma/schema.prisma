@@ -204,6 +204,11 @@ model CloudCredential {
   name        String
   provider    String // civo | aws | github | gitlab | bitbucket | claude | openai | openrouter | google | xai-llm | anthropic-key | zai | tailscale
   data        Json
+  // The last Test result (spec 28): what the credential is and what it can do.
+  // Never contains the secret. Stored so the list shows a status without
+  // re-checking on every render.
+  lastCheck     Json?
+  lastCheckedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
