@@ -38,11 +38,17 @@ export async function seedsForLaunch(
   projectId: string,
   services: SandboxStackService[],
   warn: (line: string) => void,
+  /** A reset asks for the seed explicitly; `enabled` only governs launches. */
+  opts: { includeDisabled?: boolean } = {},
 ): Promise<LaunchSeed[]> {
   if (services.length === 0) return [];
   const byNode = new Map(services.map((s) => [s.nodeId, s.name]));
   const rows = await prisma.seedData.findMany({
-    where: { projectId, enabled: true, stackNodeId: { in: [...byNode.keys()] } },
+    where: {
+      projectId,
+      ...(opts.includeDisabled ? {} : { enabled: true }),
+      stackNodeId: { in: [...byNode.keys()] },
+    },
   });
   const seeds: LaunchSeed[] = [];
   for (const row of rows) {
@@ -90,7 +96,9 @@ export async function pushSeeds(
     const dir = seedRemoteDir(seed.spec.service);
     const started = Date.now();
     log(`[nexux] seed: sending ${seed.spec.fileName} (${formatBytes(seed.spec.sizeBytes)}) for ${seed.spec.service}`);
-    const mk = await execRemote(`mkdir -p ${dir}`, { ...root, timeoutMs: 60_000 });
+    // Emptied first: a reset re-sends a replaced seed, and the old file (under
+    // another name) would otherwise sit beside it for the life of the sandbox.
+    const mk = await execRemote(`rm -rf ${dir} && mkdir -p ${dir}`, { ...root, timeoutMs: 60_000 });
     if (mk.code !== 0) throw new Error(`could not create ${dir}: ${mk.stderr.trim().slice(-200)}`);
     const pushed = await pushLocalDir({
       ...root,

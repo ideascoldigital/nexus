@@ -19,6 +19,7 @@ export {
   type PowerAction,
   type ProjectSummary,
   type SandboxSummary,
+  type SeedResetSummary,
   type Scope,
   type StackFinding,
   type StackStep,

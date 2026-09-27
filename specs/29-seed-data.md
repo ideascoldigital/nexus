@@ -1,6 +1,6 @@
 # 29 — Seed data: a sandbox starts with a real database
 
-Status: **phases 1–2 shipped** (2026-09-27) — seeds attach, and every new sandbox restores them before its repos install.
+Status: **phases 1–3 shipped** (2026-09-27) — seeds attach, every new sandbox restores them before its repos install, and a running one can be reset to them.
 
 ## Goal
 
@@ -247,3 +247,37 @@ decision a person makes.
   restored the same rows and reported its 4 `OWNER TO` failures. Bootstrap
   order confirmed in the log: services → seed → clone. **Not yet walked on a
   cloud VM** — the scp path is the one attachments already use.
+
+## As built (phase 3)
+
+- `renderSeedReset` shares the restore pipeline with launch and adds an
+  emptying step first. Postgres connects to `template1`, ends the database's
+  sessions (`pg_terminate_backend`, which works on every version, unlike
+  `DROP … WITH (FORCE)`), drops and recreates it owned by the node's user.
+  MySQL drops and recreates `MYSQL_DATABASE`/`MARIADB_DATABASE` when one is
+  set. Mongo relies on `mongorestore --drop`. Both SQL paths were run for
+  real against postgres:16 (with a session held open) and mariadb:11 before
+  shipping; both left only the seed.
+- `lib/seed/reset.ts`: the sandbox's recorded stack services, matched by
+  compose name to the project's seeds **as they are now** — including ones
+  switched off for launches (an explicit reset asks for them). If the file on
+  the box is missing or its sha256 differs (the seed was replaced), it is
+  pushed first; `pushSeeds` now empties the directory, so a replaced seed
+  does not leave its predecessor behind. Then `retrySandboxSetup` re-runs
+  the repos' install step, unless `runSetup: false`.
+- **Found while wiring it:** the sandbox log writer rewrites the whole log
+  from its buffer, starting empty. A writer opened after provisioning — the
+  phase 2 VM seed push, and the existing cloud bootstrap watcher on failure —
+  replaced the provisioning log with its own lines. `appendSandboxLog` starts
+  from the stored log; those three callers use it. Destroys still replace,
+  as before.
+- Route `GET|POST /api/projects/[id]/sandboxes/[sid]/seed/reset`, the row
+  menu's **Reset data…** (a dialog listing each service and file, with the
+  re-run-install switch), and `nexux_reset_sandbox_data` (`sandboxes:write`).
+- Walked on omarchy: a sandbox whose orders were cut to 100 and given a junk
+  table was reset from the UI back to 5 000/20 000 with no junk, its
+  provisioning log intact; then the seed was replaced by the gzipped plain
+  dump and reset over MCP — re-sent, restored with its 4 `OWNER TO` errors
+  counted, setup green.
+- Not done from the spec: `nexux_list_sandboxes` does not carry per-sandbox
+  seed info yet — resolving it costs a stack build per sandbox on every list.

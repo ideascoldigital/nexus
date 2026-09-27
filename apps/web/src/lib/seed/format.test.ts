@@ -51,3 +51,8 @@ test("gzip is spotted by its magic", () => {
   assert.equal(isGzip(new Uint8Array([0x1f, 0x8b, 8, 0])), true);
   assert.equal(isGzip(bytes("PGDMP")), false);
 });
+
+test("mariadb-dump 11's sandbox-mode first line does not hide its header", () => {
+  const dump = bytes("/*M!999999\\- enable the sandbox mode */ \n-- MariaDB dump 10.19-11.4.2-MariaDB, for debian-linux-gnu (x86_64)\n");
+  assert.equal(detectSeedFormat(dump, "mysql"), "mysql-sql");
+});

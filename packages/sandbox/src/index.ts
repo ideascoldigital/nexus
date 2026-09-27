@@ -15,8 +15,10 @@ export {
 } from "./docker-endpoint";
 // Spec 29 — seed data restored into stack services.
 export {
+  renderSeedReset,
   renderSeedRestore,
   seedRemoteDir,
+  seedRemoteShaCommand,
   seedWaitSeconds,
   SEED_READY_MARKER,
   SEEDS_DIR,

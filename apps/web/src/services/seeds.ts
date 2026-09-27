@@ -90,3 +90,34 @@ export async function deleteSeed(projectId: string, seedId: string): Promise<voi
   const res = await fetch(`/api/projects/${projectId}/seeds/${seedId}`, { method: "DELETE" });
   if (!res.ok) await json(res);
 }
+
+export type SeedResetResult = {
+  ok: boolean;
+  services: Array<{ service: string; ok: boolean; message: string }>;
+  setup: { ok: boolean; failed: string[] } | null;
+  log: string;
+};
+
+export async function getSandboxSeeds(
+  projectId: string,
+  sandboxId: string,
+): Promise<Array<{ service: string; fileName: string; sizeBytes: number }>> {
+  const body = await json<{ seeds: Array<{ service: string; fileName: string; sizeBytes: number }> }>(
+    await fetch(`/api/projects/${projectId}/sandboxes/${sandboxId}/seed/reset`),
+  );
+  return body.seeds;
+}
+
+export async function resetSandboxData(
+  projectId: string,
+  sandboxId: string,
+  opts: { service?: string; runSetup?: boolean } = {},
+): Promise<SeedResetResult> {
+  return json(
+    await fetch(`/api/projects/${projectId}/sandboxes/${sandboxId}/seed/reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(opts),
+    }),
+  );
+}

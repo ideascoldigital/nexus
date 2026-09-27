@@ -163,6 +163,7 @@ import {
 import { dockerTerminalTarget } from "@/lib/terminal-target";
 import { ContextCheck } from "@/components/settings/credential-check";
 import { DockerEndpointPicker } from "@/components/projects/docker-endpoint-picker";
+import { SandboxSeedResetDialog } from "@/components/projects/sandbox-seed-reset";
 import { parseDotenvWithDiagnostics } from "@/lib/stack/dotenv";
 import {
   applyWizardParams,
@@ -4072,6 +4073,11 @@ function SandboxRow({
       }),
   });
 
+  // Spec 29 phase 3 — only offered where there are stack services to reset.
+  const [seedResetOpen, setSeedResetOpen] = useState(false);
+  const hasStackServices =
+    Array.isArray(sandbox.stackServices) && (sandbox.stackServices as unknown[]).length > 0;
+
   const copyPassword = async () => {
     try {
       const password = await getSandboxPassword(projectId, sandbox.id);
@@ -4093,6 +4099,13 @@ function SandboxRow({
         focus ? "border-primary/60 ring-1 ring-primary/30" : "border-border/50"
       }`}
     >
+      <SandboxSeedResetDialog
+        projectId={projectId}
+        sandboxId={sandbox.id}
+        sandboxName={sandbox.name}
+        open={seedResetOpen}
+        onOpenChange={setSeedResetOpen}
+      />
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <button
           type="button"
@@ -4274,6 +4287,11 @@ function SandboxRow({
                   {retrySetup.isPending
                     ? "Cloning and installing…"
                     : "Retry setup"}
+                </DropdownMenuItem>
+              )}
+              {sandbox.status === "running" && hasStackServices && (
+                <DropdownMenuItem onClick={() => setSeedResetOpen(true)}>
+                  Reset data…
                 </DropdownMenuItem>
               )}
               {sandbox.provider === "local" && (

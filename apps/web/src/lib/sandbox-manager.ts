@@ -896,8 +896,13 @@ async function buildSpec(
 
 // Buffers terraform output in memory and flushes it to Sandbox.log at most
 // once per second, so log streaming doesn't hammer SQLite.
-function createLogWriter(sandboxId: string) {
-  let full = "";
+//
+// It writes the whole log each flush, starting from empty — right for a
+// provision, which owns the log from its first line. Anything that runs
+// later (a seed push to a VM, a reset) passes `existing`, the log as it is,
+// or its first flush would replace everything provisioning wrote.
+function createLogWriter(sandboxId: string, existing = "") {
+  let full = existing;
   let timer: NodeJS.Timeout | null = null;
   let writing = Promise.resolve();
 
@@ -926,6 +931,15 @@ function createLogWriter(sandboxId: string) {
       await writing;
     },
   };
+}
+
+/**
+ * A log writer that adds to what the sandbox's log already holds — for work
+ * that starts after provisioning wrote it (seed pushes, resets).
+ */
+export async function appendSandboxLog(sandboxId: string) {
+  const row = await prisma.sandbox.findUnique({ where: { id: sandboxId }, select: { log: true } });
+  return createLogWriter(sandboxId, row?.log ?? "");
 }
 
 /**
@@ -1290,7 +1304,7 @@ async function runLocalProvision(
 
 /** Send a VM its seed files once it answers over SSH, logging to its own writer. */
 async function pushCloudSeeds(sandboxId: string, seeds: LaunchSeed[]) {
-  const log = createLogWriter(sandboxId);
+  const log = await appendSandboxLog(sandboxId);
   try {
     await pushSeedsWhenReachable(
       seeds,
@@ -1349,7 +1363,8 @@ async function watchCloudBootstrap(
     if (res.code === 3) {
       const reason =
         res.stdout.trim() || "the bootstrap reported a fatal step";
-      const log = createLogWriter(sandboxId);
+      // Appended: the provision's log is the evidence for this very error.
+      const log = await appendSandboxLog(sandboxId);
       try {
         log.append(`[nexux] ERROR: ${reason}`);
       } finally {

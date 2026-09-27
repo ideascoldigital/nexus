@@ -26,6 +26,7 @@ function stubContext(over: Partial<NexuxContext> = {}): {
     createTask: unexpected("createTask"),
     launchSandbox: unexpected("launchSandbox"),
     powerSandbox: unexpected("powerSandbox"),
+    resetSandboxData: unexpected("resetSandboxData"),
     validateStack: unexpected("validateStack"),
     describeStack: unexpected("describeStack"),
     repairStack: unexpected("repairStack"),
@@ -353,4 +354,9 @@ test("launch passes the chosen Docker endpoint through, and leaves it out when o
 test("endpoints are listed under sandboxes:read, not projects:read", () => {
   assert.ok(toolsFor(["sandboxes:read"]).some((t) => t.name === "nexux_list_docker_endpoints"));
   assert.ok(!toolsFor(["projects:read"]).some((t) => t.name === "nexux_list_docker_endpoints"));
+});
+
+test("reset data is a write: listed for sandboxes:write, not for read", () => {
+  assert.ok(toolsFor(["sandboxes:write"]).some((t) => t.name === "nexux_reset_sandbox_data"));
+  assert.ok(!toolsFor(["sandboxes:read"]).some((t) => t.name === "nexux_reset_sandbox_data"));
 });

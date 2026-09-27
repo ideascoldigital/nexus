@@ -134,6 +134,33 @@ export const launchSandbox: ToolDefinition<{
     }),
 };
 
+export const resetSandboxData: ToolDefinition<{ sandboxId: string; service?: string }> = {
+  name: "nexux_reset_sandbox_data",
+  description:
+    "Put a running sandbox's databases back to the project's seed data: each " +
+    "seeded database is emptied and restored, then the repos' install step " +
+    "(migrations) re-runs. Use it to start a test or a run from known data. " +
+    "Everything written to those databases in the sandbox is lost.",
+  scope: "sandboxes:write",
+  inputSchema: {
+    type: "object",
+    properties: {
+      sandboxId: { type: "string", description: "From nexux_list_sandboxes." },
+      service: {
+        type: "string",
+        description: "Optional. One compose service; omit to reset every seeded one.",
+      },
+    },
+    required: ["sandboxId"],
+    additionalProperties: false,
+  },
+  parse: (raw) => {
+    const obj = asObject(raw);
+    return { sandboxId: requiredString(obj, "sandboxId"), service: optionalString(obj, "service") };
+  },
+  run: (ctx, args) => ctx.resetSandboxData(args.sandboxId, args.service),
+};
+
 const POWER_ACTIONS = ["pause", "resume"] as const;
 
 export const powerSandbox: ToolDefinition<{
@@ -218,5 +245,6 @@ export const WRITE_TOOLS = [
   createTask,
   launchSandbox,
   powerSandbox,
+  resetSandboxData,
   repairStack,
 ] as const;

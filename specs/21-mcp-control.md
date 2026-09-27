@@ -106,6 +106,7 @@ also being able to spend money on new ones.
 | `nexux_create_task` | `tasks:write` | `createTask()` (`lib/task-manager.ts`) |
 | `nexux_launch_sandbox` | `sandboxes:write` | `launchSandbox()`; optional `dockerEndpoint` (id, name or `this-machine`), omitted = the project's saved choice |
 | `nexux_sandbox_power` | `sandboxes:write` | `pauseSandbox`/`resumeSandbox` |
+| `nexux_reset_sandbox_data` | `sandboxes:write` | `resetSandboxData` (spec 29): restore seeded databases, re-run install |
 
 `nexux_create_task` calls `createTask` rather than reimplementing dispatch.
 That function is already the single point every path converges on (board queue,

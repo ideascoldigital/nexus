@@ -8,6 +8,7 @@ import type {
   PowerAction,
   ProjectSummary,
   SandboxSummary,
+  SeedResetSummary,
   StackValidationSummary,
   TaskSummary,
 } from "@nexux/mcp";
@@ -336,6 +337,19 @@ export function createMcpContext(): NexuxContext {
     async repairStack(projectId: string, maxRounds?: number): Promise<unknown> {
       await assertProject(projectId);
       return repairProjectStack(projectId, { maxRounds });
+    },
+
+    async resetSandboxData(sandboxId: string, service?: string): Promise<SeedResetSummary> {
+      const owned = await prisma.sandbox.findFirst({
+        where: { id: sandboxId, project: { workspaceId } },
+        select: { id: true },
+      });
+      if (!owned) throw new Error("Sandbox not found");
+      const { resetSandboxData } = await import("@/lib/seed/reset");
+      const res = await resetSandboxData(sandboxId, { service });
+      // The log stays out: it is long, and the per-service messages say what a
+      // caller can act on.
+      return { ok: res.ok, services: res.services, setup: res.setup };
     },
 
     async powerSandbox(

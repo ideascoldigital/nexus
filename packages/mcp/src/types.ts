@@ -107,6 +107,13 @@ export type LaunchSandboxInput = {
   dockerEndpoint?: string;
 };
 
+/** What a seed reset did (spec 29 phase 3). */
+export type SeedResetSummary = {
+  ok: boolean;
+  services: Array<{ service: string; ok: boolean; message: string }>;
+  setup: { ok: boolean; failed: string[] } | null;
+};
+
 export type PowerAction = "pause" | "resume";
 
 /**
@@ -125,6 +132,12 @@ export type NexuxContext = {
   createTask(input: CreateTaskInput): Promise<TaskSummary>;
   launchSandbox(input: LaunchSandboxInput): Promise<SandboxSummary>;
   powerSandbox(sandboxId: string, action: PowerAction): Promise<SandboxSummary>;
+  /**
+   * Spec 29 — empty a running sandbox's seeded databases, restore the
+   * project's seeds, re-run the repos' install step. Destroys whatever the
+   * sandbox wrote to those databases; hence the write scope.
+   */
+  resetSandboxData(sandboxId: string, service?: string): Promise<SeedResetSummary>;
   /** Spec 24 piece 4 — would this project's stack boot, and did it last time? */
   validateStack(projectId: string): Promise<StackValidationSummary>;
   /** The stack graph, for a caller deciding what to change. */
