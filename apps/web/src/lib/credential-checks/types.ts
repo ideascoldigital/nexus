@@ -26,8 +26,19 @@ export type CredentialCheck = {
 /** fetch, injected so every provider is testable without a network. */
 export type Fetch = typeof fetch;
 
-/** Providers with a check (spec 28 phase 1: GitHub). The UI offers Test only for these. */
-export const CHECKABLE_PROVIDERS: ReadonlySet<string> = new Set(["github"]);
+/** Providers with a check. The UI offers Test only for these. */
+export const CHECKABLE_PROVIDERS: ReadonlySet<string> = new Set([
+  "github",
+  "gitlab",
+  "bitbucket",
+  "claude",
+  "anthropic-key",
+  "openai",
+  "openrouter",
+  "google",
+  "xai-llm",
+  "zai",
+]);
 
 /** Days before expiry at which a working token turns into a warning. */
 export const EXPIRY_WARN_DAYS = 14;

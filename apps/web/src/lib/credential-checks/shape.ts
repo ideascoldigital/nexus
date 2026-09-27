@@ -13,6 +13,11 @@ const PREFIXES: Record<string, string[]> = {
   github: ["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"],
   gitlab: ["glpat-", "gloas-", "gldt-"],
   claude: ["sk-ant-oat"],
+  "anthropic-key": ["sk-ant-api"],
+  openai: ["sk-"],
+  openrouter: ["sk-or-"],
+  "xai-llm": ["xai-"],
+  google: ["AIza"],
 };
 
 export type ShapeProblem = { fatal: boolean; message: string };
