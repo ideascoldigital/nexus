@@ -377,7 +377,9 @@ launch (local) ──docker -H ssh://jairo@192.168.0.35──▶ omarchy's docke
    (spec 28) covers DNS, privileged containers and disk space.
 5. **Reachability** — the app shares the Tailscale sidecar's network
    namespace. In userspace mode that namespace reaches the LAN through the
-   compose bridge, so an address like 192.168.0.35 works. Tailnet addresses
+   compose bridge, so an address like 192.168.0.35 works — as long as the
+   target's firewall lets the bridge in (see As built, step 3: packets arrive
+   from the stack's `10.201.x.0/24`, not from the LAN). Tailnet addresses
    do not work from there without Tailscale's proxy. The address hint says
    to use the LAN address; supporting tailnet targets is out of scope.
 6. **The destination picker on a host** — "This machine" is hidden, because a
@@ -462,3 +464,34 @@ launch (local) ──docker -H ssh://jairo@192.168.0.35──▶ omarchy's docke
   instead of Docker Desktop.
 - On a laptop nothing changes; checked in the browser (no key card, no
   console errors). The host view is walked in step 3, on omarchy's host.
+
+### As built (phase 6, step 3 — the walk on omarchy's own host)
+
+- **Reachability:** the first probe timed out. sshd listened on `0.0.0.0:22`,
+  but omarchy's ufw (`DEFAULT_INPUT_POLICY=DROP`) only allowed 22 from
+  `192.168.0.0/24`, and the host's packets arrive from its compose bridge
+  (`10.201.1.0/24`) — the kernel log showed `[UFW BLOCK] SRC=10.201.1.3
+  DST=192.168.0.35 DPT=22`. One rule on the target fixed it:
+  `ufw allow from 10.201.0.0/16 to any port 22 proto tcp`. Nothing in Nexus
+  changed; a target with a default-deny firewall needs the same line.
+- **Register + test:** `ssh://jairo@192.168.0.35` probed as Docker 29.7.2,
+  x86_64, 31 GB; "Test for sandboxes" passed all six checks.
+- **Wizard:** Which Docker showed only omarchy, picked by default, no "This
+  machine". The sandbox row read "local · docker @ omarchy".
+- **Launch:** the container came up on omarchy and the 947 MB galtex seed
+  was pushed in 3 s — then the launch failed at the 20-minute deadline while
+  the seed was still restoring (spec 29's issue, not this phase's): the dump
+  is one autocommitted INSERT per row and each waited on a WAL fsync
+  (`wait_event = WalSync`, 161 MB in 59 min). Fixed in the restore: postgres
+  seeds run with `PGOPTIONS="-c synchronous_commit=off"` — the same dump then
+  restored in 199 s. The local bootstrap deadline also grows by the seed's
+  size allowance (`seedWaitSeconds`), so a slow push can't eat it.
+- **Terminal:** `docker://<endpointId>@nexux-galtex-d0ce79` through the
+  host's terminal server opened a shell as `nexus` in the container, over
+  the host's endpoint key; postgres in the stack answered healthy.
+- **Destroy:** from the host; container and volumes gone on omarchy.
+- **Left open:** the project's own Terminal tab showed "Connection error" in
+  the in-app browser pane, while the same WebSocket (`:3002`) opened from a
+  plain client — likely the pane, to be checked from a real browser. The
+  review step's "Runs on" says "Local Docker container" without naming the
+  endpoint, and the row menu offers "Open files in Finder" on a host.
