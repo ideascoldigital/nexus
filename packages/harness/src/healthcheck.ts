@@ -35,14 +35,22 @@ export type ComposeHealthcheck = {
  * renamed `POSTGRES_USER` still probes as the right user, and the default
  * matches the image's own default rather than the catalog's.
  */
+/**
+ * Matched against the image's own name — the last path segment, without
+ * registry, namespace or tag — and the whole of it. A prefix is not enough:
+ * `prodrigestivill/postgres-backup-local`, `mongo-express` and
+ * `redis-commander` start with a database's name but run a client or a UI,
+ * with no server inside to answer the probe; given one, they sit unhealthy
+ * forever and hold the whole `up --wait` with them.
+ */
 const PROBES: { match: RegExp; test: string[] }[] = [
   {
     // postgres, postgis, pgvector, timescale — all ship pg_isready.
-    match: /(^|\/)(postgres|postgis|pgvector|timescale)/i,
+    match: /^(postgres|postgresql|postgis|pgvector|timescaledb(-ha)?)$/i,
     test: ["CMD-SHELL", 'pg_isready -U "${POSTGRES_USER:-postgres}" -q'],
   },
   {
-    match: /(^|\/)(mysql|mariadb|percona)/i,
+    match: /^(mysql|mysql-server|mariadb|percona|percona-server)$/i,
     // -h 127.0.0.1 rather than localhost: mysqladmin reads "localhost" as a
     // unix socket, which is up before the network listener a client will use.
     test: [
@@ -51,11 +59,11 @@ const PROBES: { match: RegExp; test: string[] }[] = [
     ],
   },
   {
-    match: /(^|\/)redis|(^|\/)valkey/i,
+    match: /^(redis|redis-stack|redis-stack-server|valkey)$/i,
     test: ["CMD-SHELL", 'redis-cli ping | grep -q PONG'],
   },
   {
-    match: /(^|\/)mongo/i,
+    match: /^(mongo|mongodb|mongodb-community-server)$/i,
     // mongosh on 6+, mongo on older images: the tags differ across projects
     // and only one of the two binaries exists in any given image.
     test: [
@@ -64,18 +72,18 @@ const PROBES: { match: RegExp; test: string[] }[] = [
     ],
   },
   {
-    match: /(^|\/)minio/i,
+    match: /^minio$/i,
     // MinIO's own liveness endpoint; it 200s only once the object store is
     // serving, which is later than the process binding :9000.
     test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live"],
   },
   {
-    match: /(^|\/)ollama/i,
+    match: /^ollama$/i,
     // The image has no curl; its own CLI is the dependable probe.
     test: ["CMD-SHELL", "ollama list >/dev/null 2>&1"],
   },
   {
-    match: /(^|\/)(rabbitmq)/i,
+    match: /^rabbitmq$/i,
     test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"],
   },
 ];
@@ -124,7 +132,7 @@ export function healthcheckFor(
   image: string | null | undefined,
 ): ComposeHealthcheck | null {
   if (!image?.trim()) return null;
-  const name = imageName(image.trim());
+  const name = imageName(image.trim()).split("/").pop()!;
   const probe = PROBES.find((p) => p.match.test(name));
   return probe ? { test: [...probe.test], ...TIMING } : null;
 }

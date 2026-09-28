@@ -89,3 +89,18 @@ test("timing leaves room for a cold first boot", () => {
     "the healthcheck budget exceeds the bootstrap's --wait-timeout",
   );
 });
+
+test("an image that only starts with a database's name is not that database", () => {
+  // Found on a real stack: a backup sidecar got pg_isready, had no server to
+  // answer it, and would have held `up --wait` until the timeout.
+  assert.equal(healthcheckFor("prodrigestivill/postgres-backup-local:17"), null);
+  assert.equal(healthcheckFor("mongo-express:1"), null);
+  assert.equal(healthcheckFor("rediscommander/redis-commander:latest"), null);
+  assert.equal(healthcheckFor("minio/mc:latest"), null);
+  // …while the databases themselves, under any namespace, still are.
+  assert.ok(healthcheckFor("bitnami/postgresql:16"));
+  assert.ok(healthcheckFor("timescale/timescaledb:latest-pg16"));
+  assert.ok(healthcheckFor("redis/redis-stack-server:7.2.0-v10"));
+  assert.ok(healthcheckFor("mongodb/mongodb-community-server:7.0-ubuntu2204"));
+  assert.ok(healthcheckFor("rabbitmq:3-management"));
+});
