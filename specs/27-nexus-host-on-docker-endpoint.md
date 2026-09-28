@@ -315,3 +315,112 @@ Walked on `omarchy`: an update from here recreated the stack with the updater
 (data survived: projects still there), its files arrived `600`, `/control`
 `1777`; a note written as `nexux` inside the app container was consumed and
 the stack pulled and recreated, logged in the VM format.
+
+## Phase 6 — a host that launches local sandboxes over SSH
+
+Status: **draft** (2026-09-28).
+
+### Why
+
+A host on a Docker endpoint cannot launch a local sandbox. Asked to, it says
+"Docker is not available … start Docker Desktop" — advice for a laptop, not
+a container on omarchy. The obvious fix, registering omarchy as an endpoint
+from the host's own Settings, cannot work today, for three reasons:
+
+1. **No `docker` client in the image.** The Dockerfile installs
+   `openssh-client`, `git` and `terraform` only, and says why: the local
+   provider "is deliberately NOT supported in this image".
+2. **No key omarchy accepts.** `docker -H ssh://…` runs the system `ssh`,
+   which on the laptop finds the user's own key and `~/.ssh/config`. The
+   container has neither.
+3. **`ssh://omarchy` is a laptop alias.** It resolves through the laptop's
+   `~/.ssh/config`; inside the container it names nothing.
+
+Mounting the endpoint's docker socket into the app stays out — it is
+root-equivalent on that machine, which D-34 and phase 5 already refused.
+Phase 6 gives the host what the laptop has instead: a key, a client, an
+address it can reach.
+
+### Shape
+
+```
+host's Settings → Docker endpoints
+  "This host's SSH key"  ssh-ed25519 AAAA… nexus-host-nexus-e2e   [Copy]
+  "Run on the target:    echo '<key>' >> ~/.ssh/authorized_keys"
+  Add endpoint: ssh://jairo@192.168.0.35      → probe → endpoint row
+launch (local) ──docker -H ssh://jairo@192.168.0.35──▶ omarchy's dockerd ──▶ sandbox container
+```
+
+### Pieces
+
+1. **The `docker` client in the image** — the static CLI from Docker's own
+   releases (client only, no daemon), pinned like terraform. The Dockerfile
+   note becomes: the local provider runs over SSH to an endpoint, never on a
+   mounted socket.
+2. **An endpoint key of its own** — `<dataDir>/ssh/endpoint_ed25519`, made on
+   first use and kept in the data volume, so updates keep it. It is separate
+   from the sandbox keypair: authorizing it on a machine must not also be a
+   key every cloud sandbox holds, and removing it must not lock out any
+   sandbox. Its comment names the host (`nexus-host-<name>`), so the target's
+   `authorized_keys` says whose it is.
+3. **SSH config the client picks up** — the existing managed config in the
+   data dir gets one block per registered endpoint: `IdentityFile` = the
+   endpoint key, `IdentitiesOnly yes`, `StrictHostKeyChecking accept-new`, a
+   private `UserKnownHostsFile` in the data dir. `ensureUserSshInclude` runs
+   at startup on a host, because the container's home is rebuilt on every
+   update and the `Include` line with it.
+4. **Settings on a host** — the Docker endpoints card shows the host's public
+   key with Copy and the one line to run on the target. The address field
+   explains that it must resolve from the host: a LAN IP or DNS name, not a
+   laptop's ssh alias. The existing probe gives the verdict — reachable, not
+   rootless, the user in the `docker` group — and "Test for sandboxes"
+   (spec 28) covers DNS, privileged containers and disk space.
+5. **Reachability** — the app shares the Tailscale sidecar's network
+   namespace. In userspace mode that namespace reaches the LAN through the
+   compose bridge, so an address like 192.168.0.35 works. Tailnet addresses
+   do not work from there without Tailscale's proxy. The address hint says
+   to use the LAN address; supporting tailnet targets is out of scope.
+6. **The destination picker on a host** — "This machine" is hidden, because a
+   host has no daemon of its own. With no endpoint registered, the Local card
+   says to register one, with a link. With one, it is chosen by default and
+   saved with the project, as phase 2 of spec 26 already does.
+7. **The error, on a host** — "Docker is not available" becomes "This Nexus
+   host has no Docker of its own — register the machine it runs on (or
+   another) as a Docker endpoint in Settings → Cloud", with the link. On a
+   laptop the message is unchanged.
+
+### What stays the same
+
+- Endpoints, probe, terminal (`docker-host://`), browser session forwarding,
+  seed pushes and resets: all already go through `docker -H`. They need
+  nothing new once the client, the key and the address work.
+- Mount-only repositories stay refused on an endpoint (spec 26): the host's
+  checkouts live in its own volume, which the endpoint cannot see. Sandboxes
+  clone from git as usual.
+
+### Security
+
+- The key grants what the target user can do. In the `docker` group that is
+  root-equivalent on the target, the same as the laptop's access. The card
+  says so, and suggests a dedicated user on shared machines.
+- The private key never leaves the data volume: it is not shown, not
+  exported (spec 18 already excludes machine state), and not sent anywhere.
+- The first connection records the target's host key (`accept-new`). A
+  changed host key afterwards is refused, not re-accepted.
+
+### Not in phase 6
+
+- Tailnet addresses as endpoint targets (needs the userspace proxy).
+- Auto-registering "the machine this host runs on" — the host does not
+  reliably know an address and user for it; one paste is clearer.
+- A socket mount, under any flag.
+
+### Order
+
+1. Image: the static `docker` client. Endpoint key + managed SSH config +
+   the startup `Include`. Unit tests for the config block and the key.
+2. Settings on a host: key card, address hint, picker without "This
+   machine", the host-specific error.
+3. The walk: from omarchy's own host, register `ssh://jairo@192.168.0.35`,
+   run Test for sandboxes, launch a local sandbox, open its terminal, destroy
+   it.
