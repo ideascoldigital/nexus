@@ -118,10 +118,12 @@ WORKDIR /app
 # `terraform` (terraform.ts) and then reaches it over `ssh`/`scp` (remote.ts);
 # repo setup runs `git`. Without these the Sandboxes tab fails at launch time
 # rather than at startup, which is the worse place to find out.
-# NOTE: the local (docker-in-docker) sandbox provider is deliberately NOT
-# supported in this image — it would need the host's docker socket mounted,
-# which is root-equivalent on the host. Cloud providers only here.
+# The local sandbox provider runs here only over SSH to a registered Docker
+# endpoint (spec 27 phase 6): the `docker` CLI below is the client alone, and
+# no daemon or socket is ever mounted — that would be root-equivalent on the
+# machine running this container.
 ARG TERRAFORM_VERSION=1.9.8
+ARG DOCKER_CLI_VERSION=29.1.3
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
        ca-certificates curl unzip git openssh-client \
@@ -136,6 +138,10 @@ RUN apt-get update \
   && unzip -q /tmp/terraform.zip -d /usr/local/bin \
   && chmod +x /usr/local/bin/terraform \
   && rm /tmp/terraform.zip \
+  && case "$arch" in amd64) dk_arch=x86_64 ;; arm64) dk_arch=aarch64 ;; esac \
+  && curl -fsSL "https://download.docker.com/linux/static/stable/${dk_arch}/docker-${DOCKER_CLI_VERSION}.tgz" \
+       | tar -xz -C /usr/local/bin --strip-components=1 docker/docker \
+  && docker --version \
   && apt-get purge -y unzip \
   && apt-get autoremove -y \
   && rm -rf /var/lib/apt/lists/*

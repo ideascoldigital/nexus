@@ -131,13 +131,18 @@ export {
 } from "./template-browser";
 export { runTerraform, terraformAvailable } from "./terraform";
 export {
+  endpointPrivateKeyPath,
+  ensureEndpointKeypair,
   ensureSandboxKeypair,
   sandboxKeyDir,
   sandboxPrivateKeyPath,
 } from "./keys";
 export {
+  endpointSshHostname,
   ensureUserSshInclude,
+  removeEndpointSshHost,
   removeSandboxSshHost,
+  upsertEndpointSshHost,
   sandboxSshConfigPath,
   sandboxSshHostAlias,
   upsertSandboxSshHost,

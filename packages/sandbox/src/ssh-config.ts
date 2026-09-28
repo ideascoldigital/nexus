@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { homeDir } from "@nexux/config";
-import { sandboxKeyDir, sandboxPrivateKeyPath } from "./keys";
+import { endpointPrivateKeyPath, sandboxKeyDir, sandboxPrivateKeyPath } from "./keys";
 
 // VS Code Remote-SSH resolves hosts through ~/.ssh/config. Nexux keeps its
 // sandbox hosts in a managed file (<dataDir>/ssh/config) and injects a single
@@ -91,6 +91,74 @@ export function removeSandboxSshHost(dataDir: string, name: string): void {
   const existing = fs.readFileSync(configPath, "utf8");
   const next = stripBlock(existing, sandboxSshHostAlias(name));
   if (next !== existing) fs.writeFileSync(configPath, next, { mode: 0o600 });
+}
+
+// --- Docker endpoints reached from a Nexus host (spec 27 phase 6) -------------
+//
+// `docker -H ssh://user@host` runs the system ssh, which reads ~/.ssh/config.
+// On a laptop that is the user's own config and keys, and nothing here is
+// written. On a host (a container) there is neither, so each registered
+// endpoint gets a block matching the address docker passes to ssh, pointing
+// at the host's endpoint key.
+
+function endpointBegin(host: string): string {
+  return `# >>> nexux endpoint ${host} >>>`;
+}
+function endpointEnd(host: string): string {
+  return `# <<< nexux endpoint ${host} <<<`;
+}
+
+/** The address ssh is asked for, out of `ssh://[user@]host[:port]` — what a `Host` line must match. */
+export function endpointSshHostname(dockerHost: string): string | null {
+  const m = dockerHost.trim().match(/^ssh:\/\/(?:[^@/]+@)?(\[[^\]]+\]|[^:/]+)/i);
+  return m ? m[1].replace(/^\[|\]$/g, "") : null;
+}
+
+/**
+ * Add or refresh the block for one endpoint in the managed config. The user
+ * and port stay in the `ssh://` URL (docker passes them to ssh); the block
+ * adds only the key, and records the endpoint's host key on first contact
+ * (accept-new) in the managed known_hosts — a changed key later is refused.
+ */
+export function upsertEndpointSshHost(dataDir: string, dockerHost: string): void {
+  const hostname = endpointSshHostname(dockerHost);
+  if (!hostname) throw new Error(`Not an ssh:// endpoint: ${dockerHost}`);
+  const configPath = sandboxSshConfigPath(dataDir);
+  const dir = path.dirname(configPath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const block = [
+    endpointBegin(hostname),
+    `Host ${hostname}`,
+    `  IdentityFile ${endpointPrivateKeyPath(dataDir)}`,
+    `  IdentitiesOnly yes`,
+    `  StrictHostKeyChecking accept-new`,
+    `  UserKnownHostsFile ${path.join(dir, "known_hosts")}`,
+    // docker keeps one ssh session per command; a dead LAN link should fail
+    // a command, not hang it.
+    `  ConnectTimeout 15`,
+    `  ServerAliveInterval 30`,
+    endpointEnd(hostname),
+    "",
+  ].join("\n");
+  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
+  fs.writeFileSync(configPath, stripEndpointBlock(existing, hostname) + block, { mode: 0o600 });
+}
+
+export function removeEndpointSshHost(dataDir: string, dockerHost: string): void {
+  const hostname = endpointSshHostname(dockerHost);
+  const configPath = sandboxSshConfigPath(dataDir);
+  if (!hostname || !fs.existsSync(configPath)) return;
+  const existing = fs.readFileSync(configPath, "utf8");
+  const next = stripEndpointBlock(existing, hostname);
+  if (next !== existing) fs.writeFileSync(configPath, next, { mode: 0o600 });
+}
+
+function stripEndpointBlock(content: string, hostname: string): string {
+  const pattern = new RegExp(
+    `${escapeRegExp(endpointBegin(hostname))}[\\s\\S]*?${escapeRegExp(endpointEnd(hostname))}\\n?`,
+    "g",
+  );
+  return content.replace(pattern, "");
 }
 
 /**

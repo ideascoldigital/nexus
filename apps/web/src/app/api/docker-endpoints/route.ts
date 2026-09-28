@@ -11,7 +11,13 @@ import { describeDockerHostError, parseDockerHost } from "@nexux/sandbox";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { listEndpoints, probe, probeColumns } from "@/lib/docker-endpoints";
+import {
+  forgetEndpointSsh,
+  listEndpoints,
+  prepareEndpointSsh,
+  probe,
+  probeColumns,
+} from "@/lib/docker-endpoints";
 
 export const dynamic = "force-dynamic";
 
@@ -47,8 +53,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // On a Nexus host the probe's ssh needs the host's key and config first;
+  // a refused probe leaves no block behind.
+  prepareEndpointSsh(host.host);
   const res = await probe(host.host);
   if (!res.ok) {
+    forgetEndpointSsh(host.host);
     return NextResponse.json({ error: res.error }, { status: 400 });
   }
 

@@ -424,3 +424,24 @@ launch (local) ──docker -H ssh://jairo@192.168.0.35──▶ omarchy's docke
 3. The walk: from omarchy's own host, register `ssh://jairo@192.168.0.35`,
    run Test for sandboxes, launch a local sandbox, open its terminal, destroy
    it.
+
+### As built (phase 6, step 1)
+
+- **Image:** the static Docker CLI 29.1.3 (client only), extracted from
+  `download.docker.com/linux/static/stable/{x86_64,aarch64}` in the same
+  `RUN` as terraform. The tooling layer was built for both `linux/arm64` and
+  `linux/amd64` and runs `docker --version` beside `ssh -V`.
+- **Key:** `ensureEndpointKeypair(dataDir, comment)` →
+  `<dataDir>/ssh/endpoint_ed25519`, comment `nexus-host-<hostname>`, beside
+  (never replacing) the sandbox keypair; both share one `ensureKeypair`.
+- **SSH config:** `upsertEndpointSshHost` / `removeEndpointSshHost` keep one
+  `# >>> nexux endpoint <address> >>>` block per endpoint in the managed
+  config — `Host <address>`, the endpoint key, `IdentitiesOnly`,
+  `accept-new` into the managed known_hosts, `ConnectTimeout 15`. User and
+  port stay in the `ssh://` URL. A test runs `ssh -G` against it to confirm
+  ssh resolves that key and the URL's user.
+- **Only on a host** (`NEXUX_ROLE=host`): creating an endpoint prepares its
+  block before the probe and drops it if the probe fails; deleting one drops
+  it; startup restores the `Include` line and every block, because the
+  container's home is rebuilt on each update. On a laptop nothing is written
+  (a route test pins that the managed config is unchanged).

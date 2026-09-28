@@ -244,3 +244,58 @@ test("a destroyed host keeps its row and lets the endpoint go", async () => {
   const kept = await prisma.nexusHost.findUnique({ where: { id: gone.id } });
   assert.equal(kept?.dockerEndpointId, null);
 });
+
+// --- a Nexus host reaching endpoints over SSH (spec 27 phase 6) -----------------
+
+import os from "node:os";
+import path from "node:path";
+
+function asHost<T>(run: () => Promise<T>): Promise<T> {
+  // HOME points at a throwaway dir: the Include line goes into ~/.ssh/config,
+  // and this must never be the developer's own.
+  const saved = { role: process.env.NEXUX_ROLE, home: process.env.HOME };
+  process.env.NEXUX_ROLE = "host";
+  process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), "host-home-"));
+  return run().finally(() => {
+    if (saved.role === undefined) delete process.env.NEXUX_ROLE;
+    else process.env.NEXUX_ROLE = saved.role;
+    process.env.HOME = saved.home;
+  });
+}
+
+const managedConfig = () => {
+  const p = path.join(testDbDir, "ssh", "config");
+  return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "";
+};
+
+test("on a host, adding an endpoint gives ssh the host's key for that address; removing it takes it away", async () => {
+  await asHost(async () => {
+    const res = await create({ name: "omarchy", host: "ssh://jairo@192.168.0.35" });
+    assert.equal(res.status, 201);
+    assert.match(managedConfig(), /^Host 192\.168\.0\.35$/m);
+    assert.ok(fs.existsSync(path.join(testDbDir, "ssh", "endpoint_ed25519")), "the endpoint key exists");
+    const userConfig = fs.readFileSync(path.join(process.env.HOME!, ".ssh", "config"), "utf8");
+    assert.match(userConfig, new RegExp(`Include ${path.join(testDbDir, "ssh", "config")}`));
+
+    const { id } = await res.json();
+    const del = await deleteRoute(json("DELETE", `http://test/api/docker-endpoints/${id}`), params(id));
+    assert.equal(del.status, 200);
+    assert.doesNotMatch(managedConfig(), /192\.168\.0\.35/);
+  });
+});
+
+test("on a host, an endpoint whose probe fails leaves no ssh block behind", async () => {
+  process.env.NEXUX_TEST_DOCKER_PROBE = JSON.stringify({ ok: false, error: "Permission denied (publickey)" });
+  await asHost(async () => {
+    const res = await create({ name: "nope", host: "ssh://jairo@10.9.9.9" });
+    assert.equal(res.status, 400);
+    assert.doesNotMatch(managedConfig(), /10\.9\.9\.9/);
+  });
+});
+
+test("on a laptop, adding an endpoint writes no ssh config at all — the user's own keys are used", async () => {
+  const before = managedConfig();
+  const res = await create({ name: "lan", host: "ssh://jairo@192.168.0.77" });
+  assert.equal(res.status, 201);
+  assert.equal(managedConfig(), before);
+});

@@ -97,6 +97,10 @@ export async function registerNode() {
       // Both drivers live in-process: first settle sandboxes whose
       // provision/destroy died with the previous process, then re-attach
       // supervision to whatever it left queued.
+      // A host's home is rebuilt on every update: put back the ssh config its
+      // endpoints are reached with before anything reaches for one.
+      const { restoreEndpointSsh } = await import("@/lib/docker-endpoints");
+      await restoreEndpointSsh().catch((err) => console.error("[instrumentation] endpoint ssh restore failed:", err));
       const { recoverOrphanSandboxes } = await import("@/lib/sandbox-manager");
       await recoverOrphanSandboxes();
       const { recoverPendingLaunches, recoverOrphanTasks } = await import(

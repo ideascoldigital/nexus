@@ -78,3 +78,44 @@ test("vsCodeRemoteUri builds a Remote-SSH deep link", () => {
     "vscode://vscode-remote/ssh-remote+h/opt/nexus",
   );
 });
+
+// --- Docker endpoints from a Nexus host (spec 27 phase 6) ---------------------
+
+import { execFileSync } from "node:child_process";
+import { endpointSshHostname, removeEndpointSshHost, upsertEndpointSshHost } from "./ssh-config";
+import { endpointPrivateKeyPath, ensureEndpointKeypair, sandboxPrivateKeyPath as sandboxKey } from "./keys";
+
+test("the address ssh is asked for is read out of the docker host", () => {
+  assert.equal(endpointSshHostname("ssh://jairo@192.168.0.35"), "192.168.0.35");
+  assert.equal(endpointSshHostname("ssh://omarchy.lan:2222"), "omarchy.lan");
+  assert.equal(endpointSshHostname("ssh://u@[fd00::1]:22"), "fd00::1");
+  assert.equal(endpointSshHostname("tcp://1.2.3.4:2375"), null);
+});
+
+test("an endpoint block points ssh at the endpoint key, and is replaced, not stacked", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ep-"));
+  upsertEndpointSshHost(dataDir, "ssh://jairo@192.168.0.35");
+  upsertEndpointSshHost(dataDir, "ssh://jairo@192.168.0.35");
+  upsertEndpointSshHost(dataDir, "ssh://other@10.0.0.9");
+  const config = fs.readFileSync(path.join(dataDir, "ssh", "config"), "utf8");
+  assert.equal(config.match(/^Host 192\.168\.0\.35$/gm)?.length, 1);
+  assert.match(config, new RegExp(`IdentityFile ${endpointPrivateKeyPath(dataDir).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(config, /StrictHostKeyChecking accept-new/);
+  // ssh itself resolves it that way (no connection is made by -G).
+  const resolved = execFileSync("ssh", ["-G", "-F", path.join(dataDir, "ssh", "config"), "jairo@192.168.0.35"]).toString();
+  assert.match(resolved, new RegExp(`^identityfile ${endpointPrivateKeyPath(dataDir)}$`, "m"));
+  assert.match(resolved, /^user jairo$/m, "the user from the URL wins");
+  removeEndpointSshHost(dataDir, "ssh://jairo@192.168.0.35");
+  const after = fs.readFileSync(path.join(dataDir, "ssh", "config"), "utf8");
+  assert.doesNotMatch(after, /192\.168\.0\.35/);
+  assert.match(after, /^Host 10\.0\.0\.9$/m, "other endpoints stay");
+});
+
+test("the endpoint key is its own, and names the host in its comment", () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "epk-"));
+  const key = ensureEndpointKeypair(dataDir, "nexus-host-nexus-e2e");
+  assert.equal(key.privateKeyPath, endpointPrivateKeyPath(dataDir));
+  assert.notEqual(key.privateKeyPath, sandboxKey(dataDir));
+  assert.match(key.publicKey, /^ssh-ed25519 \S+ nexus-host-nexus-e2e$/);
+  assert.equal(ensureEndpointKeypair(dataDir, "ignored").publicKey, key.publicKey, "made once, kept");
+});

@@ -10,7 +10,7 @@ import { prisma } from "@nexux/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { usage } from "@/lib/docker-endpoints";
+import { forgetEndpointSsh, usage } from "@/lib/docker-endpoints";
 
 export const dynamic = "force-dynamic";
 
@@ -64,5 +64,6 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
     }),
     prisma.dockerEndpoint.delete({ where: { id: endpointId } }),
   ]);
+  forgetEndpointSsh(row.host);
   return NextResponse.json({ ok: true });
 }
