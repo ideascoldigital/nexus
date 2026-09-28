@@ -12,6 +12,7 @@ import {
   parseTailscaleDnsName,
   provisionEndpointHost,
   renderEndpointEnv,
+  syncUpdaterConfig,
   type DockerRunner,
   type EndpointHostSpec,
 } from "./host-endpoint";
@@ -297,4 +298,31 @@ test("the updater gets its config on stdin, secrets never in argv, update.sh las
     Buffer.from(login.auths["ghcr.io"].auth, "base64").toString(),
     `octo:${REG_PASSWORD}`,
   );
+});
+
+// The updater parses its script once, at start: a new update.sh on disk does
+// nothing until it restarts. Found when a channel switch was ignored by an
+// updater still looping on the script it started with ten hours earlier.
+test("the updater is restarted when its script changed, and only then", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "upd-"));
+  fs.writeFileSync(path.join(dir, "compose.yml"), "services: {}\n");
+  fs.writeFileSync(path.join(dir, ".env"), "X=1\n");
+  const { renderEndpointUpdater } = await import("@nexux/sandbox");
+  const current = renderEndpointUpdater("nexus-host-home");
+  const scenario = async (catResult: { code: number; stdout: string }) => {
+    const calls: string[][] = [];
+    await syncUpdaterConfig(
+      { project: "nexus-host-home", dockerHost: "ssh://omarchy", workDir: dir, registry: null },
+      async (args) => {
+        calls.push(args);
+        return args.includes("cat") && args.includes("/config/update.sh")
+          ? { ...catResult, stderr: "" }
+          : { code: 0, stdout: "", stderr: "" };
+      },
+    );
+    return calls.some((c) => c.includes("restart"));
+  };
+  assert.equal(await scenario({ code: 0, stdout: "#!/bin/sh\n# an older updater\n" }), true, "old script → restart");
+  assert.equal(await scenario({ code: 0, stdout: current }), false, "same script → left running");
+  assert.equal(await scenario({ code: 1, stdout: "" }), false, "no script yet → it is waiting, picks it up itself");
 });

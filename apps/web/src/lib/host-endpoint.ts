@@ -138,6 +138,16 @@ export async function syncUpdaterConfig(
     // is in place.
     ["update.sh", renderEndpointUpdater(spec.project)],
   ];
+  // The updater runs its script as one long `sh` loop, parsed once when the
+  // container started: a new update.sh on disk changes nothing until it is
+  // restarted. So compare first — a host created before a change to the
+  // script otherwise keeps running the old one indefinitely.
+  const previous = await run(
+    [...dockerHostArgs({ host: spec.dockerHost }), "exec", container, "cat", "/config/update.sh"],
+    { timeoutMs: 60_000 },
+  ).catch(() => null);
+  const scriptChanged = previous?.code !== 0 || previous.stdout !== renderEndpointUpdater(spec.project);
+
   for (const [file, content] of files) {
     const res = await run(
       [
@@ -154,6 +164,16 @@ export async function syncUpdaterConfig(
     );
     if (res.code !== 0) {
       throw new Error(`Could not hand the updater its ${file}: ${res.stderr.trim().slice(-300)}`);
+    }
+  }
+  if (scriptChanged && previous?.code === 0) {
+    // Only when it was already running an older script: a fresh updater is
+    // waiting for this file and picks it up on its own.
+    const restarted = await run([...dockerHostArgs({ host: spec.dockerHost }), "restart", container], {
+      timeoutMs: 60_000,
+    });
+    if (restarted.code !== 0) {
+      throw new Error(`Could not restart the updater onto its new script: ${restarted.stderr.trim().slice(-300)}`);
     }
   }
 }
