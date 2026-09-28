@@ -1,10 +1,11 @@
 "use client";
 
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { Check, Container, Laptop } from "lucide-react";
 
-import { getDockerEndpoints } from "@/services/docker-endpoints";
+import { getDockerEndpoints, getHostEndpointKey } from "@/services/docker-endpoints";
 
 /**
  * Which Docker a local sandbox runs on (spec 26): this machine, or another
@@ -25,12 +26,32 @@ export function DockerEndpointPicker({
     queryKey: ["docker-endpoints"],
     queryFn: getDockerEndpoints,
   });
+  // A Nexus host has no Docker of its own (spec 27 phase 6): "This machine"
+  // is not an option there, and an endpoint is the only way to run locally.
+  const host = useQuery({ queryKey: ["host-endpoint-key"], queryFn: getHostEndpointKey });
+  const isHost = host.data?.isHost ?? false;
   const list = endpoints.data ?? [];
-  if (list.length === 0) return null;
+  useEffect(() => {
+    if (isHost && value === null && list.length > 0 && mountOnlyRepos.length === 0) onChange(list[0].id);
+  }, [isHost, value, list, mountOnlyRepos.length, onChange]);
+
+  if (list.length === 0) {
+    return isHost ? (
+      <p className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs text-muted-foreground">
+        This Nexus host has no Docker of its own. Register the machine it runs on (or another) under{" "}
+        <Link href="/settings?tab=cloud" className="underline underline-offset-2">
+          Settings → Cloud → Docker endpoints
+        </Link>
+        , then pick it here.
+      </p>
+    ) : null;
+  }
 
   const blocked = mountOnlyRepos.length > 0;
   const options = [
-    { id: null, name: "This machine", detail: "Docker on the machine running Nexux", icon: Laptop, disabled: false },
+    ...(isHost
+      ? []
+      : [{ id: null as string | null, name: "This machine", detail: "Docker on the machine running Nexux", icon: Laptop, disabled: false }]),
     ...list.map((ep) => ({
       id: ep.id as string | null,
       name: ep.name,

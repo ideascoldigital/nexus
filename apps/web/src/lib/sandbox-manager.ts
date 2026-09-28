@@ -53,6 +53,7 @@ import {
   type GitProvider,
 } from "@/lib/git-host";
 import { getStackInheritance } from "@/lib/stack/sandbox-inheritance";
+import { isHostInstall } from "@/lib/host-update";
 import { notifySandboxStatus } from "@/lib/notify";
 import { sandboxPrefixForProject } from "@/lib/sandbox-prefix";
 import { getWorkspaceSetting } from "@/lib/workspace";
@@ -1100,7 +1101,10 @@ export async function launchSandbox(
       throw new Error(
         endpoint
           ? `Docker on "${endpoint.name}" isn't answering — check it in Settings → Cloud → Docker endpoints.`
-          : "Docker is not available. Local sandboxes run in a Docker container — start Docker Desktop and retry.",
+          : isHostInstall()
+            ? // A host is a container with no daemon of its own (spec 27 phase 6).
+              "This Nexus host has no Docker of its own. Register the machine it runs on (or another) as a Docker endpoint in Settings → Cloud → Docker endpoints, then pick it under Which Docker."
+            : "Docker is not available. Local sandboxes run in a Docker container — start Docker Desktop and retry.",
       );
     }
   } else {

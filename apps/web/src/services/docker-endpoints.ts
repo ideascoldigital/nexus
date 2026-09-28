@@ -73,3 +73,10 @@ export async function deleteDockerEndpoint(id: string): Promise<void> {
   const res = await fetch(`/api/docker-endpoints/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(await errorFrom(res));
 }
+
+/** Whether this install is a Nexus host, and the key it reaches endpoints with (spec 27 phase 6). */
+export async function getHostEndpointKey(): Promise<{ isHost: boolean; publicKey: string | null }> {
+  const res = await fetch("/api/docker-endpoints/host-key");
+  if (!res.ok) throw new Error(await errorFrom(res));
+  return res.json();
+}

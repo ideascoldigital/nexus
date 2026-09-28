@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
-import { Container, FlaskConical, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Container, Copy, FlaskConical, KeyRound, Loader2, RefreshCw, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,8 +24,10 @@ import {
   checkEndpointForSandboxes,
   deleteDockerEndpoint,
   getDockerEndpoints,
+  getHostEndpointKey,
   type DockerEndpoint,
 } from "@/services/docker-endpoints";
+import { copyText } from "@/lib/clipboard";
 
 const QUERY_KEY = ["docker-endpoints"];
 
@@ -43,6 +45,10 @@ export function DockerEndpointsSection() {
   const [host, setHost] = useState("");
 
   const endpoints = useQuery({ queryKey: QUERY_KEY, queryFn: getDockerEndpoints });
+  // On a Nexus host (spec 27 phase 6): it has no Docker of its own, and reaches
+  // endpoints with a key of its own that the target has to authorize.
+  const hostKey = useQuery({ queryKey: ["host-endpoint-key"], queryFn: getHostEndpointKey });
+  const isHost = hostKey.data?.isHost ?? false;
   const invalidate = () => qc.invalidateQueries({ queryKey: QUERY_KEY });
 
   const add = useMutation({
@@ -77,7 +83,9 @@ export function DockerEndpointsSection() {
           <div className="text-sm text-muted-foreground">Loading endpoints...</div>
         ) : list.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            None yet — sandboxes run on this machine&apos;s Docker.
+            {isHost
+              ? "None yet — this Nexus host has no Docker of its own, so local sandboxes need one: add the machine it runs on (or another)."
+              : "None yet — sandboxes run on this machine\u2019s Docker."}
           </p>
         ) : (
           <div className="space-y-2">
@@ -96,6 +104,8 @@ export function DockerEndpointsSection() {
         {remove.isError && (
           <p className="text-xs text-destructive">{(remove.error as Error).message}</p>
         )}
+
+        {isHost && hostKey.data?.publicKey && <HostKeyCard publicKey={hostKey.data.publicKey} />}
 
         <form
           className="space-y-2 rounded-md border border-border/50 p-3"
@@ -116,7 +126,7 @@ export function DockerEndpointsSection() {
             />
             <Input
               {...NO_AUTOFILL}
-              placeholder="ssh://user@host"
+              placeholder={isHost ? "ssh://user@192.168.0.35" : "ssh://user@host"}
               value={host}
               onChange={(e) => setHost(e.target.value)}
               className="font-mono text-xs"
@@ -138,11 +148,20 @@ export function DockerEndpointsSection() {
               {(add.error as Error).message}
             </pre>
           )}
-          <p className="text-[11px] text-muted-foreground">
-            Only <code>ssh://</code> — the browser session is forwarded through
-            the same connection. Key auth only; accept the host key once from a
-            terminal first.
-          </p>
+          {isHost ? (
+            <p className="text-[11px] text-muted-foreground">
+              Use an address <strong>this host</strong> can reach — the machine&apos;s LAN IP or DNS name, not
+              an alias from your laptop&apos;s <code>~/.ssh/config</code> (it doesn&apos;t exist here), and not a
+              Tailscale address (unreachable from inside the host). Its host key is recorded on the first
+              connection.
+            </p>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              Only <code>ssh://</code> — the browser session is forwarded through
+              the same connection. Key auth only; accept the host key once from a
+              terminal first.
+            </p>
+          )}
         </form>
       </CardContent>
     </Card>
@@ -270,6 +289,50 @@ function EndpointRow({
           error={sandboxTest.isError ? (sandboxTest.error as Error).message : null}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The key a Nexus host reaches endpoints with, and the one line that
+ * authorizes it on a target. The private half stays in the host's data volume.
+ */
+function HostKeyCard({ publicKey }: { publicKey: string }) {
+  const [copied, setCopied] = useState<"key" | "cmd" | null>(null);
+  const command = `echo '${publicKey}' >> ~/.ssh/authorized_keys`;
+  const copy = async (what: "key" | "cmd") => {
+    await copyText(what === "key" ? publicKey : command);
+    setCopied(what);
+    setTimeout(() => setCopied(null), 1500);
+  };
+  return (
+    <div className="space-y-2 rounded-md border border-border/50 p-3">
+      <Label className="flex items-center gap-1.5 text-xs font-medium">
+        <KeyRound className="h-3.5 w-3.5" /> This host&apos;s SSH key
+      </Label>
+      <div className="flex items-center gap-2">
+        <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-[11px]" title={publicKey}>
+          {publicKey}
+        </code>
+        <Button type="button" size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs" onClick={() => void copy("key")}>
+          {copied === "key" ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />} Copy
+        </Button>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        On the target machine, as the user you will connect as, run once:
+      </p>
+      <div className="flex items-center gap-2">
+        <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-[11px]" title={command}>
+          {command}
+        </code>
+        <Button type="button" size="sm" variant="outline" className="h-7 gap-1 px-2 text-xs" onClick={() => void copy("cmd")}>
+          {copied === "cmd" ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />} Copy
+        </Button>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        That user must be in the <code>docker</code> group there — root-equivalent on that machine, like your
+        laptop&apos;s access. On a shared machine, use a dedicated user.
+      </p>
     </div>
   );
 }

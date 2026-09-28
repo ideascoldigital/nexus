@@ -445,3 +445,20 @@ launch (local) ──docker -H ssh://jairo@192.168.0.35──▶ omarchy's docke
   it; startup restores the `Include` line and every block, because the
   container's home is rebuilt on each update. On a laptop nothing is written
   (a route test pins that the managed config is unchanged).
+
+### As built (phase 6, step 2)
+
+- `GET /api/docker-endpoints/host-key` → `{ isHost, publicKey }` (the key
+  is made on first ask; the private half is never in a response — a route
+  test checks the body).
+- Settings → Cloud → Docker endpoints on a host: an "This host's SSH key"
+  card (the key and the `echo '…' >> ~/.ssh/authorized_keys` line, each with
+  Copy, and the root-equivalence note), an empty-state that says the host
+  has no Docker of its own, a LAN-address placeholder, and a hint that a
+  laptop ssh alias and a Tailscale address will not resolve from the host.
+- Which Docker on a host: no "This machine"; the first endpoint is picked
+  when none is (unless mount-only repos block it); with none registered, an
+  amber note links to Settings. The launch error on a host names the fix
+  instead of Docker Desktop.
+- On a laptop nothing changes; checked in the browser (no key card, no
+  console errors). The host view is walked in step 3, on omarchy's host.

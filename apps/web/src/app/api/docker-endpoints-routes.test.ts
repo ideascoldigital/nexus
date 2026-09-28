@@ -14,6 +14,7 @@ import {
   PATCH as patchRoute,
 } from "./docker-endpoints/[endpointId]/route";
 import { POST as checkRoute } from "./docker-endpoints/[endpointId]/check/route";
+import { GET as hostKeyRoute } from "./docker-endpoints/host-key/route";
 import { POST as launchRoute } from "./projects/[projectId]/sandboxes/route";
 
 const HEALTHY = {
@@ -298,4 +299,15 @@ test("on a laptop, adding an endpoint writes no ssh config at all — the user's
   const res = await create({ name: "lan", host: "ssh://jairo@192.168.0.77" });
   assert.equal(res.status, 201);
   assert.equal(managedConfig(), before);
+});
+
+test("a laptop is not a host and shows no key; a host shows its public key and never the private one", async () => {
+  const laptop = await (await hostKeyRoute()).json();
+  assert.deepEqual(laptop, { isHost: false, publicKey: null });
+  await asHost(async () => {
+    const body = await (await hostKeyRoute()).json();
+    assert.equal(body.isHost, true);
+    assert.match(body.publicKey, /^ssh-ed25519 \S+ nexus-host-/);
+    assert.doesNotMatch(JSON.stringify(body), /PRIVATE KEY/);
+  });
 });
