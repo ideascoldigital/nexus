@@ -1,6 +1,6 @@
 # 30 — One assistant, on every page, with the MCP tools
 
-Status: **phases 1–3 shipped** (2026-09-27) — the loop, the write gate, threads, the global panel, watches and streamed turns. Native function calling (phase 4) is open.
+Status: **phases 1–3 shipped, Stack tab moved onto it** (2026-09-27). Phase 4 (native function calling) is blocked on the agents-generator backend — see below.
 
 ## Goal
 
@@ -276,10 +276,8 @@ project.
   sandboxes are running here? if there's one, pause it" listed them and
   produced a pause card; Cancel recorded; "mejor sí, pausalo" produced a
   new card by name — cancelled again, nothing paused.
-- **Deferred:** the Stack tab's own assistant panel still renders its
-  existing component (now on the shared loop, reads only). Moving it onto
-  this panel, focused on the project and keeping its apply-suggestion
-  cards, is left for when its conversation history moves to threads.
+- The Stack tab's panel was moved onto threads afterwards — see "The
+  Stack tab" below.
 
 ## As built (phase 3)
 
@@ -309,3 +307,45 @@ project.
   it destroyed afterwards.
 - Tests: 4 watch tests (conditions, the tool, report-once with a
   reads-only reply turn, expiry), on top of phases 1–2's.
+
+## The Stack tab on threads
+
+- `AssistantThread.mode` (`general` | `stack`, migration
+  `20260928210000_assistant_thread_mode`). `stackThreadFor(projectId)`
+  makes one "stack" thread per project on first use and carries the old
+  Stack conversation (`Conversation` `stack-<projectId>`, user and
+  assistant messages) over as its opening events, verbatim, with their
+  timestamps. The old rows are left where they are.
+- A stack thread runs with the Stack assistant's instructions (its job and
+  the apply-to-canvas suggestions block) plus the shared rules for acting,
+  all five scopes — so it can now validate, repair, launch, with the same
+  action cards — and stays on its project whatever page a message came
+  from. The ⌘I list shows general threads only.
+- `components/assistant/assistant-panel.tsx` exports `AssistantChat` (one
+  thread: transcript, action cards, watches, input, starter questions); the
+  ⌘I panel and `StackAssistantPanel` both render it. The Stack tab passes a
+  `renderAssistant` that parses each reply into its markdown and its
+  `SuggestionCard`s. `GET /api/projects/[id]/stack/assistant` now returns
+  `{ threadId, indexStatus }`. Its markdown lost a hard-coded
+  `prose-invert` (unreadable under the light theme).
+- `/api/assistant/chat` `type: "stack-assistant"` and
+  `runStackAssistantTurn` stay for their other callers (stack proposal and
+  repair services); the panel no longer uses them.
+- Walked in the browser on galtex: the panel opened with its two old
+  messages imported; "describe the stack and whether the last validation
+  found problems" streamed `get_stack_context` then `nexux_validate_stack`
+  — an MCP tool the Stack assistant did not have — and answered that
+  `postgres-backup` is a docker node on the galtex repo with neither a
+  Dockerfile nor an image.
+
+## Phase 4 — blocked on the backend
+
+Probed against the real host model (openai gpt-5.4) with one read-only
+function passed as `functions` to the agents SDK (0.8.1): both `run` and
+`runStream` return the backend's legacy text marker
+(`CALLBACK_TOOL_RESULT: {"type": "callback_tool_invocation", …}`) as the
+reply; `execute` is never called and the model answers with the marker as
+if it were data. Native tools need the agents-generator backend to emit the
+callback event the SDK expects; until then the text protocol stays. Calling
+providers directly was considered and not taken: it would duplicate
+agents-generator.

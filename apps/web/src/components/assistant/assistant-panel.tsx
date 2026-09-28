@@ -44,6 +44,7 @@ import {
   type AssistantAction,
   type AssistantEvent,
   type AssistantThread,
+  type AssistantThreadSummary,
 } from "@/services/assistant";
 
 const THREAD_KEY = "nexux:assistant:thread";
@@ -98,79 +99,6 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
   };
 
   const threads = useQuery({ queryKey: ["assistant-threads"], queryFn: listAssistantThreads });
-  const thread = useQuery({
-    queryKey: ["assistant-thread", threadId],
-    queryFn: () => getAssistantThread(threadId!),
-    enabled: !!threadId,
-    retry: false,
-    // A watch report lands in the thread from the server's side; while one is
-    // open, look for it. Nothing to wait for → no polling.
-    refetchInterval: (q) => ((q.state.data?.watches?.length ?? 0) > 0 ? 4000 : false),
-  });
-  // A remembered thread that was deleted elsewhere: start fresh.
-  useEffect(() => {
-    if (thread.isError) setThreadId(null);
-  }, [thread.isError]);
-
-  const [draft, setDraft] = useState("");
-  const [sentText, setSentText] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const setThread = (t: AssistantThread) => {
-    qc.setQueryData(["assistant-thread", t.id], t);
-    void qc.invalidateQueries({ queryKey: ["assistant-threads"] });
-  };
-  // Each step as the server stores it — the thread grows while the turn runs.
-  const appendEvent = (id: string) => (event: AssistantEvent) => {
-    if (event.kind === "user") setSentText(null);
-    qc.setQueryData<AssistantThread>(["assistant-thread", id], (prev) =>
-      prev && !prev.events.some((e) => e.id === event.id) ? { ...prev, events: [...prev.events, event] } : prev,
-    );
-  };
-
-  const send = useMutation({
-    mutationFn: async (message: string) => {
-      let id = threadId;
-      if (!id) {
-        const created = await createAssistantThread(contextProjectId);
-        id = created.id;
-        qc.setQueryData<AssistantThread>(["assistant-thread", id], { ...created, events: [], actions: [], watches: [] });
-        setThreadId(id);
-      }
-      return streamAssistantMessage(id, message, contextProjectId, appendEvent(id));
-    },
-    onMutate: (message) => {
-      setError(null);
-      setSentText(message);
-      setDraft("");
-    },
-    onSuccess: setThread,
-    onError: (err: Error, message) => {
-      setError(err.message);
-      setDraft(message);
-    },
-    onSettled: () => setSentText(null),
-  });
-
-  const decide = useMutation({
-    mutationFn: ({ actionId, decision }: { actionId: string; decision: "approve" | "cancel" }) =>
-      decision === "approve"
-        ? streamApproveAction(threadId!, actionId, appendEvent(threadId!))
-        : decideAssistantAction(threadId!, actionId, decision),
-    onMutate: () => setError(null),
-    onSuccess: (t) => {
-      setThread(t);
-      // A write changed something the rest of the app shows.
-      void qc.invalidateQueries({ queryKey: ["sandboxes"] });
-      void qc.invalidateQueries({ queryKey: ["activity"] });
-    },
-    onError: (err: Error) => setError(err.message),
-  });
-
-  const unwatch = useMutation({
-    mutationFn: (watchId: string) => cancelAssistantWatch(threadId!, watchId),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["assistant-thread", threadId] }),
-  });
-
   const remove = useMutation({
     mutationFn: (id: string) => deleteAssistantThread(id),
     onSuccess: (_d, id) => {
@@ -178,23 +106,6 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
       void qc.invalidateQueries({ queryKey: ["assistant-threads"] });
     },
   });
-
-  const events = thread.data?.events ?? [];
-  const actions = useMemo(() => new Map((thread.data?.actions ?? []).map((a) => [a.id, a])), [thread.data]);
-  const pending = (thread.data?.actions ?? []).some((a) => a.status === "pending" || a.status === "running");
-  const busy = send.isPending || decide.isPending;
-
-  const endRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [events.length, sentText, busy]);
-
-  const submit = () => {
-    const text = draft.trim();
-    if (!text || busy || pending) return;
-    send.mutate(text);
-  };
-
   const current = threads.data?.find((t) => t.id === threadId);
 
   return (
@@ -234,9 +145,31 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
           <X className="h-4 w-4" />
         </Button>
       </header>
-
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3 text-sm">
-        {!threadId && !sentText && (
+      <AssistantChat
+        threadId={threadId}
+        onNeedThread={async () => {
+          const created = await createAssistantThread(contextProjectId);
+          setThreadId(created.id);
+          return created;
+        }}
+        onThreadMissing={() => setThreadId(null)}
+        contextProjectId={contextProjectId}
+        contextChip={
+          contextProjectId ? (
+            <span className="inline-flex max-w-full items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 text-xs">
+              <span className="truncate">Project: {contextProject.data?.name ?? "…"}</span>
+              <button
+                type="button"
+                title="Don't send this page's project"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => setContextDropped(true)}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ) : null
+        }
+        emptyState={
           <div className="space-y-2 pt-6 text-center text-muted-foreground">
             <p className="font-medium text-foreground">What should Nexus do?</p>
             <p className="text-xs">
@@ -244,13 +177,165 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
               stack. Anything that changes something asks you first.
             </p>
           </div>
+        }
+      />
+    </aside>
+  );
+}
+
+/**
+ * One thread's conversation: transcript, action cards, watches, input.
+ * Shared by the ⌘I panel and the Stack tab (spec 30), which differ only in
+ * where the thread comes from and how an assistant reply renders.
+ */
+export function AssistantChat({
+  threadId,
+  onNeedThread,
+  onThreadMissing,
+  contextProjectId,
+  contextChip,
+  emptyState,
+  renderAssistant,
+  starters,
+  placeholder = "Ask or tell Nexus… (Enter to send)",
+  className = "",
+}: {
+  threadId: string | null;
+  /** Called on the first message when there is no thread yet. */
+  onNeedThread?: () => Promise<AssistantThreadSummary>;
+  onThreadMissing?: () => void;
+  contextProjectId: string | null;
+  contextChip?: React.ReactNode;
+  emptyState?: React.ReactNode;
+  /** How an assistant reply renders — the Stack tab adds its Apply cards. */
+  renderAssistant?: (event: AssistantEvent) => React.ReactNode;
+  /** One-click first questions, shown while the conversation is empty. */
+  starters?: string[];
+  placeholder?: string;
+  className?: string;
+}) {
+  const qc = useQueryClient();
+  const thread = useQuery({
+    queryKey: ["assistant-thread", threadId],
+    queryFn: () => getAssistantThread(threadId!),
+    enabled: !!threadId,
+    retry: false,
+    // A watch report lands in the thread from the server's side; while one is
+    // open, look for it. Nothing to wait for → no polling.
+    refetchInterval: (q) => ((q.state.data?.watches?.length ?? 0) > 0 ? 4000 : false),
+  });
+  // A remembered thread that was deleted elsewhere.
+  useEffect(() => {
+    if (thread.isError) onThreadMissing?.();
+  }, [thread.isError, onThreadMissing]);
+
+  const [draft, setDraft] = useState("");
+  const [sentText, setSentText] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const setThread = (t: AssistantThread) => {
+    qc.setQueryData(["assistant-thread", t.id], t);
+    void qc.invalidateQueries({ queryKey: ["assistant-threads"] });
+  };
+  // Each step as the server stores it — the thread grows while the turn runs.
+  const appendEvent = (id: string) => (event: AssistantEvent) => {
+    if (event.kind === "user") setSentText(null);
+    qc.setQueryData<AssistantThread>(["assistant-thread", id], (prev) =>
+      prev && !prev.events.some((e) => e.id === event.id) ? { ...prev, events: [...prev.events, event] } : prev,
+    );
+  };
+
+  const send = useMutation({
+    mutationFn: async (message: string) => {
+      let id = threadId;
+      if (!id) {
+        if (!onNeedThread) throw new Error("No conversation to send to.");
+        const created = await onNeedThread();
+        id = created.id;
+        qc.setQueryData<AssistantThread>(["assistant-thread", id], { ...created, events: [], actions: [], watches: [] });
+      }
+      return streamAssistantMessage(id, message, contextProjectId, appendEvent(id));
+    },
+    onMutate: (message) => {
+      setError(null);
+      setSentText(message);
+      setDraft("");
+    },
+    onSuccess: setThread,
+    onError: (err: Error, message) => {
+      setError(err.message);
+      setDraft(message);
+    },
+    onSettled: () => setSentText(null),
+  });
+
+  const decide = useMutation({
+    mutationFn: ({ actionId, decision }: { actionId: string; decision: "approve" | "cancel" }) =>
+      decision === "approve"
+        ? streamApproveAction(threadId!, actionId, appendEvent(threadId!))
+        : decideAssistantAction(threadId!, actionId, decision),
+    onMutate: () => setError(null),
+    onSuccess: (t) => {
+      setThread(t);
+      // A write changed something the rest of the app shows.
+      void qc.invalidateQueries({ queryKey: ["sandboxes"] });
+      void qc.invalidateQueries({ queryKey: ["activity"] });
+      void qc.invalidateQueries({ queryKey: ["project-stack"] });
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const unwatch = useMutation({
+    mutationFn: (watchId: string) => cancelAssistantWatch(threadId!, watchId),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["assistant-thread", threadId] }),
+  });
+
+  const events = thread.data?.events ?? [];
+  const actions = useMemo(() => new Map((thread.data?.actions ?? []).map((a) => [a.id, a])), [thread.data]);
+  const pending = (thread.data?.actions ?? []).some((a) => a.status === "pending" || a.status === "running");
+  const busy = send.isPending || decide.isPending;
+
+  const endRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "end" });
+  }, [events.length, sentText, busy]);
+
+  const submit = () => {
+    const text = draft.trim();
+    if (!text || busy || pending) return;
+    send.mutate(text);
+  };
+
+  return (
+    <div className={`flex min-h-0 flex-1 flex-col ${className}`}>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3 text-sm">
+        {events.length === 0 && !sentText && !thread.isLoading && (
+          <>
+            {emptyState}
+            {starters?.length ? (
+              <div className="space-y-1">
+                {starters.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    className="block w-full rounded border px-2.5 py-1.5 text-left text-xs hover:border-primary/60"
+                    disabled={busy}
+                    onClick={() => send.mutate(q)}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </>
         )}
+        {thread.isLoading && threadId && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         <Transcript
           events={events}
           actions={actions}
           deciding={decide.isPending ? decide.variables?.actionId ?? null : null}
           onDecide={(actionId, decision) => decide.mutate({ actionId, decision })}
           busy={busy}
+          renderAssistant={renderAssistant}
         />
         {sentText && <UserBubble text={sentText} />}
         {busy && (
@@ -285,23 +370,11 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
             ))}
           </div>
         )}
-        {contextProjectId && (
-          <span className="inline-flex max-w-full items-center gap-1 rounded-full border bg-muted/40 px-2 py-0.5 text-xs">
-            <span className="truncate">Project: {contextProject.data?.name ?? "…"}</span>
-            <button
-              type="button"
-              title="Don't send this page's project"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => setContextDropped(true)}
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        )}
+        {contextChip}
         <Textarea
           value={draft}
           rows={3}
-          placeholder={pending ? "Run or cancel the action above first" : "Ask or tell Nexus… (Enter to send)"}
+          placeholder={pending ? "Run or cancel the action above first" : placeholder}
           disabled={pending}
           className="resize-none text-sm"
           onChange={(e) => setDraft(e.target.value)}
@@ -313,7 +386,7 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
           }}
         />
       </footer>
-    </aside>
+    </div>
   );
 }
 
@@ -331,12 +404,14 @@ function Transcript({
   deciding,
   onDecide,
   busy,
+  renderAssistant,
 }: {
   events: AssistantEvent[];
   actions: Map<string, AssistantAction>;
   deciding: string | null;
   onDecide: (actionId: string, decision: "approve" | "cancel") => void;
   busy: boolean;
+  renderAssistant?: (event: AssistantEvent) => React.ReactNode;
 }) {
   const items: React.ReactNode[] = [];
   for (let i = 0; i < events.length; i++) {
@@ -344,9 +419,13 @@ function Transcript({
     if (e.kind === "user") items.push(<UserBubble key={e.id} text={e.content.text} />);
     else if (e.kind === "assistant")
       items.push(
-        <div key={e.id} className="prose-sm max-w-none">
-          <MarkdownReport>{e.content.text}</MarkdownReport>
-        </div>,
+        renderAssistant ? (
+          <div key={e.id}>{renderAssistant(e)}</div>
+        ) : (
+          <div key={e.id} className="prose-sm max-w-none">
+            <MarkdownReport>{e.content.text}</MarkdownReport>
+          </div>
+        ),
       );
     else if (e.kind === "watch_report")
       // The raw report is for the model; the reply after it is for the user.

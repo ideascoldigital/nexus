@@ -1,28 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import {
-  Bot,
-  Loader2,
-  Sparkles,
-  User,
-  Wrench,
-} from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism";
 
-import { Badge } from "@/components/ui/badge";
+import { AssistantChat } from "@/components/assistant/assistant-panel";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import {
-  getStackAssistantState,
-  sendStackAssistantMessage,
-} from "@/services/stack";
+import type { AssistantEvent } from "@/services/assistant";
+import { getStackAssistantState } from "@/services/stack";
 import { parseStackSuggestions } from "@/lib/stack/suggestions";
 import type { StackSuggestion } from "@/lib/stack/types";
 
@@ -128,192 +118,87 @@ type Props = {
   onApplySuggestion: (s: StackSuggestion) => boolean;
 };
 
-export function StackAssistantPanel({
-  projectId,
-  onApplySuggestion,
-}: Props) {
-  const qc = useQueryClient();
+/**
+ * The Stack tab's assistant: the project's "stack" thread of the global
+ * assistant (spec 30). Same conversation, tools and action cards as ⌘I —
+ * plus the Stack assistant's instructions and its apply-to-canvas cards,
+ * parsed out of each reply.
+ */
+export function StackAssistantPanel({ projectId, onApplySuggestion }: Props) {
   const { toast } = useToast();
-  const [input, setInput] = useState("");
   const [appliedKeys, setAppliedKeys] = useState<Set<string>>(new Set());
-  const bottomRef = useRef<HTMLDivElement>(null);
-
   const stateQuery = useQuery({
     queryKey: ["stack-assistant", projectId],
     queryFn: () => getStackAssistantState(projectId),
   });
 
-  const send = useMutation({
-    mutationFn: (message: string) => {
-      const history = (stateQuery.data?.messages ?? [])
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({
-          role: m.role,
-          content:
-            m.role === "assistant"
-              ? parseStackSuggestions(m.content).message
-              : m.content,
-        }));
-      return sendStackAssistantMessage(projectId, message, history);
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["stack-assistant", projectId] });
-    },
-    onError: (err: Error) =>
-      toast({
-        title: "Assistant error",
-        description: err.message,
-        variant: "destructive",
-      }),
-  });
-
-  const messages = stateQuery.data?.messages ?? [];
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, send.isPending]);
-
   const handleApply = (key: string, s: StackSuggestion) => {
-    const ok = onApplySuggestion(s);
-    if (ok) {
+    if (onApplySuggestion(s)) {
       setAppliedKeys((prev) => new Set(prev).add(key));
       toast({ title: "Suggestion applied — review and Save" });
     }
   };
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const msg = input.trim();
-    if (!msg || send.isPending) return;
-    setInput("");
-    send.mutate(msg);
+  const renderAssistant = (event: AssistantEvent) => {
+    const { message, suggestions } = parseStackSuggestions(event.content.text);
+    return (
+      <div className="space-y-2">
+        {message && (
+          <div className="rounded-lg border bg-background px-3 py-2 text-sm leading-relaxed prose dark:prose-invert prose-sm max-w-none [&_p]:my-1.5 [&_ul]:my-1.5 [&_pre]:my-1.5">
+            <ReactMarkdown components={MARKDOWN_COMPONENTS}>{message}</ReactMarkdown>
+          </div>
+        )}
+        {suggestions.map((sug, i) => {
+          const key = `${event.id}:${i}`;
+          return (
+            <SuggestionCard
+              key={key}
+              suggestion={sug}
+              applied={appliedKeys.has(key)}
+              onApply={(x) => handleApply(key, x)}
+            />
+          );
+        })}
+      </div>
+    );
   };
 
   return (
     // FloatingPanel owns the header and the close button.
     <div className="flex h-full w-full min-w-0 flex-col bg-card/40">
-
       {stateQuery.data && !stateQuery.data.indexStatus.indexed ? (
         <div className="border-b bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
           Search index not built — answers improve if you build it in the{" "}
-          <Link
-            href={`/projects/${projectId}?tab=search`}
-            className="underline"
-          >
+          <Link href={`/projects/${projectId}?tab=search`} className="underline">
             Search tab
           </Link>
           .
         </div>
       ) : null}
-
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="p-3 space-y-3">
-          {stateQuery.isLoading ? (
-            <div className="flex items-center justify-center py-8 text-muted-foreground text-xs">
-              <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-              Loading...
-            </div>
-          ) : messages.length === 0 && !send.isPending ? (
-            <div className="text-sm text-muted-foreground text-center py-8 px-4">
-              Ask how to run this project — I can read your repos, search the
-              code, and propose node configs you can apply to the canvas.
-              <div className="mt-3 space-y-1">
-                {[
-                  "How do I run this project for development?",
-                  "Which services does this stack need?",
-                  "Set up the repos on the canvas for me",
-                ].map((q) => (
-                  <button
-                    key={q}
-                    className="block w-full rounded border px-2.5 py-1.5 text-left text-xs hover:border-primary/60"
-                    onClick={() => send.mutate(q)}
-                  >
-                    {q}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            messages.map((m) => {
-              if (m.role === "user") {
-                return (
-                  <div key={m.id} className="flex gap-2 justify-end">
-                    <div className="max-w-[85%] rounded-lg bg-primary text-primary-foreground px-3 py-2 text-sm whitespace-pre-wrap">
-                      {m.content}
-                    </div>
-                    <User className="h-4 w-4 mt-1 text-muted-foreground shrink-0" />
-                  </div>
-                );
-              }
-              const { message, suggestions } = parseStackSuggestions(m.content);
-              return (
-                <div key={m.id} className="flex gap-2">
-                  <Bot className="h-4 w-4 mt-1 text-primary shrink-0" />
-                  <div className="max-w-[85%] space-y-2 min-w-0">
-                    <div className="rounded-lg border bg-background px-3 py-2 text-sm leading-relaxed prose prose-invert prose-sm max-w-none [&_p]:my-1.5 [&_ul]:my-1.5 [&_pre]:my-1.5">
-                      <ReactMarkdown components={MARKDOWN_COMPONENTS}>
-                        {message}
-                      </ReactMarkdown>
-                    </div>
-                    {suggestions.map((s, i) => {
-                      const key = `${m.id}:${i}`;
-                      return (
-                        <SuggestionCard
-                          key={key}
-                          suggestion={s}
-                          applied={appliedKeys.has(key)}
-                          onApply={(sug) => handleApply(key, sug)}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })
-          )}
-
-          {send.isPending ? (
-            <div className="flex gap-2">
-              <Bot className="h-4 w-4 mt-1 text-primary shrink-0" />
-              <div className="rounded-lg border bg-background px-3 py-2 text-sm text-muted-foreground flex items-center gap-1.5">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Reading your project...
-              </div>
-            </div>
-          ) : null}
-
-          {send.data?.toolCalls?.length ? (
-            <div className="flex flex-wrap gap-1 ml-6">
-              {Array.from(new Set(send.data.toolCalls)).map((t) => (
-                <Badge key={t} variant="outline" className="text-[11px] gap-1">
-                  <Wrench className="h-2.5 w-2.5" />
-                  {t}
-                </Badge>
-              ))}
-            </div>
-          ) : null}
-
-          <div ref={bottomRef} />
+      {stateQuery.isLoading || !stateQuery.data ? (
+        <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">
+          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          Loading...
         </div>
-      </ScrollArea>
-
-      <form onSubmit={submit} className="border-t p-2 flex gap-1.5">
-        <Input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about your stack..."
-          className="h-9 text-sm"
-          disabled={send.isPending}
+      ) : (
+        <AssistantChat
+          threadId={stateQuery.data.threadId}
+          contextProjectId={projectId}
+          renderAssistant={renderAssistant}
+          placeholder="Ask about your stack… (Enter to send)"
+          emptyState={
+            <p className="px-4 pt-6 text-center text-sm text-muted-foreground">
+              Ask how to run this project — I can read your repos, search the code, propose node configs you can
+              apply to the canvas, and validate or repair the stack.
+            </p>
+          }
+          starters={[
+            "How do I run this project for development?",
+            "Which services does this stack need?",
+            "Set up the repos on the canvas for me",
+          ]}
         />
-        <Button
-          type="submit"
-          size="sm"
-          className="h-9 px-3"
-          disabled={!input.trim() || send.isPending}
-        >
-          {send.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-        </Button>
-      </form>
+      )}
     </div>
   );
 }

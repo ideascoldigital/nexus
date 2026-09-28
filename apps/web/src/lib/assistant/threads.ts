@@ -28,6 +28,7 @@ import {
   type LoopTool,
   type LoopToolCall,
 } from "./loop";
+import { stackAssistantInstructions } from "@/services/stack-assistant-agent";
 import { contextTools, mcpTools } from "./tools";
 import { watchTool } from "./watches";
 
@@ -55,14 +56,19 @@ type EventContent = {
   context?: { projectId?: string | null };
 };
 
-const INSTRUCTIONS = `You are the Nexus assistant, inside Nexux — a local-first orchestrator where AI agents build software in sandboxes. You act for the user through the tools below: you can see their projects, sandboxes and tasks, launch and pause sandboxes, give an agent a task, read how it is going, validate and repair a project's stack, and reset a sandbox's seed data.
+const INTRO = `You are the Nexus assistant, inside Nexux — a local-first orchestrator where AI agents build software in sandboxes. You act for the user through the tools below: you can see their projects, sandboxes and tasks, launch and pause sandboxes, give an agent a task, read how it is going, validate and repair a project's stack, and reset a sandbox's seed data.`;
 
-How to work:
+/** How to act — shared by general threads and the Stack tab's. */
+const RULES = `How to work:
 - Ground answers in tool results; do not guess ids, names or states — look them up.
 - Before a write, make sure you have what it needs (the project id, the sandbox that should run it). Ask the user when a choice is theirs to make (which project, cloud or local, which endpoint).
 - One write at a time. Do not ask for permission in prose: requesting a [WRITE] tool IS asking — the user gets a card with Run / Cancel. When the request is clear, request the tool directly.
 - A task runs for minutes to an hour and a sandbox takes minutes to come up. After one you started is accepted, call watch on it (a task until finished, a sandbox until running) unless the user said not to — you will be told here when it happens, and can report it then. Never claim it finished before that.
-- Be brief. Answer in the user's language.
+- Be brief. Answer in the user's language.`;
+
+const INSTRUCTIONS = `${INTRO}
+
+${RULES}
 
 {{FOCUS}}
 
@@ -117,7 +123,8 @@ export async function createThread(opts: { projectId?: string | null; scopes?: S
 
 export async function listThreads() {
   return prisma.assistantThread.findMany({
-    where: { workspaceId: DEFAULT_WORKSPACE_ID },
+    // The Stack tab's threads live in the Stack tab.
+    where: { workspaceId: DEFAULT_WORKSPACE_ID, mode: "general" },
     orderBy: { updatedAt: "desc" },
     select: { id: true, title: true, projectId: true, createdAt: true, updatedAt: true },
   });
@@ -172,16 +179,24 @@ export async function threadTools(thread: { id: string; scopes: unknown; project
   ];
 }
 
-export async function agentFor(thread: { projectId: string | null }, tools: LoopTool[], deps: AssistantDeps) {
+export async function agentFor(
+  thread: { projectId: string | null; mode?: string },
+  tools: LoopTool[],
+  deps: AssistantDeps,
+) {
   const project = thread.projectId
     ? await prisma.project.findUnique({ where: { id: thread.projectId }, select: { name: true } })
     : null;
+  const catalog = renderToolCatalog(tools);
+  // The Stack tab's thread keeps the Stack assistant's job and its
+  // apply-to-canvas suggestions, and can act like any thread.
+  const instructions =
+    thread.mode === "stack"
+      ? `${stackAssistantInstructions(catalog)}\n\n## Acting\n\n${RULES}\n\n${focusLine(thread.projectId, project?.name ?? null)}`
+      : INSTRUCTIONS.replace("{{FOCUS}}", focusLine(thread.projectId, project?.name ?? null)).replace("{{TOOLS}}", catalog);
   return deps.defineAgent({
-    name: "nexus-assistant",
-    instructions: INSTRUCTIONS.replace("{{FOCUS}}", focusLine(thread.projectId, project?.name ?? null)).replace(
-      "{{TOOLS}}",
-      renderToolCatalog(tools),
-    ),
+    name: thread.mode === "stack" ? "stack-assistant" : "nexus-assistant",
+    instructions,
     workspaceId: DEFAULT_WORKSPACE_ID,
   });
 }
@@ -267,8 +282,14 @@ export async function runThreadTurn(
   if (thread.actions.some((a) => a.status === "pending" || a.status === "running")) {
     throw new AssistantError("An action is waiting for your decision — run or cancel it first.", 409);
   }
-  // The page the message was sent from moves the thread's focus.
-  if (opts.context && opts.context.projectId !== undefined && opts.context.projectId !== thread.projectId) {
+  // The page the message was sent from moves a general thread's focus; a
+  // Stack tab thread belongs to its project.
+  if (
+    thread.mode !== "stack" &&
+    opts.context &&
+    opts.context.projectId !== undefined &&
+    opts.context.projectId !== thread.projectId
+  ) {
     await prisma.assistantThread.update({ where: { id: threadId }, data: { projectId: opts.context.projectId } });
     thread.projectId = opts.context.projectId ?? null;
   }
@@ -336,6 +357,44 @@ export async function cancelAction(threadId: string, actionId: string) {
     actionId,
   });
   return getThread(threadId);
+}
+
+/**
+ * The Stack tab's thread for a project — created on first use, with the
+ * Stack assistant's earlier conversation (sessionId stack-<projectId>)
+ * carried over as its opening events, verbatim, so nothing said there is lost.
+ */
+export async function stackThreadFor(projectId: string) {
+  const existing = await prisma.assistantThread.findFirst({
+    where: { projectId, mode: "stack", workspaceId: DEFAULT_WORKSPACE_ID },
+    orderBy: { createdAt: "asc" },
+  });
+  if (existing) return existing;
+  const thread = await prisma.assistantThread.create({
+    data: {
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      projectId,
+      mode: "stack",
+      title: "Stack assistant",
+      scopes: [...SCOPES] as unknown as Prisma.InputJsonValue,
+    },
+  });
+  const legacy = await prisma.conversation.findUnique({
+    where: { sessionId: `stack-${projectId}` },
+    include: { messages: { orderBy: { createdAt: "asc" } } },
+  });
+  for (const m of legacy?.messages ?? []) {
+    if (m.role !== "user" && m.role !== "assistant") continue;
+    await prisma.assistantEvent.create({
+      data: {
+        threadId: thread.id,
+        kind: m.role,
+        content: { text: m.content } as Prisma.InputJsonValue,
+        createdAt: m.createdAt,
+      },
+    });
+  }
+  return thread;
 }
 
 export async function deleteThread(threadId: string) {

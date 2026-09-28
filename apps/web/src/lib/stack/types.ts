@@ -250,8 +250,8 @@ export type StackAssistantMessage = {
 };
 
 export type StackAssistantState = {
-  conversationId: string;
-  messages: StackAssistantMessage[];
+  /** The project's Stack thread of the global assistant (spec 30). */
+  threadId: string;
   indexStatus: { indexed: boolean; count: number };
 };
 

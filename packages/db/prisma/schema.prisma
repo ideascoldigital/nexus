@@ -1235,6 +1235,9 @@ model AssistantThread {
   projectId   String?
   // Scope[] the thread's tools are limited to (packages/mcp SCOPES).
   scopes      Json
+  // "general" (the ⌘I panel) or "stack" (the Stack tab's assistant for
+  // projectId: its instructions, apply-to-canvas suggestions, one per project).
+  mode        String   @default("general")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1243,6 +1246,7 @@ model AssistantThread {
   watches AssistantWatch[]
 
   @@index([workspaceId])
+  @@index([projectId, mode])
 }
 
 /// The transcript, in order: user | assistant | tool_call | tool_result | action | watch_report | error.

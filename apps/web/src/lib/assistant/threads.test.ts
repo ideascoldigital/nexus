@@ -126,3 +126,46 @@ test("an action names what the user calls things, and keeps an unknown id as is"
     /for project galtex$/,
   );
 });
+
+// --- the Stack tab's thread ------------------------------------------------------
+
+test("a project's stack thread is made once, carrying the old Stack conversation over", async () => {
+  const { stackThreadFor, listThreads } = await import("./threads");
+  const ws = await prisma.workspace.upsert({ where: { id: "ws-default" }, create: { id: "ws-default", name: "Default" }, update: {} });
+  const project = await prisma.project.create({ data: { name: "stacky", workspaceId: ws.id } });
+  const conv = await prisma.conversation.create({ data: { projectId: project.id, sessionId: `stack-${project.id}` } });
+  await prisma.message.create({ data: { conversationId: conv.id, role: "user", content: "how do I run it?" } });
+  await prisma.message.create({ data: { conversationId: conv.id, role: "assistant", content: "pnpm dev" } });
+  await prisma.message.create({ data: { conversationId: conv.id, role: "tool_use", content: "ignored" } });
+
+  const first = await stackThreadFor(project.id);
+  const again = await stackThreadFor(project.id);
+  assert.equal(first.id, again.id, "one per project");
+  assert.equal(first.mode, "stack");
+  const events = await prisma.assistantEvent.findMany({ where: { threadId: first.id }, orderBy: { createdAt: "asc" } });
+  assert.deepEqual(events.map((e) => [e.kind, (e.content as { text: string }).text]), [
+    ["user", "how do I run it?"],
+    ["assistant", "pnpm dev"],
+  ]);
+  assert.ok(!(await listThreads()).some((t) => t.id === first.id), "the ⌘I list shows general threads only");
+});
+
+test("a stack thread runs with the Stack assistant's instructions and stays on its project", async () => {
+  const { stackThreadFor, runThreadTurn } = await import("./threads");
+  const ws = await prisma.workspace.upsert({ where: { id: "ws-default" }, create: { id: "ws-default", name: "Default" }, update: {} });
+  const project = await prisma.project.create({ data: { name: "stacky2", workspaceId: ws.id } });
+  const thread = await stackThreadFor(project.id);
+  let instructions = "";
+  const d: AssistantDeps = {
+    ctx: () => ({}) as NexuxContext,
+    defineAgent: async (spec) => {
+      instructions = spec.instructions;
+      return { run: async () => ({ message: "ok" }) };
+    },
+  };
+  await runThreadTurn(thread.id, "hi", { context: { projectId: "some-other-page" } }, d);
+  assert.match(instructions, /Stack Assistant/);
+  assert.match(instructions, /"suggestions"/, "apply-to-canvas suggestions keep working");
+  assert.match(instructions, /\[WRITE — needs the user's approval\]/, "and it can act, gated");
+  assert.equal((await prisma.assistantThread.findUniqueOrThrow({ where: { id: thread.id } })).projectId, project.id);
+});

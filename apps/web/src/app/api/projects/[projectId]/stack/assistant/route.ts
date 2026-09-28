@@ -1,12 +1,17 @@
 import { prisma } from "@nexux/db";
 import { NextRequest, NextResponse } from "next/server";
 
-import { initStackAssistant } from "@/services/stack-assistant-agent";
+import { stackThreadFor } from "@/lib/assistant/threads";
 
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ projectId: string }> };
 
+/**
+ * The Stack tab's assistant: the project's "stack" thread of the global
+ * assistant (spec 30), created on first use with the earlier Stack
+ * conversation carried over. Turns go through /api/assistant/threads.
+ */
 export async function GET(_req: NextRequest, { params }: Params) {
   const { projectId } = await params;
 
@@ -15,20 +20,13 @@ export async function GET(_req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
-  const [conversation, indexCount] = await Promise.all([
-    initStackAssistant(projectId),
+  const [thread, indexCount] = await Promise.all([
+    stackThreadFor(projectId),
     prisma.embeddingIndex.count({ where: { projectId } }),
   ]);
 
   return NextResponse.json({
-    conversationId: conversation.id,
-    messages: conversation.messages.map((m) => ({
-      id: m.id,
-      role: m.role,
-      agentRole: m.agentRole,
-      content: m.content,
-      createdAt: m.createdAt,
-    })),
+    threadId: thread.id,
     indexStatus: { indexed: indexCount > 0, count: indexCount },
   });
 }

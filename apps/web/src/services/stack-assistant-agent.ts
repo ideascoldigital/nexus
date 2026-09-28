@@ -91,6 +91,14 @@ Rules: use ONE of nodeId / repositoryId / createService per suggestion. Service 
 
 \`dependsOn\` lists what that node needs in order to boot, by node name. Always set it when you propose a service something uses: an api you gave a DATABASE_URL depends on the database, a worker depends on the queue. The arrows are not decoration — the harness starts services in that order and waits for the dependency to be healthy, so a missing one is a service that boots before the database it queries, and the user would otherwise have to draw every arrow by hand. Name the node as it appears on the canvas (or as you are naming it in this same reply); a name that matches nothing is dropped. Do not list a dependency that is merely related — only what must be up first.`;
 
+/**
+ * The Stack assistant's instructions with a tool catalogue in place — also
+ * what a "stack" thread of the global assistant runs with (spec 30).
+ */
+export function stackAssistantInstructions(toolCatalog: string): string {
+  return INSTRUCTIONS.replace("{{TOOLS}}", toolCatalog);
+}
+
 // --- agent ---
 // The agent is defined through the deps seam below, not here.
 
