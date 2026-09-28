@@ -32,6 +32,7 @@ import {
   localContainerExists,
   DEFAULT_SANDBOX_PREFIX,
   MAX_CUSTOM_NAME_LENGTH,
+  seedWaitSeconds,
   terraformAvailable,
   type ProviderCredentials,
   type SandboxProvider,
@@ -1274,7 +1275,11 @@ async function runLocalProvision(
       );
     }
 
-    const deadline = Date.now() + 20 * 60_000;
+    // A seed's restore runs inside the bootstrap, after its file arrives: the
+    // same per-size allowance its step waits for, on top of the usual 20 min.
+    const seedAllowanceMs = seeds.reduce((ms, s) => ms + (seedWaitSeconds(s.spec.sizeBytes) - 900) * 1000, 0);
+    const budgetMs = 20 * 60_000 + seedAllowanceMs;
+    const deadline = Date.now() + budgetMs;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 10_000));
       if (!(await localSandboxRunning(containerName, target))) {
@@ -1295,7 +1300,7 @@ async function runLocalProvision(
         return;
       }
     }
-    throw new Error("bootstrap did not finish within 20 minutes");
+    throw new Error(`bootstrap did not finish within ${Math.round(budgetMs / 60_000)} minutes`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.append(`[nexux] ERROR: ${message}`);

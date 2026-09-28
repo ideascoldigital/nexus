@@ -77,6 +77,14 @@ const RESTORE: Record<SeedFormat, string> = {
 /** Password env the container needs for TCP to its own postgres. */
 const PG_PASSWORD = `PGPASSWORD="\${POSTGRES_PASSWORD:-}"`;
 
+/**
+ * A restore's commits don't wait for the WAL flush. A plain dump made with
+ * `--inserts` is one autocommitted statement per row, and each would wait on
+ * an fsync: a 1 GB dump measured under 3 MB/min that way. Losing the tail of
+ * a restore to a crash costs nothing here — the seed is still on disk.
+ */
+const PG_FAST_COMMIT = `PGOPTIONS="-c synchronous_commit=off"`;
+
 const WAIT_READY = (format: SeedFormat) =>
   `i=0; until ${READY[format]}; do i=$((i+1)); [ $i -ge 90 ] && { echo "service not ready after 180s" >&2; exit 1; }; sleep 2; done; `;
 
@@ -106,7 +114,7 @@ function PG_RECREATE(): string {
 }
 
 function restoreInContainer(format: SeedFormat, recreate = false): string {
-  const pg = format === "pg-sql" || format === "pg-custom" ? `export ${PG_PASSWORD}; ` : "";
+  const pg = format === "pg-sql" || format === "pg-custom" ? `export ${PG_PASSWORD} ${PG_FAST_COMMIT}; ` : "";
   return `${pg}${WAIT_READY(format)}${recreate ? RECREATE[format] : ""}${RESTORE[format]}`;
 }
 

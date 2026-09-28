@@ -39,6 +39,13 @@ test("each format uses its own client", () => {
   assert.ok(!f("pg-sql").includes("gunzip"), "a plain file is read as is");
 });
 
+test("postgres restores don't wait on a WAL flush per commit", () => {
+  const f = (format: SandboxSeedSpec["format"]) => renderSeedRestore([{ ...pg, format, gzipped: false }]);
+  assert.ok(f("pg-sql").includes("synchronous_commit=off"), "a --inserts dump is one commit per row");
+  assert.ok(f("pg-custom").includes("synchronous_commit=off"));
+  assert.ok(!f("mysql-sql").includes("synchronous_commit"));
+});
+
 test("a bigger seed waits longer", () => {
   assert.equal(seedWaitSeconds(0), 900);
   assert.equal(seedWaitSeconds(250 * 1024 * 1024), 900 + 3 * 60);
