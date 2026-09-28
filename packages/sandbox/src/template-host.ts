@@ -150,8 +150,11 @@ export function isValidImageRef(ref: string): boolean {
  * The Nexux service's environment, shared by both compose modes so the app
  * cannot be configured one way on a VM host and another on an endpoint host.
  */
-function nexuxEnvironment(extra: string): string {
+function nexuxEnvironment(imageRef: string, extra: string): string {
   return `      PORT: "3030"
+      # The image this host runs — how its own Settings knows its release
+      # channel. The updater rewrites it together with \`image:\` on a switch.
+      NEXUX_IMAGE: "${imageRef}"
       DATABASE_URL: "file:/data/dashboard.db"
       NEXUX_MIGRATIONS_DIR: "/app/prisma/migrations"
       NEXUX_DATA_DIR: "/data"
@@ -208,7 +211,7 @@ services:
       - "\${NEXUX_BIND}:3030:3030"
       - "\${NEXUX_BIND}:3002:3002"
     environment:
-${nexuxEnvironment("")}
+${nexuxEnvironment(spec.imageRef, "")}
     env_file:
       - path: .env
         required: false
@@ -240,6 +243,30 @@ export function endpointHostProject(name: string): string {
 }
 
 /**
+ * Shell run by both updaters before pulling: when the request file names a
+ * release channel (`channel=edge|latest`, written by the host's own
+ * Settings), repoint this host's app image at it. The current image is read
+ * from its NEXUX_IMAGE line and replaced as an exact string everywhere in the
+ * compose file — the `image:` line and NEXUX_IMAGE together — so no other
+ * service's image (tailscale, ollama) can be touched.
+ */
+export function renderChannelSwitch(requestFile: string, composeFile: string): string {
+  return `CH=$(grep -o 'channel=[a-z]*' ${requestFile} 2>/dev/null | head -1 | cut -d= -f2)
+case "$CH" in
+  edge|latest)
+    CUR=$(grep -o 'NEXUX_IMAGE: "[^"]*"' ${composeFile} | head -1 | cut -d'"' -f2)
+    if [ -n "$CUR" ] && [ "\${CUR%:*}:$CH" != "$CUR" ]; then
+      NEW="\${CUR%:*}:$CH"
+      sed "s#$CUR#$NEW#g" ${composeFile} > ${composeFile}.nexux-tmp && mv ${composeFile}.nexux-tmp ${composeFile}
+      echo "[nexus-update] channel: $CUR -> $NEW"
+    elif [ -z "$CUR" ]; then
+      echo "[nexus-update] WARN: no NEXUX_IMAGE in ${composeFile} — channel not switched; update once from the install that created this host"
+    fi
+    ;;
+esac`;
+}
+
+/**
  * The self-updater an endpoint host runs as its `updater` service (spec 27
  * phase 5) — the endpoint's stand-in for a VM host's root systemd unit.
  *
@@ -260,9 +287,10 @@ C="docker compose -p ${project} -f /config/compose.yml --env-file /config/.env"
 SERVICES="tailscale nexux ollama"
 while :; do
   if [ -f /control/update-requested ]; then
-    rm -f /control/update-requested
     {
       echo "[nexus-update] started $(date -Iseconds)"
+${renderChannelSwitch("/control/update-requested", "/config/compose.yml")}
+      rm -f /control/update-requested
       echo "[nexus-update] reclaiming space from superseded images"
       docker image prune -f
       if $C pull $SERVICES; then
@@ -322,7 +350,7 @@ services:
     # Its only network is the tailnet node's.
     network_mode: service:tailscale
     environment:
-${nexuxEnvironment(`
+${nexuxEnvironment(spec.imageRef, `
       # Runs on a Docker endpoint; updates go through the updater service.
       NEXUX_HOST_KIND: "endpoint"`)}
     volumes:
@@ -553,11 +581,12 @@ cat > ${HOST_DIR}/update.sh <<'NEXUS_UPDATE_EOF'
 # it. \`up -d\` recreates only the containers whose image changed.
 set -u
 exec >> ${HOST_UPDATE_LOG} 2>&1
-# Consumed first: the path unit triggers on this file existing, so leaving it
-# in place would re-fire the unit for as long as it is there.
-rm -f ${HOST_UPDATE_REQUEST}
 echo "[nexus-update] started $(date -Is)"
 cd ${HOST_DIR} || exit 1
+${renderChannelSwitch(HOST_UPDATE_REQUEST, `${HOST_DIR}/docker-compose.yml`)}
+# Consumed before the pull: the path unit triggers on this file existing, so
+# leaving it in place would re-fire the unit for as long as it is there.
+rm -f ${HOST_UPDATE_REQUEST}
 
 # Every update leaves the superseded image behind, and nothing else on the host
 # collects them: left alone they fill the disk and the *next* pull dies half way

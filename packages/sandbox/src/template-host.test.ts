@@ -702,3 +702,44 @@ test("the app is configured the same on a VM host and an endpoint host", () => {
   assert.ok(vm.length >= 8, vm.join("\n"));
   assert.deepEqual(envOf(endpointCompose()), vm);
 });
+
+// --- release channel switch from the host's own Settings -------------------------
+
+import { execFileSync } from "node:child_process";
+import nodeFs from "node:fs";
+import nodeOs from "node:os";
+import nodePath from "node:path";
+import { renderChannelSwitch } from "./template-host";
+
+function runSwitch(request: string) {
+  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), "chan-"));
+  const compose = nodePath.join(dir, "compose.yml");
+  const req = nodePath.join(dir, "update-requested");
+  nodeFs.writeFileSync(
+    compose,
+    renderHostCompose({ imageRef: "ghcr.io/o/nexus:latest", mode: "endpoint", name: "box" }),
+  );
+  nodeFs.writeFileSync(req, request);
+  const out = execFileSync("sh", ["-c", renderChannelSwitch(req, compose)]).toString();
+  return { out, file: nodeFs.readFileSync(compose, "utf8") };
+}
+
+test("a channel request repoints only the app's image, and its NEXUX_IMAGE", () => {
+  const { out, file } = runSwitch("2026-09-28T00:00:00Z\nchannel=edge\n");
+  assert.match(out, /channel: ghcr.io\/o\/nexus:latest -> ghcr.io\/o\/nexus:edge/);
+  assert.match(file, /image: ghcr.io\/o\/nexus:edge/);
+  assert.match(file, /NEXUX_IMAGE: "ghcr.io\/o\/nexus:edge"/);
+  assert.match(file, /image: ollama\/ollama:latest/, "other services untouched");
+  assert.doesNotMatch(file, /nexus:latest/);
+});
+
+test("a plain update request changes nothing in the compose file", () => {
+  const { out, file } = runSwitch("2026-09-28T00:00:00Z\n");
+  assert.equal(out, "");
+  assert.match(file, /image: ghcr.io\/o\/nexus:latest/);
+});
+
+test("a channel outside edge/latest is ignored", () => {
+  const { file } = runSwitch("channel=0.1.0\n");
+  assert.match(file, /image: ghcr.io\/o\/nexus:latest/);
+});

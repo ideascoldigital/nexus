@@ -470,9 +470,12 @@ function SelfUpdateCard() {
     }
   }, [pending, data, dataUpdatedAt, queryClient, toast]);
 
+  // A channel picked but not yet confirmed — switching pulls and restarts.
+  const [switchTo, setSwitchTo] = useState<HostChannel | null>(null);
   const update = useMutation({
-    mutationFn: selfUpdate,
+    mutationFn: (channel?: HostChannel) => selfUpdate(channel),
     onSuccess: (res) => {
+      setSwitchTo(null);
       toast({
         title: res.ok ? "Updating" : "Could not update",
         description: res.message,
@@ -524,8 +527,55 @@ function SelfUpdateCard() {
             " — this image predates version reporting; updating fixes that."}
         </p>
 
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Release channel</span>
+            <div className="flex rounded-md border p-0.5" role="group" aria-label="Release channel">
+              {HOST_CHANNELS.map((c) => (
+                <button
+                  key={c.value}
+                  type="button"
+                  title={c.detail}
+                  disabled={busy || !data?.image}
+                  onClick={() => setSwitchTo(c.value === data?.channel ? null : c.value)}
+                  className={`rounded px-2.5 py-0.5 text-xs transition-colors disabled:opacity-50 ${
+                    (switchTo ?? data?.channel) === c.value
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            {data?.image ? (
+              <span className="truncate font-mono text-xs text-muted-foreground">{data.image}</span>
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                Update once from the install that created this host to enable switching here.
+              </span>
+            )}
+          </div>
+          {switchTo && data?.image && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-xs">
+              <span className="text-muted-foreground">
+                Switch to <code className="font-mono">{withChannel(data.image, switchTo)}</code>, pull it and
+                restart.
+                {switchTo === "latest" &&
+                  " If Edge is ahead of the last release, this runs older code on a database newer code may have migrated."}
+              </span>
+              <Button size="sm" className="h-6 px-2 text-xs" disabled={busy} onClick={() => update.mutate(switchTo)}>
+                Switch
+              </Button>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={busy} onClick={() => setSwitchTo(null)}>
+                Cancel
+              </Button>
+            </div>
+          )}
+        </div>
+
         <div className="flex items-center gap-2">
-          <Button onClick={() => update.mutate()} disabled={busy}>
+          <Button onClick={() => update.mutate(undefined)} disabled={busy}>
             {busy ? (
               <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
             ) : (

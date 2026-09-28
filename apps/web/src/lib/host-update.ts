@@ -30,7 +30,7 @@ import {
 } from "@nexux/sandbox";
 import { getConfig } from "@nexux/config";
 
-import { composeImageSwapScript } from "@/lib/host-channel";
+import { channelOf, composeImageSwapScript, withChannel, type HostChannel } from "@/lib/host-channel";
 import { hostSshAddress, hostSshUser } from "@/lib/host-ssh";
 
 /** Where the control directory is mounted inside the host's own container. */
@@ -63,10 +63,20 @@ export function isHostInstall(): boolean {
  * coming back, which is why the message says so rather than pretending the
  * operation completed.
  */
-export async function requestSelfUpdate(): Promise<HostUpdateResult> {
+export async function requestSelfUpdate(channel?: HostChannel): Promise<HostUpdateResult> {
   const request = `${CONTROL_MOUNT}/update-requested`;
+  if (channel && !process.env.NEXUX_IMAGE) {
+    // The updater finds the image to repoint through NEXUX_IMAGE; a host
+    // whose compose file predates it would silently update on its old tag.
+    return {
+      ok: false,
+      message:
+        "This host can't switch channel by itself yet. Update it once from the install that created it (Settings → Backup & migration) — that refreshes its setup, and from then on the switch works here.",
+    };
+  }
   try {
-    await fs.writeFile(request, `${new Date().toISOString()}\n`);
+    // The updater reads `channel=` from this file before pulling (template-host.ts).
+    await fs.writeFile(request, `${new Date().toISOString()}\n${channel ? `channel=${channel}\n` : ""}`);
   } catch (err) {
     // The mount is missing on a host provisioned before self-update existed.
     // Say which command brings it back rather than failing blankly.
@@ -91,6 +101,12 @@ export async function requestSelfUpdate(): Promise<HostUpdateResult> {
     message:
       "Update requested. The app restarts as part of it, so this page will drop out for a minute — reload once it comes back.",
   };
+}
+
+/** This host's image and channel, from its own NEXUX_IMAGE. */
+export function selfImage(): { image: string | null; channel: HostChannel | null } {
+  const image = process.env.NEXUX_IMAGE?.trim() || null;
+  return { image, channel: image ? channelOf(image) : null };
 }
 
 /** The last thing the on-host updater printed, if it has ever run. */
@@ -119,6 +135,16 @@ export async function updateHost(
       `This host is ${found.status}, not running — there is nothing to update yet.`,
     );
   }
+  // A channel may have been switched from the host's own Settings since this
+  // install last looked. Adopt what it reports, or this update would re-render
+  // its compose file with the old tag and quietly switch it back.
+  if (!opts.imageRef) {
+    const reported = await reportedImage(found);
+    if (reported && reported !== found.imageRef && withChannel(reported, "edge") === withChannel(found.imageRef, "edge")) {
+      await prisma.nexusHost.update({ where: { id: hostId }, data: { imageRef: reported } });
+      found.imageRef = reported;
+    }
+  }
   const imageRef = opts.imageRef?.trim() || found.imageRef;
   const switching = imageRef !== found.imageRef;
   const host = { ...found, imageRef };
@@ -137,6 +163,19 @@ export async function updateHost(
  * `up -d` still races the connection — recreating the container does not touch
  * sshd, so unlike the self-update path the command survives its own effect.
  */
+/** The image a running host says it runs, over the tailnet; null when it can't say. */
+async function reportedImage(host: { tailscaleIp: string | null }): Promise<string | null> {
+  if (!host.tailscaleIp) return null;
+  try {
+    const res = await fetch(`http://${host.tailscaleIp}:3030/api/version`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { image?: unknown };
+    return typeof body.image === "string" && body.image.trim() ? body.image.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function updateHostRow(
   host: NonNullable<Awaited<ReturnType<typeof prisma.nexusHost.findUnique>>>,
   /** The image being switched away from, when switching; null otherwise. */

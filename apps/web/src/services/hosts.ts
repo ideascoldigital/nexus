@@ -197,8 +197,12 @@ export async function updateHost(
  * The app restarts as part of it, so the request being accepted is all the
  * caller ever learns; the result arrives as the page coming back.
  */
-export async function selfUpdate(): Promise<HostUpdateResult> {
-  const res = await fetch("/api/hosts/self-update", { method: "POST" });
+export async function selfUpdate(channel?: "edge" | "latest"): Promise<HostUpdateResult> {
+  const res = await fetch("/api/hosts/self-update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(channel ? { channel } : {}),
+  });
   if (!res.ok) throw new Error(await errorFrom(res));
   return res.json();
 }
@@ -207,6 +211,9 @@ export async function selfUpdate(): Promise<HostUpdateResult> {
 export async function getSelfUpdateLog(): Promise<{
   log: string | null;
   isHost: boolean;
+  /** This host's image and release channel (null for a custom tag or an old host). */
+  image?: string | null;
+  channel?: "edge" | "latest" | null;
 }> {
   const res = await fetch("/api/hosts/self-update");
   if (!res.ok) throw new Error(await errorFrom(res));

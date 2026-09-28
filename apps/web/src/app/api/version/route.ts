@@ -35,6 +35,12 @@ export type AppVersion = {
   releaseUrl: string;
   /** True inside the native app (sidecar) — set by its start.js. */
   native: boolean;
+  /**
+   * The image a Nexus host runs (its NEXUX_IMAGE), e.g. …/nexus:edge — how the
+   * install that manages it learns a channel switched from the host's own
+   * Settings. Null anywhere else.
+   */
+  image: string | null;
 };
 
 export async function GET() {
@@ -60,6 +66,7 @@ export async function GET() {
     // whole string linked to a 404 on GitHub.
     releaseUrl: `${REPO_URL}/releases/tag/v${releaseOf(version)}`,
     native: process.env.NEXUX_NATIVE === "1",
+    image: process.env.NEXUX_IMAGE?.trim() || null,
   };
   return NextResponse.json(body);
 }
