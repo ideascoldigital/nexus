@@ -33,7 +33,7 @@ product just never asks.
 ```ts
 type CredentialCheck = {
   status: "ok" | "warn" | "fail";   // fail: unusable. warn: works, but not for everything
-  identity: string | null;          // "jairoFernandez", "AWS 1234…/role", "Civo account ideas"
+  identity: string | null;          // "octocat", "AWS 1234…/role", "Civo account ideas"
   expiresAt: string | null;         // when the provider says
   scopes: string[] | null;          // null when the provider cannot list them
   checks: Array<{ label: string; ok: boolean | null; detail?: string }>;
@@ -44,7 +44,7 @@ type CredentialCheck = {
 `checks` is the useful part: one line per capability that matters *to
 Nexux*, with `ok: null` for "cannot be told from here" (never guessed as
 true or false). Examples: "clone private repos (`repo`)", "pull
-ghcr.io/ideascoldigital/nexus:edge", "push to galtex-invoice-sync-lambda".
+ghcr.io/ideascoldigital/nexus:edge", "push to acme-invoice-sync".
 
 The last result is stored on the row (`CloudCredential.lastCheck Json?`,
 `lastCheckedAt DateTime?`), so the list shows a status dot without
@@ -145,7 +145,7 @@ unit-tested against recorded responses without a network.
 
 Spec 26 lets a local sandbox run on another machine's Docker. The endpoint
 probe (reachable, not rootless) says the daemon answers; it cannot say the
-sandbox will *work* there. The case that prompted this: on `omarchy`,
+sandbox will *work* there. The case that prompted this: on `devbox`,
 `daemon.json` pins container DNS to `172.17.0.1`, which only the default
 bridge can reach — every container on a compose-style network has no DNS, so
 a sandbox there could never clone, install or reach an API. Nothing said so.
@@ -194,6 +194,6 @@ result uses the same `CredentialCheck` shape and is stored on the endpoint
   message only on an explicit rejection (a line `… accepts it` failing) —
   the pre-commit test gate caught a first cut that also did it when the
   provider was merely unreachable.
-- Run on real data: the galtex project's selected git token is one GitHub
+- Run on real data: the acme project's selected git token is one GitHub
   rejects — its sandboxes would fail to clone — and the working token can
   push to all four of its repos and pull the host image.

@@ -261,7 +261,7 @@ test("powering another workspace's sandbox is refused", async () => {
 
 test("a sandbox says where it runs", () => {
   assert.equal(sandboxRunsOn({ provider: "local", region: "local", dockerHost: null }), "this machine");
-  assert.equal(sandboxRunsOn({ provider: "local", region: "omarchy", dockerHost: "ssh://omarchy" }), "omarchy");
+  assert.equal(sandboxRunsOn({ provider: "local", region: "devbox", dockerHost: "ssh://devbox" }), "devbox");
   assert.equal(sandboxRunsOn({ provider: "civo", region: "lon1", dockerHost: null }), "civo lon1");
 });
 

@@ -343,10 +343,10 @@ test("launch passes the chosen Docker endpoint through, and leaves it out when o
     },
   });
   const launch = TOOLS.find((t) => t.name === "nexux_launch_sandbox")!;
-  await launch.run(ctx, launch.parse({ projectId: "p", provider: "local", dockerEndpoint: "omarchy" }));
+  await launch.run(ctx, launch.parse({ projectId: "p", provider: "local", dockerEndpoint: "devbox" }));
   await launch.run(ctx, launch.parse({ projectId: "p" }));
   assert.deepEqual(seen, [
-    { projectId: "p", provider: "local", name: undefined, dockerEndpoint: "omarchy" },
+    { projectId: "p", provider: "local", name: undefined, dockerEndpoint: "devbox" },
     { projectId: "p", provider: undefined, name: undefined, dockerEndpoint: undefined },
   ]);
 });

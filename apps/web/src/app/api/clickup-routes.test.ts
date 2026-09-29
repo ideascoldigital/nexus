@@ -238,10 +238,10 @@ test("start redirects to ClickUp with client id, callback url and a stored state
 // value, or the round-trip is unfixable by the operator.
 test("the deployed origin drives redirect_uri, and Settings quotes the same URL", async () => {
   const saved = process.env.NEXUX_WEB_ORIGIN;
-  process.env.NEXUX_WEB_ORIGIN = "http://100.74.224.26:3030";
+  process.env.NEXUX_WEB_ORIGIN = "http://100.64.0.20:3030";
   try {
     await configure();
-    const expected = "http://100.74.224.26:3030/api/clickup/oauth/callback";
+    const expected = "http://100.64.0.20:3030/api/clickup/oauth/callback";
 
     const location = new URL((await start()).headers.get("location")!);
     assert.equal(location.searchParams.get("redirect_uri"), expected);

@@ -86,10 +86,10 @@ function fakeDocker(byHost: Record<string, { ps: string; stats: string } | "down
 test("each daemon's sandboxes are measured through that daemon and labelled with it", async () => {
   const docker = fakeDocker({
     local: { ps: "nexux-a\n", stats: "nexux-a|1.00%|100MiB / 1GiB|10.00%\n" },
-    "ssh://omarchy": { ps: "nexux-b\n", stats: "nexux-b|50.00%|2GiB / 21GiB|9.50%\n" },
+    "ssh://devbox": { ps: "nexux-b\n", stats: "nexux-b|50.00%|2GiB / 21GiB|9.50%\n" },
   });
   const res = await collectSandboxMetrics({
-    endpoints: [{ endpointId: "ep1", name: "omarchy", host: "ssh://omarchy" }],
+    endpoints: [{ endpointId: "ep1", name: "devbox", host: "ssh://devbox" }],
     run: docker.run,
   });
   assert.deepEqual(
@@ -101,25 +101,25 @@ test("each daemon's sandboxes are measured through that daemon and labelled with
   );
   // The remote's stats were asked of the remote, never of this machine.
   assert.ok(
-    docker.calls.some((c) => c[0] === "-H" && c[1] === "ssh://omarchy" && c[2] === "stats"),
+    docker.calls.some((c) => c[0] === "-H" && c[1] === "ssh://devbox" && c[2] === "stats"),
   );
   assert.deepEqual(res.daemons, [
     { endpointId: null, name: "This machine", reachable: true },
-    { endpointId: "ep1", name: "omarchy", reachable: true },
+    { endpointId: "ep1", name: "devbox", reachable: true },
   ]);
 });
 
 test("a daemon that does not answer is reported unreachable, and the others still show", async () => {
   const docker = fakeDocker({
     local: { ps: "nexux-a\n", stats: "nexux-a|1.00%|100MiB / 1GiB|10.00%\n" },
-    "ssh://omarchy": "down",
+    "ssh://devbox": "down",
   });
   const res = await collectSandboxMetrics({
-    endpoints: [{ endpointId: "ep1", name: "omarchy", host: "ssh://omarchy" }],
+    endpoints: [{ endpointId: "ep1", name: "devbox", host: "ssh://devbox" }],
     run: docker.run,
   });
   assert.deepEqual(res.sandboxes.map((s) => s.name), ["nexux-a"]);
-  // "omarchy has no sandboxes" and "omarchy did not answer" are different
+  // "devbox has no sandboxes" and "devbox did not answer" are different
   // facts; only the second is true here.
   assert.equal(res.daemons[1].reachable, false);
 });

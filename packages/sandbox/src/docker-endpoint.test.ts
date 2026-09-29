@@ -11,13 +11,13 @@ import {
 } from "./docker-endpoint";
 
 test("accepts ssh endpoints and normalises them", () => {
-  assert.deepEqual(parseDockerHost("ssh://jairo@workstation"), {
+  assert.deepEqual(parseDockerHost("ssh://dev@workstation"), {
     ok: true,
-    host: "ssh://jairo@workstation",
+    host: "ssh://dev@workstation",
   });
-  assert.deepEqual(parseDockerHost("  ssh://jairo@Box.tail1234.ts.net:2222/ "), {
+  assert.deepEqual(parseDockerHost("  ssh://dev@Box.tail1234.ts.net:2222/ "), {
     ok: true,
-    host: "ssh://jairo@box.tail1234.ts.net:2222",
+    host: "ssh://dev@box.tail1234.ts.net:2222",
   });
   // The user can come from ~/.ssh/config.
   assert.deepEqual(parseDockerHost("ssh://10.0.0.5"), { ok: true, host: "ssh://10.0.0.5" });
@@ -85,9 +85,9 @@ test("probe failures carry a hint and the raw stderr", () => {
   );
   assert.match(msg, /docker group/);
   assert.match(msg, /permission denied while trying/);
-  assert.match(explainProbeFailure("jairo@box: Permission denied (publickey)."), /authorized_keys/);
+  assert.match(explainProbeFailure("dev@box: Permission denied (publickey)."), /authorized_keys/);
   const changed = explainProbeFailure(
-    "Offending ECDSA key in /Users/me/.ssh/known_hosts:7\r\nHost key for 192.168.0.35 has changed and you have requested strict checking.\r\nHost key verification failed.",
+    "Offending ECDSA key in /Users/me/.ssh/known_hosts:7\r\nHost key for 192.168.1.35 has changed and you have requested strict checking.\r\nHost key verification failed.",
   );
   assert.match(changed, /host key changed/);
   assert.doesNotMatch(changed, /isn't trusted yet/);
@@ -168,8 +168,8 @@ test("a missing docker CLI on this machine is named as such", async () => {
 });
 
 test("sshUrlParts takes an endpoint host apart for ssh itself", () => {
-  assert.deepEqual(sshUrlParts("ssh://omarchy"), { user: null, hostname: "omarchy", port: null });
-  assert.deepEqual(sshUrlParts("ssh://jairo@box:2222"), { user: "jairo", hostname: "box", port: 2222 });
+  assert.deepEqual(sshUrlParts("ssh://devbox"), { user: null, hostname: "devbox", port: null });
+  assert.deepEqual(sshUrlParts("ssh://dev@box:2222"), { user: "dev", hostname: "box", port: 2222 });
   assert.deepEqual(sshUrlParts("ssh://root@[fd7a::1]"), { user: "root", hostname: "fd7a::1", port: null });
   assert.equal(sshUrlParts("tcp://box:2375"), null);
 });

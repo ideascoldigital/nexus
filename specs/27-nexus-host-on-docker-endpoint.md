@@ -203,7 +203,7 @@ hosts.
 - `updateHost` endpoint branch runs `pull` + `up -d`, never `down`.
 - Destroy runs `down --volumes` with the project name, and only after the
   row is `destroying`.
-- Manual, end to end on `omarchy`: create → reach it over the tailnet →
+- Manual, end to end on `devbox`: create → reach it over the tailnet →
   export/import configuration onto it → update to a new tag (data survives)
   → destroy (device and volumes gone). Confirm with `ss -ltnp` on the
   endpoint that nothing new listens on the LAN.
@@ -268,12 +268,12 @@ hosts.
 
 ## As built (phase 4 — the walk on a real endpoint)
 
-On `omarchy` (x86_64, Docker 29, reached as `ssh://omarchy`):
+On `devbox` (x86_64, Docker 29, reached as `ssh://devbox`):
 
 - **The precondition caught the real failure first.** Three saved GitHub
   tokens were refused before any row existed — none had `read:packages` —
   naming the missing scope. With a token that had it, the host was created.
-- **Bootstrap:** pull → tailscale → tailnet address `100.91.253.127` →
+- **Bootstrap:** pull → tailscale → tailnet address `100.64.0.30` →
   app healthy → `running`, MagicDNS `nexus-e2e.<tailnet>.ts.net`. The app
   answered over the tailnet from another machine.
 - **Nothing on the LAN:** `ss -ltn` on the endpoint showed nothing on
@@ -311,7 +311,7 @@ stack*:
 - **Hosts from before phase 5** gain the updater the first time they are
   updated from the install that created them; until then their button says so.
 
-Walked on `omarchy`: an update from here recreated the stack with the updater
+Walked on `devbox`: an update from here recreated the stack with the updater
 (data survived: projects still there), its files arrived `600`, `/control`
 `1777`; a note written as `nexux` inside the app container was consumed and
 the stack pulled and recreated, logged in the VM format.
@@ -324,16 +324,16 @@ Status: **draft** (2026-09-28).
 
 A host on a Docker endpoint cannot launch a local sandbox. Asked to, it says
 "Docker is not available … start Docker Desktop" — advice for a laptop, not
-a container on omarchy. The obvious fix, registering omarchy as an endpoint
+a container on devbox. The obvious fix, registering devbox as an endpoint
 from the host's own Settings, cannot work today, for three reasons:
 
 1. **No `docker` client in the image.** The Dockerfile installs
    `openssh-client`, `git` and `terraform` only, and says why: the local
    provider "is deliberately NOT supported in this image".
-2. **No key omarchy accepts.** `docker -H ssh://…` runs the system `ssh`,
+2. **No key devbox accepts.** `docker -H ssh://…` runs the system `ssh`,
    which on the laptop finds the user's own key and `~/.ssh/config`. The
    container has neither.
-3. **`ssh://omarchy` is a laptop alias.** It resolves through the laptop's
+3. **`ssh://devbox` is a laptop alias.** It resolves through the laptop's
    `~/.ssh/config`; inside the container it names nothing.
 
 Mounting the endpoint's docker socket into the app stays out — it is
@@ -347,8 +347,8 @@ address it can reach.
 host's Settings → Docker endpoints
   "This host's SSH key"  ssh-ed25519 AAAA… nexus-host-nexus-e2e   [Copy]
   "Run on the target:    echo '<key>' >> ~/.ssh/authorized_keys"
-  Add endpoint: ssh://jairo@192.168.0.35      → probe → endpoint row
-launch (local) ──docker -H ssh://jairo@192.168.0.35──▶ omarchy's dockerd ──▶ sandbox container
+  Add endpoint: ssh://dev@192.168.1.35      → probe → endpoint row
+launch (local) ──docker -H ssh://dev@192.168.1.35──▶ devbox's dockerd ──▶ sandbox container
 ```
 
 ### Pieces
@@ -377,7 +377,7 @@ launch (local) ──docker -H ssh://jairo@192.168.0.35──▶ omarchy's docke
    (spec 28) covers DNS, privileged containers and disk space.
 5. **Reachability** — the app shares the Tailscale sidecar's network
    namespace. In userspace mode that namespace reaches the LAN through the
-   compose bridge, so an address like 192.168.0.35 works — as long as the
+   compose bridge, so an address like 192.168.1.35 works — as long as the
    target's firewall lets the bridge in (see As built, step 3: packets arrive
    from the stack's `10.201.x.0/24`, not from the LAN). Tailnet addresses
    do not work from there without Tailscale's proxy. The address hint says
@@ -423,7 +423,7 @@ launch (local) ──docker -H ssh://jairo@192.168.0.35──▶ omarchy's docke
    the startup `Include`. Unit tests for the config block and the key.
 2. Settings on a host: key card, address hint, picker without "This
    machine", the host-specific error.
-3. The walk: from omarchy's own host, register `ssh://jairo@192.168.0.35`,
+3. The walk: from devbox's own host, register `ssh://dev@192.168.1.35`,
    run Test for sandboxes, launch a local sandbox, open its terminal, destroy
    it.
 
@@ -463,22 +463,22 @@ launch (local) ──docker -H ssh://jairo@192.168.0.35──▶ omarchy's docke
   amber note links to Settings. The launch error on a host names the fix
   instead of Docker Desktop.
 - On a laptop nothing changes; checked in the browser (no key card, no
-  console errors). The host view is walked in step 3, on omarchy's host.
+  console errors). The host view is walked in step 3, on devbox's host.
 
-### As built (phase 6, step 3 — the walk on omarchy's own host)
+### As built (phase 6, step 3 — the walk on devbox's own host)
 
 - **Reachability:** the first probe timed out. sshd listened on `0.0.0.0:22`,
-  but omarchy's ufw (`DEFAULT_INPUT_POLICY=DROP`) only allowed 22 from
-  `192.168.0.0/24`, and the host's packets arrive from its compose bridge
+  but devbox's ufw (`DEFAULT_INPUT_POLICY=DROP`) only allowed 22 from
+  `192.168.1.0/24`, and the host's packets arrive from its compose bridge
   (`10.201.1.0/24`) — the kernel log showed `[UFW BLOCK] SRC=10.201.1.3
-  DST=192.168.0.35 DPT=22`. One rule on the target fixed it:
+  DST=192.168.1.35 DPT=22`. One rule on the target fixed it:
   `ufw allow from 10.201.0.0/16 to any port 22 proto tcp`. Nothing in Nexus
   changed; a target with a default-deny firewall needs the same line.
-- **Register + test:** `ssh://jairo@192.168.0.35` probed as Docker 29.7.2,
+- **Register + test:** `ssh://dev@192.168.1.35` probed as Docker 29.7.2,
   x86_64, 31 GB; "Test for sandboxes" passed all six checks.
-- **Wizard:** Which Docker showed only omarchy, picked by default, no "This
-  machine". The sandbox row read "local · docker @ omarchy".
-- **Launch:** the container came up on omarchy and the 947 MB galtex seed
+- **Wizard:** Which Docker showed only devbox, picked by default, no "This
+  machine". The sandbox row read "local · docker @ devbox".
+- **Launch:** the container came up on devbox and the 947 MB acme seed
   was pushed in 3 s — then the launch failed at the 20-minute deadline while
   the seed was still restoring (spec 29's issue, not this phase's): the dump
   is one autocommitted INSERT per row and each waited on a WAL fsync
@@ -486,14 +486,14 @@ launch (local) ──docker -H ssh://jairo@192.168.0.35──▶ omarchy's docke
   seeds run with `PGOPTIONS="-c synchronous_commit=off"` — the same dump then
   restored in 199 s. The local bootstrap deadline also grows by the seed's
   size allowance (`seedWaitSeconds`), so a slow push can't eat it.
-- **Terminal:** `docker://<endpointId>@nexux-galtex-d0ce79` through the
+- **Terminal:** `docker://<endpointId>@nexux-acme-d0ce79` through the
   host's terminal server opened a shell as `nexus` in the container, over
   the host's endpoint key; postgres in the stack answered healthy.
-- **Destroy:** from the host; container and volumes gone on omarchy.
+- **Destroy:** from the host; container and volumes gone on devbox.
 - **Follow-ups, done:** the project's Terminal tab showed "Connection error"
   only in the desktop app's browser pane, which blocks any port other than
   the page's (even a plain `fetch` to `:3002` failed there); in Chrome the
   same tab opens a shell on the host. The review step's "Runs on" now names
-  the endpoint ("Docker container on omarchy"), and "Open files in Finder"
+  the endpoint ("Docker container on devbox"), and "Open files in Finder"
   is hidden for an endpoint's sandbox — the reveal route refuses it too,
   since mount-only repos never run there.

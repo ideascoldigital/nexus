@@ -352,7 +352,7 @@ test("docker targets parse with and without an endpoint", async () => {
   assert.equal(parseDockerTerminalTarget("docker-host://nexus-host-home-nexux-1"), null);
   // A host never travels in the URL — only an id the server looks up.
   for (const bad of [
-    "docker://ssh://omarchy@nexux-app",
+    "docker://ssh://devbox@nexux-app",
     "docker://-H@nexux-app",
     "docker://a.b@nexux-app",
     "docker://id@-app",

@@ -11,7 +11,7 @@ test("a container on this machine keeps the bare-name authority", () => {
 });
 
 test("a container on another machine's Docker names that daemon as its host", () => {
-  const config = JSON.parse(decode(attachedContainerAuthority("nexux-app-1", "ssh://omarchy")));
-  assert.deepEqual(config, { containerName: "nexux-app-1", settings: { host: "ssh://omarchy" } });
+  const config = JSON.parse(decode(attachedContainerAuthority("nexux-app-1", "ssh://devbox")));
+  assert.deepEqual(config, { containerName: "nexux-app-1", settings: { host: "ssh://devbox" } });
 });
 

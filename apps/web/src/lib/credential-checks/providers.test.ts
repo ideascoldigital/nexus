@@ -32,7 +32,7 @@ const line = (r: { checks: Array<{ label: string; ok: boolean | null; detail?: s
 
 test("gitlab: scopes and expiry from the token itself, on the self-hosted host", async () => {
   const s = stub({
-    "https://gitlab.acme.dev/api/v4/user": { status: 200, body: { username: "jairo" } },
+    "https://gitlab.acme.dev/api/v4/user": { status: 200, body: { username: "dev" } },
     "https://gitlab.acme.dev/api/v4/personal_access_tokens/self": {
       status: 200,
       body: { scopes: ["read_repository", "write_repository"], expires_at: "2026-12-31", active: true },
@@ -40,7 +40,7 @@ test("gitlab: scopes and expiry from the token itself, on the self-hosted host",
   });
   const r = await checkGitLab("glpat-" + "x".repeat(20), { registryHost: "registry.gitlab.acme.dev:5050" }, { fetch: s.fetchFn, now: () => NOW });
   assert.equal(r.status, "ok");
-  assert.equal(r.identity, "jairo @ gitlab.acme.dev");
+  assert.equal(r.identity, "dev @ gitlab.acme.dev");
   assert.equal(r.expiresAt, "2026-12-31T00:00:00.000Z");
   assert.equal(line(r, "push branches")?.ok, true);
   assert.equal(line(r, "open merge requests")?.ok, false);
@@ -51,7 +51,7 @@ test("gitlab: scopes and expiry from the token itself, on the self-hosted host",
 
 test("gitlab: read-only token warns — sandboxes push", async () => {
   const s = stub({
-    "https://gitlab.com/api/v4/user": { status: 200, body: { username: "jairo" } },
+    "https://gitlab.com/api/v4/user": { status: 200, body: { username: "dev" } },
     "https://gitlab.com/api/v4/personal_access_tokens/self": { status: 200, body: { scopes: ["read_repository"], active: true } },
   });
   const r = await checkGitLab("glpat-abc", {}, { fetch: s.fetchFn, now: () => NOW });
@@ -61,7 +61,7 @@ test("gitlab: read-only token warns — sandboxes push", async () => {
 
 test("gitlab: an instance that cannot describe the token leaves scopes unknown", async () => {
   const s = stub({
-    "https://gitlab.com/api/v4/user": { status: 200, body: { username: "jairo" } },
+    "https://gitlab.com/api/v4/user": { status: 200, body: { username: "dev" } },
     "https://gitlab.com/api/v4/personal_access_tokens/self": { status: 404 },
   });
   const r = await checkGitLab("glpat-abc", {}, { fetch: s.fetchFn, now: () => NOW });
@@ -78,10 +78,10 @@ test("gitlab: a rejected token fails", async () => {
 
 test("bitbucket: a user token names its account; a repository token is valid but not account-wide", async () => {
   const user = await checkBitbucket("tok", {
-    fetch: stub({ "https://api.bitbucket.org/2.0/user": { status: 200, body: { username: "jairo" } } }).fetchFn,
+    fetch: stub({ "https://api.bitbucket.org/2.0/user": { status: 200, body: { username: "dev" } } }).fetchFn,
     now: () => NOW,
   });
-  assert.equal(user.identity, "jairo");
+  assert.equal(user.identity, "dev");
   const repoToken = await checkBitbucket("tok", {
     fetch: stub({ "https://api.bitbucket.org/2.0/user": { status: 403 } }).fetchFn,
     now: () => NOW,

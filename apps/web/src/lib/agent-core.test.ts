@@ -54,11 +54,11 @@ test("local sandbox targets its docker container", () => {
 
 test("a sandbox on another machine's Docker carries its daemon", () => {
   const t = sandboxTarget(
-    { provider: "local", publicIp: null, instanceId: "ctr-1", dockerHost: "ssh://omarchy" },
+    { provider: "local", publicIp: null, instanceId: "ctr-1", dockerHost: "ssh://devbox" },
     "/opt/nexus/app",
   );
   assert.equal(t.container, "ctr-1");
-  assert.equal(t.dockerHost, "ssh://omarchy");
+  assert.equal(t.dockerHost, "ssh://devbox");
 });
 
 test("local sandbox without container throws", () => {

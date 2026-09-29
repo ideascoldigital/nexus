@@ -21,7 +21,7 @@ const execFileAsync = promisify(execFile);
  * On this machine's daemon it is the bare hex of the name, as before. On
  * another machine's (spec 26) it is the extension's JSON form, whose
  * `settings.host` it runs every docker command with as DOCKER_HOST — so
- * `ssh://omarchy` reaches the same daemon Nexux launched the sandbox on,
+ * `ssh://devbox` reaches the same daemon Nexux launched the sandbox on,
  * with nothing to set up in VS Code first.
  */
 export function attachedContainerAuthority(

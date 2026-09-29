@@ -15,10 +15,10 @@ function deps(replies: string[]): { deps: AssistantDeps; rec: Rec } {
   const rec: Rec = { launches: [], histories: [], prompts: [] };
   let i = 0;
   const ctx = {
-    listProjects: async () => [{ id: "p1", name: "galtex", createdAt: "2026-01-01T00:00:00.000Z" }],
+    listProjects: async () => [{ id: "p1", name: "acme", createdAt: "2026-01-01T00:00:00.000Z" }],
     launchSandbox: async (input: unknown) => {
       rec.launches.push(input);
-      return { id: "s1", projectId: "p1", name: "sbx", status: "provisioning", provider: "local", runsOn: "omarchy", dockerEndpointId: null, previewUrl: null, createdAt: "2026-01-01T00:00:00.000Z" };
+      return { id: "s1", projectId: "p1", name: "sbx", status: "provisioning", provider: "local", runsOn: "devbox", dockerEndpointId: null, previewUrl: null, createdAt: "2026-01-01T00:00:00.000Z" };
     },
   } as unknown as NexuxContext;
   return {
@@ -45,28 +45,28 @@ const kinds = async (threadId: string) =>
 
 test("a read runs through the MCP tools and the turn is kept as events", async () => {
   const t = await createThread();
-  const { deps: d } = deps([call("nexux_list_projects"), "You have one project: galtex."]);
+  const { deps: d } = deps([call("nexux_list_projects"), "You have one project: acme."]);
   const thread = await runThreadTurn(t.id, "what projects do I have?", {}, d);
   assert.deepEqual(await kinds(t.id), ["user", "tool_call", "tool_result", "assistant"]);
   assert.equal(thread?.title, "what projects do I have?");
   const result = thread!.events.find((e) => e.kind === "tool_result")!.content as { text: string };
-  assert.match(result.text, /TOOL_RESULT nexux_list_projects: .*galtex/);
+  assert.match(result.text, /TOOL_RESULT nexux_list_projects: .*acme/);
 });
 
 test("a write becomes a pending action and does not run", async () => {
   const t = await createThread();
-  const { deps: d, rec } = deps([call("nexux_launch_sandbox", { projectId: "p1", provider: "local", dockerEndpoint: "omarchy" })]);
-  const thread = await runThreadTurn(t.id, "launch one on omarchy", {}, d);
+  const { deps: d, rec } = deps([call("nexux_launch_sandbox", { projectId: "p1", provider: "local", dockerEndpoint: "devbox" })]);
+  const thread = await runThreadTurn(t.id, "launch one on devbox", {}, d);
   assert.equal(rec.launches.length, 0, "nothing launched");
   const action = thread!.actions[0];
   assert.equal(action.status, "pending");
-  assert.match(action.summary, /Launch a local sandbox on omarchy for project p1/);
+  assert.match(action.summary, /Launch a local sandbox on devbox for project p1/);
   await assert.rejects(() => runThreadTurn(t.id, "and another", {}, d), /waiting for your decision/);
 });
 
 test("approving runs it once, records the result, and the assistant reacts", async () => {
   const t = await createThread();
-  const { deps: d, rec } = deps([call("nexux_launch_sandbox", { projectId: "p1" }), "It is provisioning on omarchy."]);
+  const { deps: d, rec } = deps([call("nexux_launch_sandbox", { projectId: "p1" }), "It is provisioning on devbox."]);
   const first = await runThreadTurn(t.id, "launch one", {}, d);
   const actionId = first!.actions[0].id;
   const after = await approveAction(t.id, actionId, d);
@@ -117,13 +117,13 @@ test("a thread limited to read scopes never offers a write", async () => {
 test("an action names what the user calls things, and keeps an unknown id as is", async () => {
   const { summarizeAction } = await import("./threads");
   assert.equal(
-    summarizeAction("nexux_sandbox_power", { sandboxId: "s1", action: "pause" }, { sandbox: "nexux-galtex-de693d" }),
-    "Pause sandbox nexux-galtex-de693d",
+    summarizeAction("nexux_sandbox_power", { sandboxId: "s1", action: "pause" }, { sandbox: "nexux-acme-de693d" }),
+    "Pause sandbox nexux-acme-de693d",
   );
   assert.equal(summarizeAction("nexux_sandbox_power", { sandboxId: "s1", action: "resume" }), "Resume sandbox s1");
   assert.match(
-    summarizeAction("nexux_launch_sandbox", { projectId: "p1", provider: "local" }, { project: "galtex" }),
-    /for project galtex$/,
+    summarizeAction("nexux_launch_sandbox", { projectId: "p1", provider: "local" }, { project: "acme" }),
+    /for project acme$/,
   );
 });
 

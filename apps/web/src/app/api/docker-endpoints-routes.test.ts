@@ -81,10 +81,10 @@ function sandboxOn(dockerEndpointId: string, status: string) {
 }
 
 test("adding a healthy endpoint saves the normalised host and the probe facts", async () => {
-  const res = await create({ name: "workstation", host: " ssh://jairo@Box:22/ " });
+  const res = await create({ name: "workstation", host: " ssh://dev@Box:22/ " });
   assert.equal(res.status, 201);
   const row = await res.json();
-  assert.equal(row.host, "ssh://jairo@box:22");
+  assert.equal(row.host, "ssh://dev@box:22");
   assert.equal(row.arch, "x86_64");
   assert.equal(row.memTotalMb, 16384);
   assert.equal(row.lastError, null);
@@ -108,20 +108,20 @@ test("a failed probe saves nothing and returns the probe's error", async () => {
     ok: false,
     error: "The SSH user can't talk to Docker there",
   });
-  const res = await create({ name: "workstation", host: "ssh://jairo@box" });
+  const res = await create({ name: "workstation", host: "ssh://dev@box" });
   assert.equal(res.status, 400);
   assert.match((await res.json()).error, /can't talk to Docker/);
   assert.equal(await prisma.dockerEndpoint.count(), 0);
 });
 
 test("the same host cannot be added twice", async () => {
-  await create({ name: "a", host: "ssh://jairo@box" });
-  const res = await create({ name: "b", host: "ssh://jairo@BOX/" });
+  await create({ name: "a", host: "ssh://dev@box" });
+  const res = await create({ name: "b", host: "ssh://dev@BOX/" });
   assert.equal(res.status, 409);
 });
 
 test("a failed re-check is recorded and keeps the last good facts", async () => {
-  const row = await (await create({ name: "ws", host: "ssh://jairo@box" })).json();
+  const row = await (await create({ name: "ws", host: "ssh://dev@box" })).json();
   process.env.NEXUX_TEST_DOCKER_PROBE = JSON.stringify({ ok: false, error: "The host didn't answer" });
   const res = await checkRoute(json("POST", "http://test/x"), params(row.id));
   assert.equal(res.status, 200);
@@ -136,18 +136,18 @@ test("a failed re-check is recorded and keeps the last good facts", async () => 
 });
 
 test("rename changes the name only", async () => {
-  const row = await (await create({ name: "ws", host: "ssh://jairo@box" })).json();
+  const row = await (await create({ name: "ws", host: "ssh://dev@box" })).json();
   const res = await patchRoute(
     json("PATCH", "http://test/x", { name: "workstation", host: "ssh://evil@elsewhere" }),
     params(row.id),
   );
   const updated = await res.json();
   assert.equal(updated.name, "workstation");
-  assert.equal(updated.host, "ssh://jairo@box");
+  assert.equal(updated.host, "ssh://dev@box");
 });
 
 test("an endpoint with live sandboxes cannot be removed; destroyed ones don't count", async () => {
-  const row = await (await create({ name: "ws", host: "ssh://jairo@box" })).json();
+  const row = await (await create({ name: "ws", host: "ssh://dev@box" })).json();
   await sandboxOn(row.id, "running");
   const gone = await sandboxOn(row.id, "destroyed");
 
@@ -183,20 +183,20 @@ const launch = (body: unknown) =>
   });
 
 test("a repo with only a local folder can't launch on another machine, and the repo is named", async () => {
-  const ep = await (await create({ name: "omarchy", host: "ssh://omarchy" })).json();
+  const ep = await (await create({ name: "devbox", host: "ssh://devbox" })).json();
   await prisma.repository.create({
     data: { projectId, name: "landing", localPath: "/Users/me/landing" },
   });
   const res = await launch({ provider: "local", dockerEndpointId: ep.id });
   assert.equal(res.status, 400);
   const { error } = await res.json();
-  assert.match(error, /"omarchy" can't see local folders: landing/);
+  assert.match(error, /"devbox" can't see local folders: landing/);
   // Refused before anything was created or any daemon was asked.
   assert.equal(await prisma.sandbox.count({ where: { projectId } }), 0);
 });
 
 test("an endpoint on a cloud launch is refused, and so is a stale one", async () => {
-  const ep = await (await create({ name: "omarchy", host: "ssh://omarchy" })).json();
+  const ep = await (await create({ name: "devbox", host: "ssh://devbox" })).json();
   const cloud = await launch({ provider: "civo", dockerEndpointId: ep.id });
   assert.equal(cloud.status, 400);
   assert.match((await cloud.json()).error, /only applies to local sandboxes/);
@@ -214,7 +214,7 @@ function hostOn(dockerEndpointId: string, status: string) {
       name: `host-${status}`,
       status,
       provider: "docker-endpoint",
-      region: "omarchy",
+      region: "devbox",
       size: "docker",
       imageRef: "ghcr.io/o/r:latest",
       workDir: "/tmp/host",
@@ -224,7 +224,7 @@ function hostOn(dockerEndpointId: string, status: string) {
 }
 
 test("an endpoint running a Nexus host cannot be removed", async () => {
-  const ep = await (await create({ name: "omarchy", host: "ssh://omarchy" })).json();
+  const ep = await (await create({ name: "devbox", host: "ssh://devbox" })).json();
   await hostOn(ep.id, "running");
 
   const list = await (await listRoute()).json();
@@ -232,11 +232,11 @@ test("an endpoint running a Nexus host cannot be removed", async () => {
 
   const refused = await deleteRoute(json("DELETE", "http://test/x"), params(ep.id));
   assert.equal(refused.status, 409);
-  assert.match((await refused.json()).error, /1 Nexus host still runs on "omarchy"/);
+  assert.match((await refused.json()).error, /1 Nexus host still runs on "devbox"/);
 });
 
 test("a destroyed host keeps its row and lets the endpoint go", async () => {
-  const ep = await (await create({ name: "omarchy", host: "ssh://omarchy" })).json();
+  const ep = await (await create({ name: "devbox", host: "ssh://devbox" })).json();
   const gone = await hostOn(ep.id, "destroyed");
 
   // The FK restricts, so this only succeeds because the row is detached first.
@@ -271,9 +271,9 @@ const managedConfig = () => {
 
 test("on a host, adding an endpoint gives ssh the host's key for that address; removing it takes it away", async () => {
   await asHost(async () => {
-    const res = await create({ name: "omarchy", host: "ssh://jairo@192.168.0.35" });
+    const res = await create({ name: "devbox", host: "ssh://dev@192.168.1.35" });
     assert.equal(res.status, 201);
-    assert.match(managedConfig(), /^Host 192\.168\.0\.35$/m);
+    assert.match(managedConfig(), /^Host 192\.168\.1\.35$/m);
     assert.ok(fs.existsSync(path.join(testDbDir, "ssh", "endpoint_ed25519")), "the endpoint key exists");
     const userConfig = fs.readFileSync(path.join(process.env.HOME!, ".ssh", "config"), "utf8");
     assert.match(userConfig, new RegExp(`Include ${path.join(testDbDir, "ssh", "config")}`));
@@ -281,14 +281,14 @@ test("on a host, adding an endpoint gives ssh the host's key for that address; r
     const { id } = await res.json();
     const del = await deleteRoute(json("DELETE", `http://test/api/docker-endpoints/${id}`), params(id));
     assert.equal(del.status, 200);
-    assert.doesNotMatch(managedConfig(), /192\.168\.0\.35/);
+    assert.doesNotMatch(managedConfig(), /192\.168\.1\.35/);
   });
 });
 
 test("on a host, an endpoint whose probe fails leaves no ssh block behind", async () => {
   process.env.NEXUX_TEST_DOCKER_PROBE = JSON.stringify({ ok: false, error: "Permission denied (publickey)" });
   await asHost(async () => {
-    const res = await create({ name: "nope", host: "ssh://jairo@10.9.9.9" });
+    const res = await create({ name: "nope", host: "ssh://dev@10.9.9.9" });
     assert.equal(res.status, 400);
     assert.doesNotMatch(managedConfig(), /10\.9\.9\.9/);
   });
@@ -296,7 +296,7 @@ test("on a host, an endpoint whose probe fails leaves no ssh block behind", asyn
 
 test("on a laptop, adding an endpoint writes no ssh config at all — the user's own keys are used", async () => {
   const before = managedConfig();
-  const res = await create({ name: "lan", host: "ssh://jairo@192.168.0.77" });
+  const res = await create({ name: "lan", host: "ssh://dev@192.168.1.77" });
   assert.equal(res.status, 201);
   assert.equal(managedConfig(), before);
 });

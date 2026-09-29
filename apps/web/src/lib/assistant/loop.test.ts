@@ -39,10 +39,10 @@ test("reads run and feed their result back; prose ends the turn", async () => {
 
 test("a write is never run — the turn stops and hands it back", async () => {
   const ran: string[] = [];
-  const { agent } = scripted([call("read_it"), call("launch_it", { p: "galtex" }), "should not get here"]);
+  const { agent } = scripted([call("read_it"), call("launch_it", { p: "acme" }), "should not get here"]);
   const turn = await runToolLoop({ agent, tools: tools(ran), message: "launch", history: [] });
   assert.deepEqual(ran, ["read_it"], "the write did not run");
-  assert.deepEqual(turn.pending, { tool: "launch_it", args: { p: "galtex" } });
+  assert.deepEqual(turn.pending, { tool: "launch_it", args: { p: "acme" } });
 });
 
 test("a tool outside the list is prose, not a call", () => {

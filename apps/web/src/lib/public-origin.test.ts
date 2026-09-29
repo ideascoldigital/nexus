@@ -20,8 +20,8 @@ const boundToAnyAddress = (headers: Record<string, string> = {}) =>
   new NextRequest("http://0.0.0.0:3030/api/clickup/oauth/start", { headers });
 
 test("NEXUX_WEB_ORIGIN wins over the address the server bound to", () => {
-  process.env.NEXUX_WEB_ORIGIN = "http://100.74.224.26:3030";
-  assert.equal(publicOrigin(boundToAnyAddress()), "http://100.74.224.26:3030");
+  process.env.NEXUX_WEB_ORIGIN = "http://100.64.0.20:3030";
+  assert.equal(publicOrigin(boundToAnyAddress()), "http://100.64.0.20:3030");
 });
 
 test("a trailing slash on NEXUX_WEB_ORIGIN does not double up in the callback", () => {
@@ -53,8 +53,8 @@ test("a comma-joined forwarded chain uses the client-facing hop", () => {
 
 test("with only a Host header, the request's own protocol is kept", () => {
   delete process.env.NEXUX_WEB_ORIGIN;
-  const req = boundToAnyAddress({ host: "100.74.224.26:3030" });
-  assert.equal(publicOrigin(req), "http://100.74.224.26:3030");
+  const req = boundToAnyAddress({ host: "100.64.0.20:3030" });
+  assert.equal(publicOrigin(req), "http://100.64.0.20:3030");
 });
 
 test("with nothing to go on it falls back to Next's view — right in pnpm dev", () => {

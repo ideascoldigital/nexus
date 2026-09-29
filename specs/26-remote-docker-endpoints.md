@@ -292,7 +292,7 @@ endpoint name, and the VS Code action (below).
   `startBrowserSession` return errors — each would otherwise attach through
   this machine's daemon and find nothing.
 - `region` on a remote row is the endpoint's name, so the row reads
-  `local · docker @ omarchy` with no UI change.
+  `local · docker @ devbox` with no UI change.
 
 ## As built (phase 3)
 
@@ -321,6 +321,6 @@ endpoint name, and the VS Code action (below).
 - `collectSandboxMetrics` measures each daemon in parallel (`docker -H` per
   endpoint, 15s timeout remote vs 6s local) and labels rows with `endpointId`.
 - It also returns a per-daemon `reachable` flag, so the System page can say
-  "omarchy: not reachable" instead of showing it as empty.
+  "devbox: not reachable" instead of showing it as empty.
 - The System page groups by daemon only when there is more than one; the
   status bar never requests sandboxes and is unaffected.

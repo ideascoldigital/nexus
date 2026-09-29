@@ -443,7 +443,7 @@ test("destroying an unknown host is a 400, not a crash", async () => {
 
 async function saveEndpoint() {
   return prisma.dockerEndpoint.create({
-    data: { name: "omarchy", host: "ssh://omarchy", arch: "x86_64" },
+    data: { name: "devbox", host: "ssh://devbox", arch: "x86_64" },
   });
 }
 
@@ -473,7 +473,7 @@ test("an endpoint host needs neither region, size, terraform nor a cloud credent
     assert.equal(res.status, 201, await res.clone().text());
     const host = await res.json();
     assert.equal(host.provider, "docker-endpoint");
-    assert.equal(host.region, "omarchy");
+    assert.equal(host.region, "devbox");
     assert.equal(host.size, "docker");
     assert.equal(host.dockerEndpointId, ep.id);
     assert.equal(host.credentialId, null);
@@ -492,7 +492,7 @@ test("an image that is not published for the endpoint's architecture is refused 
   try {
     const res = await post(endpointBody(ep.id));
     assert.equal(res.status, 400);
-    assert.match(await errorOf(res), /linux\/arm64 — "omarchy" is amd64/);
+    assert.match(await errorOf(res), /linux\/arm64 — "devbox" is amd64/);
     assert.equal(await prisma.nexusHost.count(), 0);
   } finally {
     restore();

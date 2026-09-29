@@ -31,7 +31,7 @@ afterEach(() => {
 const spec = (over: Partial<EndpointHostSpec> = {}): EndpointHostSpec => ({
   name: "home",
   imageRef: "ghcr.io/o/nexus:edge",
-  dockerHost: "ssh://omarchy",
+  dockerHost: "ssh://devbox",
   workDir,
   tailscaleAuthKey: AUTH_KEY,
   registry: null,
@@ -95,7 +95,7 @@ test("the stack comes up in order: pull, tailscale, then the app on its tailnet 
 
   // Every call went to the endpoint's daemon, under the host's project.
   for (const c of docker.calls) {
-    assert.deepEqual(c.args.slice(0, 2), ["-H", "ssh://omarchy"]);
+    assert.deepEqual(c.args.slice(0, 2), ["-H", "ssh://devbox"]);
   }
   const composeCalls = docker.calls.filter((c) => c.args.includes("compose"));
   assert.ok(composeCalls.every((c) => c.args.includes(endpointHostProject("home"))));
@@ -163,8 +163,8 @@ test("a self-hosted control plane goes to tailscale as --login-server", async ()
 
 test("helpers", () => {
   assert.deepEqual(
-    endpointComposeArgs({ dockerHost: "ssh://omarchy", project: "p", workDir: "/w" }).slice(0, 5),
-    ["-H", "ssh://omarchy", "compose", "-p", "p"],
+    endpointComposeArgs({ dockerHost: "ssh://devbox", project: "p", workDir: "/w" }).slice(0, 5),
+    ["-H", "ssh://devbox", "compose", "-p", "p"],
   );
   assert.throws(() => renderEndpointEnv({ X: "a'b" }), /quote or newline/);
   assert.equal(parseTailscaleDnsName("{}"), null);
@@ -196,7 +196,7 @@ test("update pulls and recreates, never takes the stack down, and says whether a
   writeEnv();
   const docker = updateDocker("sha256:old", "sha256:new");
   const res = await updateEndpointHost(
-    { name: "home", imageRef: "ghcr.io/o/nexus:edge", dockerHost: "ssh://omarchy", workDir, registry: null },
+    { name: "home", imageRef: "ghcr.io/o/nexus:edge", dockerHost: "ssh://devbox", workDir, registry: null },
     docker.run,
   );
   assert.equal(res.ok, true);
@@ -212,7 +212,7 @@ test("update pulls and recreates, never takes the stack down, and says whether a
   assert.ok(fs.readFileSync(path.join(workDir, "compose.yml"), "utf8").includes("network_mode: service:tailscale"));
 
   const same = await updateEndpointHost(
-    { name: "home", imageRef: "ghcr.io/o/nexus:edge", dockerHost: "ssh://omarchy", workDir, registry: null },
+    { name: "home", imageRef: "ghcr.io/o/nexus:edge", dockerHost: "ssh://devbox", workDir, registry: null },
     updateDocker("sha256:a", "sha256:a").run,
   );
   assert.equal(same.updated, false);
@@ -223,7 +223,7 @@ test("a failed pull leaves the old image running and says so", async () => {
   writeEnv();
   const docker = updateDocker("a", "a", "pull");
   const res = await updateEndpointHost(
-    { name: "home", imageRef: "x/y:z", dockerHost: "ssh://omarchy", workDir, registry: null },
+    { name: "home", imageRef: "x/y:z", dockerHost: "ssh://devbox", workDir, registry: null },
     docker.run,
   );
   assert.equal(res.ok, false);
@@ -233,7 +233,7 @@ test("a failed pull leaves the old image running and says so", async () => {
 
 test("an update without the host's local settings is refused, not guessed", async () => {
   const res = await updateEndpointHost(
-    { name: "home", imageRef: "x/y:z", dockerHost: "ssh://omarchy", workDir, registry: null },
+    { name: "home", imageRef: "x/y:z", dockerHost: "ssh://devbox", workDir, registry: null },
     updateDocker("a", "b").run,
   );
   assert.equal(res.ok, false);
@@ -245,10 +245,10 @@ test("destroy removes the stack with its volumes, then the files here", async ()
   fs.writeFileSync(path.join(workDir, "compose.yml"), "services: {}\n");
   const calls: string[][] = [];
   await destroyEndpointHost(
-    { name: "home", dockerHost: "ssh://omarchy", workDir },
+    { name: "home", dockerHost: "ssh://devbox", workDir },
     { log: () => undefined, run: async (a) => (calls.push(a), { code: 0, stdout: "", stderr: "" }) },
   );
-  assert.deepEqual(calls[0].slice(0, 2), ["-H", "ssh://omarchy"]);
+  assert.deepEqual(calls[0].slice(0, 2), ["-H", "ssh://devbox"]);
   assert.deepEqual(calls[0].slice(-3), ["down", "--volumes", "--remove-orphans"]);
   assert.equal(fs.existsSync(workDir), false);
 });
@@ -256,11 +256,11 @@ test("destroy removes the stack with its volumes, then the files here", async ()
 test("destroy works from the project name alone when the local files are gone", async () => {
   const calls: string[][] = [];
   await destroyEndpointHost(
-    { name: "home", dockerHost: "ssh://omarchy", workDir },
+    { name: "home", dockerHost: "ssh://devbox", workDir },
     { log: () => undefined, run: async (a) => (calls.push(a), { code: 0, stdout: "", stderr: "" }) },
   );
   assert.deepEqual(calls[0], [
-    "-H", "ssh://omarchy", "compose", "-p", "nexus-host-home", "down", "--volumes", "--remove-orphans",
+    "-H", "ssh://devbox", "compose", "-p", "nexus-host-home", "down", "--volumes", "--remove-orphans",
   ]);
 });
 
@@ -268,7 +268,7 @@ test("a destroy the endpoint refuses keeps the local files and says why", async 
   writeEnv();
   await assert.rejects(
     destroyEndpointHost(
-      { name: "home", dockerHost: "ssh://omarchy", workDir },
+      { name: "home", dockerHost: "ssh://devbox", workDir },
       { log: () => undefined, run: async () => ({ code: 1, stdout: "", stderr: "Cannot connect" }) },
     ),
     /Could not remove the stack.*Cannot connect/,
@@ -286,7 +286,7 @@ test("the updater gets its config on stdin, secrets never in argv, update.sh las
   const files = writes.map((w) => w.args.at(-1)!.split("cat > /config/")[1]);
   assert.deepEqual(files, ["compose.yml", ".env", "docker/config.json", "update.sh"]);
   for (const w of writes) {
-    assert.deepEqual(w.args.slice(0, 2), ["-H", "ssh://omarchy"]);
+    assert.deepEqual(w.args.slice(0, 2), ["-H", "ssh://devbox"]);
     assert.ok(w.args.includes("nexus-host-home-updater-1"));
     const argv = w.args.join(" ");
     assert.ok(!argv.includes(AUTH_KEY) && !argv.includes(REG_PASSWORD), argv);
@@ -312,7 +312,7 @@ test("the updater is restarted when its script changed, and only then", async ()
   const scenario = async (catResult: { code: number; stdout: string }) => {
     const calls: string[][] = [];
     await syncUpdaterConfig(
-      { project: "nexus-host-home", dockerHost: "ssh://omarchy", workDir: dir, registry: null },
+      { project: "nexus-host-home", dockerHost: "ssh://devbox", workDir: dir, registry: null },
       async (args) => {
         calls.push(args);
         return args.includes("cat") && args.includes("/config/update.sh")

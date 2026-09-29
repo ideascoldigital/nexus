@@ -21,7 +21,7 @@ beforeEach(async () => {
   await prisma.sandbox.deleteMany({ where: { projectId } });
   sandboxId = (
     await prisma.sandbox.create({
-      data: { projectId, name: "sbx", status: "provisioning", provider: "local", region: "omarchy", size: "docker", workDir: "/tmp/x" },
+      data: { projectId, name: "sbx", status: "provisioning", provider: "local", region: "devbox", size: "docker", workDir: "/tmp/x" },
     })
   ).id;
 });
@@ -72,7 +72,7 @@ test("the watch tool starts a watch, or says it already happened", async () => {
 test("a met watch reports once into its thread, and the reply turn gets reads only", async () => {
   const t = await createThread();
   await watchTool(t.id).run({ kind: "sandbox", id: sandboxId, until: "running" });
-  const { deps: d, prompts, toolNames } = deps(["The sandbox sbx is up on omarchy."]);
+  const { deps: d, prompts, toolNames } = deps(["The sandbox sbx is up on devbox."]);
 
   await fireAssistantWatches("sandbox", sandboxId, d); // still provisioning
   assert.equal(prompts.length, 0, "nothing to report yet");

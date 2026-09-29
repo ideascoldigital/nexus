@@ -89,12 +89,12 @@ test("an endpoint forward lands on the remote's loopback, through the user's own
   const args = endpointForwardArgs({
     localPort: 51000,
     remotePort: 49153,
-    dockerHost: "ssh://jairo@omarchy:2222",
+    dockerHost: "ssh://dev@devbox:2222",
   });
   // Loopback on both ends: docker published the bridge on the remote's
   // 127.0.0.1 only, and this end must not offer it to the LAN.
   assert.ok(args.includes("127.0.0.1:51000:127.0.0.1:49153"), args.join(" "));
-  assert.deepEqual(args.slice(-2), ["--", "jairo@omarchy"]);
+  assert.deepEqual(args.slice(-2), ["--", "dev@devbox"]);
   assert.ok(args.includes("-p") && args[args.indexOf("-p") + 1] === "2222");
   // The sandbox key is authorized inside sandboxes, not on the endpoint.
   assert.ok(!args.includes("-i"), args.join(" "));
@@ -103,8 +103,8 @@ test("an endpoint forward lands on the remote's loopback, through the user's own
 });
 
 test("an ssh-config alias forwards with no user and no port of its own", () => {
-  const args = endpointForwardArgs({ localPort: 1, remotePort: 2, dockerHost: "ssh://omarchy" });
-  assert.equal(args.at(-1), "omarchy");
+  const args = endpointForwardArgs({ localPort: 1, remotePort: 2, dockerHost: "ssh://devbox" });
+  assert.equal(args.at(-1), "devbox");
   assert.ok(!args.includes("-p"));
 });
 

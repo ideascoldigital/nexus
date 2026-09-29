@@ -15,8 +15,8 @@ function stub(routes: Record<string, { status: number; body?: unknown }>) {
 }
 
 test("repo paths from every URL form", () => {
-  assert.equal(repoPath("https://github.com/galtexpilots/webapp.git"), "galtexpilots/webapp");
-  assert.equal(repoPath("git@github.com:galtexpilots/webapp.git"), "galtexpilots/webapp");
+  assert.equal(repoPath("https://github.com/acme-org/webapp.git"), "acme-org/webapp");
+  assert.equal(repoPath("git@github.com:acme-org/webapp.git"), "acme-org/webapp");
   assert.equal(repoPath("ssh://git@gitlab.acme.dev/group/sub/project"), "group/sub/project");
   assert.equal(repoPath("https://github.com/"), null);
 });

@@ -86,28 +86,28 @@ import { endpointSshHostname, removeEndpointSshHost, upsertEndpointSshHost } fro
 import { endpointPrivateKeyPath, ensureEndpointKeypair, sandboxPrivateKeyPath as sandboxKey } from "./keys";
 
 test("the address ssh is asked for is read out of the docker host", () => {
-  assert.equal(endpointSshHostname("ssh://jairo@192.168.0.35"), "192.168.0.35");
-  assert.equal(endpointSshHostname("ssh://omarchy.lan:2222"), "omarchy.lan");
+  assert.equal(endpointSshHostname("ssh://dev@192.168.1.35"), "192.168.1.35");
+  assert.equal(endpointSshHostname("ssh://devbox.lan:2222"), "devbox.lan");
   assert.equal(endpointSshHostname("ssh://u@[fd00::1]:22"), "fd00::1");
   assert.equal(endpointSshHostname("tcp://1.2.3.4:2375"), null);
 });
 
 test("an endpoint block points ssh at the endpoint key, and is replaced, not stacked", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "ep-"));
-  upsertEndpointSshHost(dataDir, "ssh://jairo@192.168.0.35");
-  upsertEndpointSshHost(dataDir, "ssh://jairo@192.168.0.35");
+  upsertEndpointSshHost(dataDir, "ssh://dev@192.168.1.35");
+  upsertEndpointSshHost(dataDir, "ssh://dev@192.168.1.35");
   upsertEndpointSshHost(dataDir, "ssh://other@10.0.0.9");
   const config = fs.readFileSync(path.join(dataDir, "ssh", "config"), "utf8");
-  assert.equal(config.match(/^Host 192\.168\.0\.35$/gm)?.length, 1);
+  assert.equal(config.match(/^Host 192\.168\.1\.35$/gm)?.length, 1);
   assert.match(config, new RegExp(`IdentityFile ${endpointPrivateKeyPath(dataDir).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   assert.match(config, /StrictHostKeyChecking accept-new/);
   // ssh itself resolves it that way (no connection is made by -G).
-  const resolved = execFileSync("ssh", ["-G", "-F", path.join(dataDir, "ssh", "config"), "jairo@192.168.0.35"]).toString();
+  const resolved = execFileSync("ssh", ["-G", "-F", path.join(dataDir, "ssh", "config"), "dev@192.168.1.35"]).toString();
   assert.match(resolved, new RegExp(`^identityfile ${endpointPrivateKeyPath(dataDir)}$`, "m"));
-  assert.match(resolved, /^user jairo$/m, "the user from the URL wins");
-  removeEndpointSshHost(dataDir, "ssh://jairo@192.168.0.35");
+  assert.match(resolved, /^user dev$/m, "the user from the URL wins");
+  removeEndpointSshHost(dataDir, "ssh://dev@192.168.1.35");
   const after = fs.readFileSync(path.join(dataDir, "ssh", "config"), "utf8");
-  assert.doesNotMatch(after, /192\.168\.0\.35/);
+  assert.doesNotMatch(after, /192\.168\.1\.35/);
   assert.match(after, /^Host 10\.0\.0\.9$/m, "other endpoints stay");
 });
 

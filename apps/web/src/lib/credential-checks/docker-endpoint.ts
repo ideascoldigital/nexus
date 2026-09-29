@@ -5,7 +5,7 @@
  * needs more, all of it checkable in seconds with throwaway busybox
  * containers: privileged runs (it is Docker-in-Docker), DNS both on the
  * default bridge and on a compose-style network (a machine can have the first
- * and not the second — `omarchy` did), the internet, and disk for images.
+ * and not the second — `devbox` did), the internet, and disk for images.
  *
  * Everything created is removed, including the temporary network.
  */

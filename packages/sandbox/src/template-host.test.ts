@@ -617,7 +617,7 @@ test("a custom setup script runs before the marker", () => {
 // ---- endpoint hosts (spec 27) ------------------------------------------------
 
 const endpointCompose = () =>
-  renderHostCompose({ imageRef: "ghcr.io/o/r:latest", mode: "endpoint", name: "Omarchy Host" });
+  renderHostCompose({ imageRef: "ghcr.io/o/r:latest", mode: "endpoint", name: "Devbox Host" });
 
 test("an endpoint host publishes nothing — the tailnet is the only way in", () => {
   const compose = endpointCompose();
@@ -681,7 +681,7 @@ test("the node keeps its identity across recreation, under a safe hostname", () 
   const compose = endpointCompose();
   assert.ok(compose.includes("- ts-state:/var/lib/tailscale"));
   assert.match(compose, /^volumes:$[\s\S]*^ {2}ts-state:$/m);
-  assert.ok(compose.includes(`hostname: ${safeHostName("Omarchy Host")}`));
+  assert.ok(compose.includes(`hostname: ${safeHostName("Devbox Host")}`));
   assert.throws(
     () => renderHostCompose({ imageRef: "x", mode: "endpoint" }),
     /needs its tailnet name/,

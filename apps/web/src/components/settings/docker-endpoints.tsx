@@ -126,7 +126,7 @@ export function DockerEndpointsSection() {
             />
             <Input
               {...NO_AUTOFILL}
-              placeholder={isHost ? "ssh://user@192.168.0.35" : "ssh://user@host"}
+              placeholder={isHost ? "ssh://user@192.168.1.35" : "ssh://user@host"}
               value={host}
               onChange={(e) => setHost(e.target.value)}
               className="font-mono text-xs"

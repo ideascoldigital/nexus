@@ -34,7 +34,7 @@ const line = (r: Awaited<ReturnType<typeof checkEndpointForSandboxes>>, label: s
 
 test("a healthy endpoint is ok, and everything it creates is removed", async () => {
   const d = daemon({ networkDns: true });
-  const r = await checkEndpointForSandboxes("ssh://omarchy", { run: d.run, probe: OK_PROBE });
+  const r = await checkEndpointForSandboxes("ssh://devbox", { run: d.run, probe: OK_PROBE });
   assert.equal(r.status, "ok");
   assert.equal(r.identity, "x86_64 · Docker 29");
   // Every container is --rm; the one network made is the one removed.
@@ -45,8 +45,8 @@ test("a healthy endpoint is ok, and everything it creates is removed", async () 
   assert.ok(d.calls.some((c) => c.includes("/var/lib/docker:/r:ro")));
 });
 
-test("DNS that only the default bridge has — omarchy's case — is named, with the fix", async () => {
-  const r = await checkEndpointForSandboxes("ssh://omarchy", { run: daemon({ networkDns: false }).run, probe: OK_PROBE });
+test("DNS that only the default bridge has — devbox's case — is named, with the fix", async () => {
+  const r = await checkEndpointForSandboxes("ssh://devbox", { run: daemon({ networkDns: false }).run, probe: OK_PROBE });
   assert.equal(r.status, "warn");
   const dns = line(r, "DNS on a compose-style network");
   assert.equal(dns?.ok, false);
@@ -54,7 +54,7 @@ test("DNS that only the default bridge has — omarchy's case — is named, with
 });
 
 test("low disk warns", async () => {
-  const r = await checkEndpointForSandboxes("ssh://omarchy", {
+  const r = await checkEndpointForSandboxes("ssh://devbox", {
     run: daemon({ networkDns: true, freeKb: 3 * 1024 * 1024 }).run,
     probe: OK_PROBE,
   });
@@ -64,7 +64,7 @@ test("low disk warns", async () => {
 
 test("an unreachable daemon fails before any container is started", async () => {
   const d = daemon({ networkDns: true });
-  const r = await checkEndpointForSandboxes("ssh://omarchy", {
+  const r = await checkEndpointForSandboxes("ssh://devbox", {
     run: d.run,
     probe: async () => ({ ok: false as const, error: "The host didn't answer" }),
   });
@@ -76,10 +76,10 @@ test("parsers", () => {
   assert.equal(dnsAnswered(NS_OK), true);
   assert.equal(dnsAnswered(NS_FAIL), false);
   assert.equal(freeGbFromDf("Filesystem 1K-blocks Used Available Use% Mounted\n/dev/x 1 1 10485760 1% /r"), 10);
-  // What busybox prints for an LVM root — the name on its own line (omarchy).
+  // What busybox prints for an LVM root — the name on its own line (devbox).
   assert.equal(
     freeGbFromDf(
-      "Filesystem           1K-blocks      Used Available Use% Mounted on\n/dev/mapper/omarchy_root\n                     1608497152  88780196 1519146156   6% /r\n",
+      "Filesystem           1K-blocks      Used Available Use% Mounted on\n/dev/mapper/devbox_root\n                     1608497152  88780196 1519146156   6% /r\n",
     ),
     1448.8,
   );

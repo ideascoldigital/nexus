@@ -579,7 +579,7 @@ test("a project with no repo urls still shows the selected credential", async ()
 
 test("the chosen Docker endpoint is kept, and a deleted one reads back as this machine", async () => {
   const endpoint = await prisma.dockerEndpoint.create({
-    data: { name: "omarchy", host: "ssh://omarchy" },
+    data: { name: "devbox", host: "ssh://devbox" },
   });
   let res = await put({ config: validConfig({ dockerEndpointId: endpoint.id }) });
   assert.equal(res.status, 200);

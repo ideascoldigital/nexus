@@ -300,7 +300,7 @@ lookup, writes nothing, and returns the plan:
       "paths": [ { "field": "workspacePath", "resolved": "/opt/ws/metaphor",
                    "existsOnDisk": false } ] }
   ],
-  "credentials": { "needsSecret": ["civo-main", "gh-jairo"] },
+  "credentials": { "needsSecret": ["civo-main", "gh-dev"] },
   "envVars": { "needsValue": 14 },
   "schedules": { "importedDisabled": 3 },
   "warnings": [ "Destination already has a telegram_bot_token setting" ],

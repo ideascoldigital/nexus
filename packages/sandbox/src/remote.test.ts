@@ -295,10 +295,10 @@ test("a sandbox on another machine's Docker carries -H in the pasted command", (
   // Without it the same line opens a shell on the wrong daemon — or, more
   // likely, reports no such container and leaves the user guessing.
   const cmd = sandboxShellCommand(
-    { provider: "local", instanceId: "nexux-app-abc123", dockerHost: "ssh://omarchy" },
+    { provider: "local", instanceId: "nexux-app-abc123", dockerHost: "ssh://devbox" },
     opts,
   );
-  assert.equal(cmd, "docker -H ssh://omarchy exec -it -u nexus nexux-app-abc123 bash -l");
+  assert.equal(cmd, "docker -H ssh://devbox exec -it -u nexus nexux-app-abc123 bash -l");
 });
 
 test("a machine with no address yet yields nothing, not a broken command", () => {

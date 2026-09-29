@@ -182,7 +182,7 @@ decision a person makes.
 1. `SeedData` + storage, pick-a-file and streamed upload, format detection,
    the Settings card on the service node. Nothing reaches a sandbox yet.
 2. Push + `seed:wait` + `seed:restore` on launch, for all three targets;
-   bootstrap-report lines. Verified on a local container, on omarchy, and on
+   bootstrap-report lines. Verified on a local container, on devbox, and on
    one cloud VM.
 3. Reset data (UI, route, MCP tool).
 4. Save as seed; export rules; the cloud warning.
@@ -241,7 +241,7 @@ decision a person makes.
   warning) and `pushSeeds` (mkdir → `pushLocalDir` → `.ready`). A local
   container is pushed as soon as it exists, beside the bootstrap; a VM once
   sshd answers, retrying every 15 s for ten minutes.
-- Walked end to end on omarchy (a local sandbox on a Docker endpoint) with
+- Walked end to end on devbox (a local sandbox on a Docker endpoint) with
   real dumps of a 5 000-customer / 20 000-order database made by
   `pg_dump`: the `-Fc` archive restored clean; the gzipped plain dump
   restored the same rows and reported its 4 `OWNER TO` failures. Bootstrap
@@ -274,7 +274,7 @@ decision a person makes.
 - Route `GET|POST /api/projects/[id]/sandboxes/[sid]/seed/reset`, the row
   menu's **Reset data…** (a dialog listing each service and file, with the
   re-run-install switch), and `nexux_reset_sandbox_data` (`sandboxes:write`).
-- Walked on omarchy: a sandbox whose orders were cut to 100 and given a junk
+- Walked on devbox: a sandbox whose orders were cut to 100 and given a junk
   table was reset from the UI back to 5 000/20 000 with no junk, its
   provisioning log intact; then the seed was replaced by the gzipped plain
   dump and reset over MCP — re-sent, restored with its 4 `OWNER TO` errors
@@ -308,7 +308,7 @@ decision a person makes.
   with an enabled `sensitive` seed, names the files and keeps Launch disabled
   until "Send it to the cloud anyway" is switched on. A launch with nobody to
   ask (MCP, a schedule) records the same fact in the sandbox log.
-- Walked on omarchy: a sandbox's orders cut to 777 plus a hand-made table,
+- Walked on devbox: a sandbox's orders cut to 777 plus a hand-made table,
   saved as the seed from the UI (36 KB replacing 173 KB), and a new sandbox
   booted with exactly that data; the Civo Launch step showed the warning with
   Launch disabled (nothing was launched in the cloud).

@@ -93,7 +93,7 @@ test("a path on this machine is read in place — but only from this machine", a
       }),
       params(),
     );
-  const remote = await call("100.67.95.36:3030");
+  const remote = await call("100.64.0.10:3030");
   assert.equal(remote.status, 403, "a request from the network cannot name a path on this disk");
   const local = await call("127.0.0.1:3100");
   assert.equal(local.status, 201);

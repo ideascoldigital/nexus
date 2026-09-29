@@ -82,13 +82,13 @@ test("each daemon is judged on its own: one being down leaves its sandboxes alon
   const stale = await staleRunningSandboxIds(
     [
       sandbox("laptop"),
-      sandbox("ws-dead", { dockerHost: "ssh://omarchy" }),
-      sandbox("ws-alive", { dockerHost: "ssh://omarchy" }),
+      sandbox("ws-dead", { dockerHost: "ssh://devbox" }),
+      sandbox("ws-alive", { dockerHost: "ssh://devbox" }),
     ],
     {
-      dockerAvailable: async (t) => t.host === "ssh://omarchy",
+      dockerAvailable: async (t) => t.host === "ssh://devbox",
       containerRunning: async (c, t) => {
-        assert.equal(t.host, "ssh://omarchy", "the laptop's daemon was never asked");
+        assert.equal(t.host, "ssh://devbox", "the laptop's daemon was never asked");
         return !c.includes("dead");
       },
     },

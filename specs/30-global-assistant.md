@@ -8,7 +8,7 @@ A chat panel available anywhere in the dashboard that can do what the MCP
 surface can do — list projects and sandboxes, launch and power sandboxes,
 create tasks, read their status and logs, validate and repair a stack, reset
 seed data — and keep watching what it started, reporting back in the same
-conversation. "Launch a sandbox for galtex on omarchy, give it the invoice
+conversation. "Launch a sandbox for acme on devbox, give it the invoice
 export feature, and tell me when the PR is up."
 
 The Stack tab's assistant becomes this assistant with its focus set to one
@@ -87,7 +87,7 @@ generic:
 Every tool is classified by its scope: `*:read` runs immediately; `*:write`
 never runs from the model's say-so. It becomes a **PendingAction** — tool,
 parsed args, a one-line human summary built from them ("Launch a local
-sandbox for galtex on omarchy") — and the turn ends with an action card:
+sandbox for acme on devbox") — and the turn ends with an action card:
 **Run** / **Cancel**. Run executes via `callTool`, appends the result, and
 resumes the loop so the assistant can react to it.
 
@@ -177,7 +177,7 @@ project.
   conversation is not a command.
 - **Route context:** the current project, and sandbox or task when a page
   has one, travel with each message as a context line, so "launch a
-  sandbox" on galtex's page means galtex. Shown as a removable chip.
+  sandbox" on acme's page means acme. Shown as a removable chip.
 - Streaming over SSE: tokens, each tool call as it runs (name + one-line
   args), action cards, watch reports arriving while the panel is open.
 - Threads list (newest first), new thread, delete thread.
@@ -247,8 +247,8 @@ project.
 - **Found against the real model:** told to "say what it will do before
   asking", it asked for permission in prose and waited — a second
   confirmation on top of the card. The prompt now says requesting a [WRITE]
-  tool *is* the question. After that, "launch a local galtex sandbox on
-  omarchy called asistente-prueba" and, on a galtex-focused thread, "pause
+  tool *is* the question. After that, "launch a local acme sandbox on
+  devbox called asistente-prueba" and, on a acme-focused thread, "pause
   the sandbox running in this project" each became one pending action with
   the right arguments (both cancelled; nothing launched or paused). A read
   question chained `nexux_list_projects` → `nexux_list_sandboxes` and
@@ -271,8 +271,8 @@ project.
   locked until the card is decided. Thread picker: new, switch, delete.
 - Action summaries now name things: the sandbox and project behind their
   ids are looked up when the card is made ("Pause sandbox
-  nexux-galtex-de693d"); an id nothing resolves stays an id.
-- Walked in the browser on galtex's page against the real model: "which
+  nexux-acme-de693d"); an id nothing resolves stays an id.
+- Walked in the browser on acme's page against the real model: "which
   sandboxes are running here? if there's one, pause it" listed them and
   produced a pause card; Cancel recorded; "mejor sí, pausalo" produced a
   new card by name — cancelled again, nothing paused.
@@ -300,10 +300,10 @@ project.
   stop button (`DELETE …/watches/[id]`), and polls the thread every 4 s only
   while a watch is open.
 - Walked end to end in the browser against the real model, on a throwaway
-  project: "launch a local sandbox on omarchy called asistente-e2e and tell
+  project: "launch a local sandbox on devbox called asistente-e2e and tell
   me when it's ready" → a launch card → Run → the model called `watch`
   itself → ~1 min later the panel showed "Listo: el sandbox local
-  asistente-e2e ya está en running en omarchy" with no user action. All of
+  asistente-e2e ya está en running en devbox" with no user action. All of
   it destroyed afterwards.
 - Tests: 4 watch tests (conditions, the tool, report-once with a
   reads-only reply turn, expiry), on top of phases 1–2's.
@@ -331,11 +331,11 @@ project.
 - `/api/assistant/chat` `type: "stack-assistant"` and
   `runStackAssistantTurn` stay for their other callers (stack proposal and
   repair services); the panel no longer uses them.
-- Walked in the browser on galtex: the panel opened with its two old
+- Walked in the browser on acme: the panel opened with its two old
   messages imported; "describe the stack and whether the last validation
   found problems" streamed `get_stack_context` then `nexux_validate_stack`
   — an MCP tool the Stack assistant did not have — and answered that
-  `postgres-backup` is a docker node on the galtex repo with neither a
+  `postgres-backup` is a docker node on the acme repo with neither a
   Dockerfile nor an image.
 
 ## Phase 4 — blocked on the backend
