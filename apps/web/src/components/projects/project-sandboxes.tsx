@@ -161,6 +161,7 @@ import {
   type StackServiceSummary,
 } from "@/services/sandbox";
 import { dockerTerminalTarget } from "@/lib/terminal-target";
+import { getDockerEndpoints } from "@/services/docker-endpoints";
 import { ContextCheck } from "@/components/settings/credential-check";
 import { DockerEndpointPicker } from "@/components/projects/docker-endpoint-picker";
 import { SandboxSeedResetDialog } from "@/components/projects/sandbox-seed-reset";
@@ -1249,6 +1250,13 @@ function SetupEditor({
     restored.destination,
   );
   const isLocal = destination === "local";
+  // Shared cache with the Which Docker picker — names the endpoint in the review.
+  const dockerEndpoints = useQuery({
+    queryKey: ["docker-endpoints"],
+    queryFn: getDockerEndpoints,
+    enabled: isLocal && Boolean(config.dockerEndpointId),
+  });
+  const endpointName = dockerEndpoints.data?.find((e) => e.id === config.dockerEndpointId)?.name;
   // Spec 29 — a cloud launch that would carry seed data marked as holding
   // real people's data says so, and waits for an explicit yes.
   const projectSeeds = useQuery({
@@ -2366,7 +2374,9 @@ function SetupEditor({
               label="Runs on"
               value={
                 isLocal
-                  ? "Local Docker container — free"
+                  ? config.dockerEndpointId
+                    ? `Docker container on ${endpointName ?? "a Docker endpoint"} — free`
+                    : "Local Docker container — free"
                   : `${providerLabel(config.provider)} · ${config.region} · ${config.size}${sizeInfo ? ` (~$${sizeInfo.hourly.toFixed(3)}/h)` : ""}`
               }
               onEdit={() => setStepKey(isLocal ? "type" : "machine")}
@@ -4336,7 +4346,9 @@ function SandboxRow({
                   Save data as seed…
                 </DropdownMenuItem>
               )}
-              {sandbox.provider === "local" && (
+              {/* An endpoint's sandbox (every one, on a host) has no folder
+                  here: mount-only repos are refused there (spec 26). */}
+              {sandbox.provider === "local" && !sandbox.dockerEndpointId && (
                 <DropdownMenuItem
                   onClick={() => reveal.mutate()}
                   disabled={reveal.isPending}

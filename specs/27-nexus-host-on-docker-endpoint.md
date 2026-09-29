@@ -490,8 +490,10 @@ launch (local) ──docker -H ssh://jairo@192.168.0.35──▶ omarchy's docke
   host's terminal server opened a shell as `nexus` in the container, over
   the host's endpoint key; postgres in the stack answered healthy.
 - **Destroy:** from the host; container and volumes gone on omarchy.
-- **Left open:** the project's own Terminal tab showed "Connection error" in
-  the in-app browser pane, while the same WebSocket (`:3002`) opened from a
-  plain client — likely the pane, to be checked from a real browser. The
-  review step's "Runs on" says "Local Docker container" without naming the
-  endpoint, and the row menu offers "Open files in Finder" on a host.
+- **Follow-ups, done:** the project's Terminal tab showed "Connection error"
+  only in the desktop app's browser pane, which blocks any port other than
+  the page's (even a plain `fetch` to `:3002` failed there); in Chrome the
+  same tab opens a shell on the host. The review step's "Runs on" now names
+  the endpoint ("Docker container on omarchy"), and "Open files in Finder"
+  is hidden for an endpoint's sandbox — the reveal route refuses it too,
+  since mount-only repos never run there.
