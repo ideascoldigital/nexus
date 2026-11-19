@@ -40,6 +40,8 @@ export const BOT_FAILED_MARKER = "/tmp/nexux-bot-failed";
 export const BOT_MCP_CONFIG = "/etc/nexux-bot/mcp.json";
 /** The bot's own MCP servers (from its settings), rewritten before every prompt. Owner-only: may hold keys. */
 export const BOT_USER_MCP_CONFIG = `${BOT_HOME}/.nexux-mcp.json`;
+/** How long Claude waits for a bot's MCP servers to start (MCP_TIMEOUT): room for a cold `npx -y`. */
+export const BOT_MCP_STARTUP_MS = 180_000;
 export const BOT_CONTAINER_LABEL = "nexux-bot=1";
 export const BOT_IMAGE_REPO = "nexux-bot";
 export const BOT_SCREEN = { width: 1440, height: 900 };
@@ -891,8 +893,12 @@ export function buildBotClaudeCommand(
 ): string {
   const resume = opts.resumeSessionId ? `--resume ${shq(opts.resumeSessionId)} ` : "";
   const model = opts.model?.trim() ? `--model ${shq(opts.model.trim())} ` : "";
+  // A bot's own stdio MCP servers usually start with `npx -y <pkg>`, and its
+  // computer is fresh after every sleep: the first download can take a minute
+  // or more (mongodb-mcp-server: ~72s), past Claude Code's 30s startup wait.
+  const mcpWait = opts.userMcp ? `MCP_TIMEOUT=${BOT_MCP_STARTUP_MS} ` : "";
   return (
-    `claude ${resume}${model}-p ${shq(prompt)}` +
+    `${mcpWait}claude ${resume}${model}-p ${shq(prompt)}` +
     ` --append-system-prompt ${shq(opts.systemPrompt)}` +
     ` --mcp-config ${BOT_MCP_CONFIG}${opts.userMcp ? ` ${BOT_USER_MCP_CONFIG}` : ""}` +
     ` --permission-mode bypassPermissions --output-format stream-json --verbose`
