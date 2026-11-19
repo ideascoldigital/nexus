@@ -12,6 +12,7 @@ import { GET as listBots, POST as createBot } from "./bots/route";
 import { DELETE as deleteBot, GET as getBot, PATCH as patchBot } from "./bots/[botId]/route";
 import { GET as feed, POST as sendPrompt } from "./bots/[botId]/runs/route";
 import { DELETE as cancelRun } from "./bots/[botId]/runs/[runId]/route";
+import { POST as actOnMail } from "./bots/[botId]/runs/[runId]/mail/route";
 import { PATCH as touchSession } from "./bots/[botId]/session/route";
 import { GET as listRoutines, POST as createRoutine } from "./bots/[botId]/routines/route";
 import { DELETE as deleteRoutine, PATCH as patchRoutine } from "./bots/[botId]/routines/[routineId]/route";
@@ -239,4 +240,27 @@ test("handoffs go to named teammates only, and chains stop", async () => {
     deliverHandoffs({ fromId: from.id, fromName: "Marketero", hop: 1, text: msg("creative designer") }),
     /Claude Code token/,
   );
+});
+
+test("email cards: discard once, reject bad addresses and unknown cards", async () => {
+  const bot = await prisma.bot.create({ data: { name: "Mailer" } });
+  const session = await prisma.botSession.create({ data: { botId: bot.id, status: "stopped", containerName: "c-mail" } });
+  const mail = (to: string) => "```mail\n" + JSON.stringify({ to, subject: "Hola", body: "Cuerpo" }) + "\n```";
+  const run = await prisma.botRun.create({
+    data: { botId: bot.id, sessionId: session.id, prompt: "write them", status: "completed", result: `Listos.\n${mail("ana@example.com")}\n${mail("leo@example.com")}` },
+  });
+  const act = (body: unknown, runId = run.id) =>
+    actOnMail(json(`/api/bots/${bot.id}/runs/${runId}/mail`, "POST", body), p({ botId: bot.id, runId }));
+
+  assert.equal((await act({ index: 2, action: "discard" })).status, 404); // only two cards
+  assert.equal((await act({ index: 0, action: "nope" })).status, 400);
+  assert.equal((await act({ index: 0, action: "send", mail: { to: "not-an-address", subject: "x", body: "y" } })).status, 400);
+  assert.equal((await act({ index: 0, action: "send", mail: { to: "a@b.co", cc: "bad", subject: "x", body: "y" } })).status, 400);
+
+  assert.equal((await act({ index: 1, action: "discard" })).status, 200);
+  assert.equal((await act({ index: 1, action: "discard" })).status, 409); // once per card
+  const after = await prisma.botRun.findUniqueOrThrow({ where: { id: run.id } });
+  assert.deepEqual(JSON.parse(after.mailState!), { "1": { status: "discarded" } });
+  // Nothing was queued for a discard.
+  assert.equal(await prisma.botRun.count({ where: { botId: bot.id } }), 1);
 });

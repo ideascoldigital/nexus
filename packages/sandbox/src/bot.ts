@@ -702,6 +702,8 @@ export const BOT_CHOICES_FENCE = "choices";
 export const BOT_ROUTINE_FENCE = "routine";
 /** Fence of the block a bot messages a teammate (another bot) with. */
 export const BOT_HANDOFF_FENCE = "handoff";
+/** Fence of the block a bot drafts an email for the user to review with. */
+export const BOT_MAIL_FENCE = "mail";
 
 /** What the bot knows about itself and its computer, every run. */
 export function renderBotSystemPrompt(bot: {
@@ -765,6 +767,20 @@ export function renderBotSystemPrompt(bot: {
     `- \`cron\` is 5-field cron in the user's timezone (${bot.timezone ?? "the host's"}). \`prompt\` is what future you does each time, self-contained: by then your computer may be fresh and you may need to sign in again.`,
     "- To change one, send the block again with its exact name and only the fields that change. To remove one: {\"name\": \"…\", \"delete\": true}. Pause with \"enabled\": false.",
     "- The app shows the change in the chat and in your panel; also say it in plain words. If a task you just did looks like it will repeat, suggest a routine (a choices question is a good way).",
+  );
+  parts.push(
+    "",
+    "# Emails",
+    "",
+    "Never send an email on your own. When you write one for the user (a reply, a follow-up, a welcome…), put each email in a block at the end of your reply:",
+    "",
+    "```" + BOT_MAIL_FENCE,
+    '{"from": "me@example.com", "to": "ana@example.com", "cc": "", "subject": "Welcome to Acme", "body": "Hi Ana,\\n\\nThanks for signing up…\\n\\nBest,\\nAlex"}',
+    "```",
+    "",
+    "- The app shows each block as an email card the user can edit, with Send and Discard. When they press Send, you get a message asking you to send it from Gmail in your browser, exactly as they left it — that is the only time you send.",
+    "- One block per email (several are fine). `body` is plain text with \\n line breaks, complete with greeting and signature. `from` is the Google account you are signed in with, if you know it. `cc`/`bcc` are optional, comma-separated.",
+    "- In your text, say briefly what the emails are; don't paste them again outside the blocks.",
   );
   parts.push(
     "",

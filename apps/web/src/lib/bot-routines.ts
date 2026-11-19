@@ -12,6 +12,7 @@
 
 import { parseChoices, type BotChoices } from "@/lib/bot-choices";
 import { handoffRun, parseHandoffBlocks, replyRun, type HandoffSpec } from "@/lib/bot-handoffs";
+import { mailRun, parseMailBlocks, type MailDraft } from "@/lib/bot-mail";
 import { isHandback, isIntro } from "@/lib/bot-prompts";
 
 export const ROUTINE_FENCE = "routine";
@@ -56,13 +57,15 @@ export function splitReply(text: string | null | undefined): {
   choices: BotChoices | null;
   routines: RoutineSpec[];
   handoffs: HandoffSpec[];
+  mails: MailDraft[];
 } {
   const { body: withoutRoutines, routines } = parseRoutineBlocks(text);
-  const { body, handoffs } = parseHandoffBlocks(withoutRoutines);
+  const { body: withoutMails, mails } = parseMailBlocks(withoutRoutines);
+  const { body, handoffs } = parseHandoffBlocks(withoutMails);
   const choices = parseChoices(body);
   // NEEDS_INPUT: is for the app (it flags the reply), not for reading.
   const shown = (choices ? choices.body : body).replace(/^NEEDS_INPUT:\s*/gm, "").trim();
-  return { body: shown, choices, routines, handoffs };
+  return { body: shown, choices, routines, handoffs, mails };
 }
 
 // ---- Runs a routine fires ------------------------------------------------------
@@ -208,6 +211,8 @@ export function promptLabel(prompt: string): string {
   if (routine) return `Routine · ${routine.name}`;
   const from = handoffRun(prompt);
   if (from) return `Message from ${from.fromName}`;
+  const mail = mailRun(prompt);
+  if (mail) return `${mail.mode === "send" ? "Sending" : "Saving a draft"} · ${mail.mail.subject || mail.mail.to}`;
   const back = replyRun(prompt);
   if (back) return `Continuing with ${back.teammateName}'s answer`;
   return prompt;

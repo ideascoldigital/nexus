@@ -5,6 +5,7 @@ import { botVncUrl } from "@nexux/sandbox";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { handoffRun, replyRun } from "@/lib/bot-handoffs";
+import { mailRun } from "@/lib/bot-mail";
 import { isHandback, isIntro } from "@/lib/bot-prompts";
 import { describeCron, routineRun, splitReply } from "@/lib/bot-routines";
 import { BOT_SHAPES } from "@/lib/bot-shapes";
@@ -155,6 +156,8 @@ export function botPreview(
     if (from) return `${from.fromName}: ${clean(from.message)}`;
     const back = replyRun(run.prompt);
     if (back) return `${back.teammateName} replied`;
+    const mail = mailRun(run.prompt);
+    if (mail) return `${mail.mode === "send" ? "Sending" : "Saving draft"} · ${clean(mail.mail.subject)}`;
     return `You: ${clean(run.prompt)}`;
   }
   if (run.status === "error") return run.error ? `Error: ${clean(run.error)}` : "Error";
@@ -162,6 +165,7 @@ export function botPreview(
   const reply = splitReply(run.result);
   if (reply.choices) return clean(reply.choices.question);
   if (reply.body) return clean(reply.body);
+  if (reply.mails.length) return reply.mails.length === 1 ? `Email to review · ${clean(reply.mails[0]!.subject)}` : `${reply.mails.length} emails to review`;
   if (reply.handoffs.length) return `Sent to ${reply.handoffs[0]!.to}`;
   if (reply.routines.length) return `Updated routine · ${reply.routines[0]!.name}`;
   return "Done";
@@ -243,7 +247,9 @@ export function withEarlierContext(
             ? `Your teammate ${handoffRun(h.prompt)!.fromName} wrote: ${handoffRun(h.prompt)!.message}`
             : replyRun(h.prompt)
               ? `Your teammate ${replyRun(h.prompt)!.teammateName} answered: ${replyRun(h.prompt)!.answer}`
-              : `The user asked: ${h.prompt.trim()}`;
+              : mailRun(h.prompt)
+                ? `(The user approved your email "${mailRun(h.prompt)!.mail.subject}" to ${mailRun(h.prompt)!.mail.to} and asked you to ${mailRun(h.prompt)!.mode === "send" ? "send it" : "save it as a Gmail draft"}.)`
+                : `The user asked: ${h.prompt.trim()}`;
     const answer = (h.result ?? "").trim();
     const short = answer.length > perAnswer ? `${answer.slice(0, perAnswer)}…` : answer;
     return short ? `${asked}\nYou answered: ${short}` : asked;

@@ -138,6 +138,31 @@ cron in the host timezone, enabled, next/last run).
 - API: `GET/POST /api/bots/:id/routines`, `PATCH/DELETE …/:routineId`,
   `POST …/:routineId/run`; the feed carries `routines`.
 
+## Emails for review
+
+A bot never sends an email on its own. It drafts one as a `mail` block —
+`{"from","to","cc","bcc","subject","body"}`, one per email — and the chat
+shows each as a card (Mail · subject · From / To / Cc · body) that the user
+edits in place, with **Discard** and **Send** (its menu: **Save as draft in
+Gmail**).
+
+- **Send / draft** (`POST /api/bots/:id/runs/:runId/mail`
+  `{index, action, mail}`) queues a run on the same bot, tagged
+  `[nexux:mail:<sourceRunId>:<index>:<send|draft>] <subject>` with the final
+  draft as JSON. `mailForClaude` tells it to do exactly that from Gmail in its
+  own browser — verbatim, from the given account, checking Sent/Drafts. Nexus
+  holds no mail credentials: the bot's Google sign-in (kept per bot, see
+  sign-ins) is what sends. The chat shows "✉ You sent “subject”" instead of a
+  bubble, then the bot's one-line confirmation.
+- **State** lives on the run that wrote the cards: `BotRun.mailState`, JSON
+  by index — `{"status":"discarded"}` or `{"status":"sent","runId","mode"}`.
+  The card then shows what went out, read-only, following that run
+  (Sending… → Sent / Saved to Drafts). A card is acted on once (a double click
+  cannot send twice: the write is conditional on the state it read); a send
+  whose run errored or was stopped reopens the card for a retry.
+- Addresses are checked loosely on the card and the route (To required; Cc/Bcc
+  optional, comma-separated).
+
 ## Teammates (bot to bot)
 
 - The system prompt lists the other bots (name + job) and teaches a

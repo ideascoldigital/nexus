@@ -120,6 +120,10 @@ test("the system prompt carries the job, the computer rules and the input marker
   assert.match(p, /reset whenever it goes to sleep/);
   assert.match(p, /"NEEDS_INPUT:"/);
   assert.match(p, /# Standing instructions\n\nAlways use staging\./);
+  // Emails are drafted as blocks the user sends from a card — never sent unasked.
+  assert.match(p, /Never send an email on your own/);
+  const example = p.match(/```mail\n(.*)\n```/)![1]!;
+  assert.equal(JSON.parse(example).body.split("\n").length, 6); // real line breaks once parsed
 
   const bare = renderBotSystemPrompt({ name: "B", needsInputMarker: "Q:" });
   assert.doesNotMatch(bare, /Standing instructions/);

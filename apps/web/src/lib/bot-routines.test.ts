@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { renderBotSystemPrompt } from "@nexux/sandbox";
 
+import { renderMailPrompt } from "./bot-mail";
 import { HANDBACK_PROMPT, renderIntroPrompt } from "./bot-prompts";
 import {
   ROUTINE_FENCE,
@@ -40,7 +41,7 @@ test("splitReply separates text, a question and routine changes", () => {
   assert.equal(r.body, "Hecho.");
   assert.equal(r.choices?.question, "¿La programo?");
   assert.equal(r.routines[0]?.name, "R");
-  assert.deepEqual(splitReply(null), { body: "", choices: null, routines: [], handoffs: [] });
+  assert.deepEqual(splitReply(null), { body: "", choices: null, routines: [], handoffs: [], mails: [] });
   assert.equal(splitReply("No tengo acceso.\nNEEDS_INPUT: ¿Qué cuenta uso?").body, "No tengo acceso.\n¿Qué cuenta uso?");
 });
 
@@ -92,4 +93,12 @@ test("the system prompt teaches the routine block and lists current routines", (
   assert.match(sys, /- "Actualizar" — Every Monday around 8:00 AM \(`0 8 \* \* 1`\), paused: p/);
   const example = sys.slice(sys.indexOf("```" + ROUTINE_FENCE));
   assert.equal(parseRoutineBlocks(example.slice(0, example.indexOf("```", 3) + 3)).routines.length, 1);
+});
+
+test("splitReply takes email blocks out of the text", () => {
+  const r = splitReply('Listo, un correo para revisar.\n```mail\n{"to": "ana@example.com", "subject": "Hola", "body": "Hola Ana"}\n```');
+  assert.equal(r.body, "Listo, un correo para revisar.");
+  assert.equal(r.mails.length, 1);
+  assert.equal(r.mails[0]!.to, "ana@example.com");
+  assert.equal(promptLabel(renderMailPrompt({ sourceRunId: "r", index: 0, mode: "draft", mail: r.mails[0]! })), "Saving a draft · Hola");
 });

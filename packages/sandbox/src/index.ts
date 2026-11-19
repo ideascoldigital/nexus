@@ -235,6 +235,7 @@ export {
   BOT_WORKDIR,
   BOT_CHOICES_FENCE,
   BOT_HANDOFF_FENCE,
+  BOT_MAIL_FENCE,
   BOT_CHROME_PROFILE,
   getBotCookies,
   setBotCookies,

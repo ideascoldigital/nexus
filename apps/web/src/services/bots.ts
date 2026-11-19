@@ -1,5 +1,6 @@
 // Client fetchers for /api/bots (spec 31).
 
+import type { MailDraft } from "@/lib/bot-mail";
 import type { BotShape } from "@/lib/bot-shapes";
 
 export type BotActivity = "off" | "starting" | "idle" | "working" | "error";
@@ -58,6 +59,8 @@ export type BotRun = {
   finishedAt: string | null;
   logTail: string | null;
   steps: BotStep[];
+  /** JSON MailState: what you did with each email card in the reply. */
+  mailState: string | null;
 };
 
 export type BotRoutine = {
@@ -132,6 +135,13 @@ export const getBotFeed = (id: string) => call<BotFeed>(`/api/bots/${id}/runs`);
 
 export const sendBotPrompt = (id: string, prompt: string) =>
   call<BotRun>(`/api/bots/${id}/runs`, { method: "POST", body: JSON.stringify({ prompt }) });
+
+/** Act on an email card in a reply: send it (or save a Gmail draft) as edited, or discard it. */
+export const actOnBotMail = (
+  id: string,
+  runId: string,
+  body: { index: number; action: "send" | "draft" | "discard"; mail?: MailDraft },
+) => call<{ ok: true }>(`/api/bots/${id}/runs/${runId}/mail`, { method: "POST", body: JSON.stringify(body) });
 
 export const cancelBotRun = (id: string, runId: string) =>
   call<{ ok: true }>(`/api/bots/${id}/runs/${runId}`, { method: "DELETE" });

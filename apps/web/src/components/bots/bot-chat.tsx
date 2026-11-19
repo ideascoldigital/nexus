@@ -22,6 +22,7 @@ import {
   Globe,
   Hand,
   Loader2,
+  Mail,
   MonitorPlay,
   PanelRight,
   Search,
@@ -31,11 +32,13 @@ import {
 } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
+import { MailCard } from "@/components/bots/bot-mail-card";
 import { Button } from "@/components/ui/button";
 import { MarkdownReport } from "@/components/ui/markdown-report";
 import { useToast } from "@/hooks/use-toast";
 import { CHOICE_LETTERS, type BotChoices } from "@/lib/bot-choices";
 import { findTeammate, handoffRun, replyRun } from "@/lib/bot-handoffs";
+import { mailRun, parseMailState } from "@/lib/bot-mail";
 import { isHandback, isIntro } from "@/lib/bot-prompts";
 import { textOn } from "@/lib/bot-shapes";
 import { routineRun, splitReply } from "@/lib/bot-routines";
@@ -116,6 +119,7 @@ export function BotChat({
       t,
     ]);
   }
+  const runsById = new Map(runs.map((r) => [r.id, r]));
   const busy = runs.some(
     (r) => r.status === "queued" || r.status === "running",
   );
@@ -236,6 +240,8 @@ export function BotChat({
                   team={team}
                   onOpenBot={onOpenBot}
                   threads={threadsByRun.get(r.id)}
+                  runsById={runsById}
+                  onChange={onChange}
                 />
               </Fragment>
             );
@@ -583,9 +589,14 @@ const RunMessages = memo(function RunMessages({
   team,
   onOpenBot,
   threads,
+  runsById,
+  onChange,
 }: {
   run: BotRun;
   bot: BotListItem;
+  /** The chat's runs, to follow the run that sends each email card. */
+  runsById: Map<string, BotRun>;
+  onChange: () => void;
   team: BotListItem[];
   onOpenBot: (id: string) => void;
   threads?: BotThreadReply[];
@@ -637,8 +648,26 @@ const RunMessages = memo(function RunMessages({
     ? (team.find((b) => b.id === incoming.fromId) ?? null)
     : null;
   const answerBack = replyRun(run.prompt);
-  // The app sent it, not you (an intro, a routine, a teammate's answer coming back).
-  const quiet = isIntro(run.prompt) || routine !== null || answerBack !== null;
+  const sending = mailRun(run.prompt);
+  // The app sent it, not you (an intro, a routine, a teammate's answer coming
+  // back, an email you approved on its card).
+  const quiet = isIntro(run.prompt) || routine !== null || answerBack !== null || sending !== null;
+  const mailState = parseMailState(run.mailState);
+  const mails = reply?.mails.map((m, i) => (
+    <MailCard
+      key={`m${i}`}
+      botId={bot.id}
+      runId={run.id}
+      index={i}
+      draft={m}
+      state={mailState[i]}
+      sendRun={(() => {
+        const s = mailState[i];
+        return s?.status === "sent" ? runsById.get(s.runId) : undefined;
+      })()}
+      onChange={onChange}
+    />
+  ));
   const hidden = hidePrompt || quiet;
   return (
     <>
@@ -661,6 +690,11 @@ const RunMessages = memo(function RunMessages({
         <p className="flex items-center justify-center gap-1.5 py-1 text-[11.5px] text-muted-foreground">
           <Hand className="h-3 w-3" />
           You gave {bot.name} its computer back
+        </p>
+      ) : sending ? (
+        <p className="flex items-center justify-center gap-1.5 py-1 text-[11.5px] text-muted-foreground">
+          <Mail className="h-3 w-3" />
+          {sending.mode === "send" ? "You sent" : "You saved as a draft"} “{sending.mail.subject || sending.mail.to}”
         </p>
       ) : routine ? (
         <p className="flex items-center justify-center gap-1.5 py-1 text-[11.5px] text-muted-foreground">
@@ -753,6 +787,7 @@ const RunMessages = memo(function RunMessages({
               </Bubble>
             )}
             {posts}
+            {mails}
             <ChoicesCard
               choices={choices}
               bot={bot}
@@ -787,11 +822,14 @@ const RunMessages = memo(function RunMessages({
               </button>
             </Bubble>
             {posts}
+            {mails}
           </>
         ) : (
           <>
             {(reply?.body ||
-              (!reply?.routines.length && !reply?.handoffs.length)) && (
+              (!reply?.routines.length &&
+                !reply?.handoffs.length &&
+                !reply?.mails.length)) && (
               <Bubble>
                 {reply?.body ? (
                   <MarkdownReport>{reply.body}</MarkdownReport>
@@ -801,6 +839,7 @@ const RunMessages = memo(function RunMessages({
               </Bubble>
             )}
             {posts}
+            {mails}
           </>
         ))}
 

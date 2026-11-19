@@ -1238,6 +1238,7 @@ model BotRun {
   log        String    @default("")
   result     String? // Claude's final message
   needsInput Boolean   @default(false) // the reply ends asking the user for something
+  mailState  String? // JSON: what the user did with each email card in the reply (sent / discarded), by index
   error      String?
   costUsd    Float?
   durationMs Int?

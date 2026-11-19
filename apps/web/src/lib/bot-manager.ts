@@ -35,6 +35,7 @@ import {
   replyForClaude,
   replyRun,
 } from "@/lib/bot-handoffs";
+import { mailForClaude, mailRun } from "@/lib/bot-mail";
 import { applyRoutineSpecs, hostTimezone, nextRoutineRun } from "@/lib/bot-routine-store";
 import { describeCron, parseRoutineBlocks, renderRoutinePrompt, splitReply } from "@/lib/bot-routines";
 import {
@@ -372,6 +373,9 @@ async function drain(sessionId: string): Promise<void> {
     // A teammate's answer to something this bot asked for: continue the task.
     const answer = replyRun(run.prompt);
     if (answer) prompt = prompt.replace(run.prompt, replyForClaude(answer));
+    // The user approved an email on its card: send (or save) it as written.
+    const mail = mailRun(run.prompt);
+    if (mail) prompt = prompt.replace(run.prompt, mailForClaude(mail));
     // Links to the user's machine, reachable from the container.
     prompt = absolutizeNexusLinks(toContainerUrls(prompt));
 
