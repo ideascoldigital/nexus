@@ -84,6 +84,10 @@ export async function registerNode() {
       // Plan-mode runs have no queue to resume — just settle the orphans.
       const { recoverPlanRuns } = await import("@/lib/plan-runner");
       void recoverPlanRuns();
+      // Bots: a dead process leaves unsupervised desktop containers behind —
+      // delete them, settle their rows, then start the idle reaper.
+      const { recoverBots } = await import("@/lib/bot-manager");
+      void recoverBots();
     } catch (err) {
       console.error("[instrumentation] launch recovery failed:", err);
     }

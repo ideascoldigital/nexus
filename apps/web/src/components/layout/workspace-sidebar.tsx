@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   Bot,
+  BotMessageSquare,
   FolderKanban,
   Hash,
   LayoutDashboard,
@@ -28,6 +29,7 @@ const NAV = [
   { icon: LayoutDashboard, label: "Dashboard", href: "/" },
   { icon: FolderKanban, label: "Projects", href: "/projects" },
   { icon: Bot, label: "Agents", href: "/agents" },
+  { icon: BotMessageSquare, label: "Bots", href: "/bots" },
   { icon: Hash, label: "Skills", href: "/skills" },
   { icon: Settings, label: "Settings", href: "/settings" },
 ];
@@ -81,10 +83,12 @@ export function WorkspaceSidebar() {
   return (
     <aside
       data-collapsed={collapsed ? "" : undefined}
-      className={`relative hidden shrink-0 flex-col gap-0.5 border-r border-border/60 bg-sidebar py-4 transition-[width] duration-200 ease-out md:flex ${
+      className={`titlebar-inset-top relative hidden shrink-0 flex-col gap-0.5 border-r border-border/60 bg-sidebar py-4 transition-[width] duration-200 ease-out md:flex ${
         collapsed ? "w-[60px] px-2" : "w-[210px] px-3"
       }`}
     >
+      {/* macOS app: the traffic lights live up here; the strip drags the window. */}
+      <div data-tauri-drag-region className="titlebar-only absolute inset-x-0 top-0 h-10" />
       <WorkspaceSwitcher collapsed={collapsed} />
 
       {!collapsed && (

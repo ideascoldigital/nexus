@@ -65,6 +65,7 @@ Lightweight scoping layer in `lib/workspace.ts`, designed so everything predatin
 
 ## Key subsystems
 
+- **Bots (spec 23):** `lib/bot-manager.ts` (session lifecycle, per-session prompt queue, idle reaper, boot recovery) and `lib/bot-view.ts` (pure shaping + input schema) over `@nexux/sandbox` `bot.ts`. Routes under `/api/bots`. UI: `/bots` → `components/bots/bots-view.tsx` (team rail, chat, live noVNC computer panel), in its own `(bots)` route group so the simple view shows bots only — no AppShell sidebar, header or status bar.
 - **Sandbox orchestration:** `lib/sandbox-manager.ts`, `lib/task-manager.ts`, `lib/task-scheduler.ts`, `lib/dev-console.ts` — wraps `@nexux/sandbox` (provision → bootstrap → run agent task → notify). UI: `project-sandboxes`, `dev-console` (continuous agent session w/ prompt queue), `run-on-sandbox-dialog`, `scheduled-tasks-card`.
 - **Dual brain:** a project's `brain` (`claude` | `opencode`, per `ProjectBrain`) picks which agent CLI runs delegated work. Callers go through `@nexux/sandbox`'s `runAgentTask(policy.brain, …)` and stay brain-agnostic; only model selection (`claudeModel` vs `openCodeModel`) and sandbox provisioning (`installOpenCode`, auto-on when `brain=opencode`) branch on it.
 - **Features kanban:** drag between status columns (native HTML5 DnD), optimistic updates + rollback; Queue column wired to the dev sandbox. Roadmap generator bridges the definition document → DevPhases + Features (propose-then-Apply, nothing persisted without Apply).

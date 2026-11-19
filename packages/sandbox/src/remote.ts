@@ -393,6 +393,9 @@ export function describeEvent(event: StreamEvent): string | null {
           (input.command as string) ??
           (input.pattern as string) ??
           (input.path as string) ??
+          (input.url as string) ?? // WebFetch, browser_navigate
+          (input.query as string) ?? // WebSearch
+          (input.element as string) ?? // browser_click / browser_type: the human description
           "";
         lines.push(
           `[claude] ${block.name}${detail ? ` ${String(detail).slice(0, 120)}` : ""}`,

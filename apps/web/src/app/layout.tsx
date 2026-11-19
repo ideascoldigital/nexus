@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import Script from "next/script";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryProvider } from "@/providers/query-provider";
 import { Toaster } from "@/components/ui/toaster";
@@ -34,8 +35,16 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${inter.variable} ${jetbrainsMono.variable} dark h-full antialiased`}
+      // data-titlebar is set by the script below, before hydration.
+      suppressHydrationWarning
     >
       <body className="h-full bg-background text-foreground">
+        {/* In the macOS desktop app the title bar is an overlay: the traffic
+            lights sit inside the page, which leaves room for them and marks
+            drag regions. Runs before hydration so nothing jumps. */}
+        <Script id="titlebar-overlay" strategy="beforeInteractive">
+          {`try{if("__TAURI_INTERNALS__" in window&&/Mac/.test(navigator.userAgent))document.documentElement.dataset.titlebar="overlay"}catch(e){}`}
+        </Script>
         <QueryProvider>
           <TooltipProvider>
             {children}

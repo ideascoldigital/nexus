@@ -122,6 +122,17 @@ test("assistant/tool events become readable log lines", () => {
 
 // --- describeEvent ----------------------------------------------------------
 
+test("tool_use detail falls back to url, query, then element", () => {
+  const line = (input: Record<string, unknown>) =>
+    describeEvent({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", name: "T", input }] },
+    } as StreamEvent);
+  assert.equal(line({ url: "https://a.b", query: "q" }), "[claude] T https://a.b");
+  assert.equal(line({ query: "best model", element: "e" }), "[claude] T best model");
+  assert.equal(line({ element: "Search button", text: "secret" }), "[claude] T Search button");
+});
+
 test("tool_use detail priority: file_path > command > pattern > path", () => {
   const line = describeEvent({
     type: "assistant",

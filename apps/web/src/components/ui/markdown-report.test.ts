@@ -81,3 +81,14 @@ test("headings, code and lists still render after enabling gfm", () => {
 test("empty input renders nothing rather than throwing", () => {
   assert.doesNotThrow(() => render(""));
 });
+
+test("consecutive images form one row; mixed paragraphs do not", async () => {
+  const { isImageRow, joinImageLines } = await import("./markdown-report");
+  const img = { type: "element", tagName: "img" };
+  const nl = { type: "text", value: "\n" };
+  assert.equal(isImageRow({ type: "element", children: [img, nl, img] }), true);
+  assert.equal(isImageRow({ type: "element", children: [img] }), false);
+  assert.equal(isImageRow({ type: "element", children: [img, { type: "text", value: " Portada" }, img] }), false);
+  assert.equal(joinImageLines("![a](1.png)\n\n![b](2.png)\n\n\n![c](3.png)\n\nTexto"), "![a](1.png)\n![b](2.png)\n![c](3.png)\n\nTexto");
+  assert.equal(joinImageLines("Hola\n\n![a](1.png)"), "Hola\n\n![a](1.png)");
+});

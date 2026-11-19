@@ -1052,3 +1052,93 @@ model TaskSchedule {
   @@index([projectId])
   @@index([enabled, nextRunAt])
 }
+
+// Bot - an AI teammate with a job (spec 23). It owns no machine: every session
+// runs in a fresh, ephemeral desktop container (Chromium + Claude Code on the
+// Claude subscription token) that is deleted when the session ends.
+model Bot {
+  id                 String   @id @default(cuid())
+  name               String
+  role               String? // one-line job, shown under the name and given to Claude
+  instructions       String   @default("") // standing instructions appended to the system prompt
+  color              String   @default("#8b5cf6")
+  shape              String   @default("blob") // avatar shape id (apps/web bot-shapes)
+  model              String? // claude --model for its runs; null = CLI default
+  claudeCredentialId String? // saved "claude" credential to run on; null = the first one (resolveClaudeCodeToken)
+  idleMinutes        Int      @default(30) // the computer is deleted after this long without a prompt
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  sessions BotSession[]
+  runs     BotRun[]
+  routines BotRoutine[]
+}
+
+// BotSession - one lifetime of a bot's ephemeral computer (one container).
+// Claude's memory (claudeSessionId) lives in the container, so a new session
+// starts with a clean slate even though the chat history stays on screen.
+model BotSession {
+  id              String    @id @default(cuid())
+  botId           String
+  status          String    @default("starting") // starting | ready | stopped | error
+  containerName   String
+  vncPort         Int? // noVNC on host loopback
+  vncPassword     String? // random per session; the container is gone when it ends
+  claudeSessionId String? // --resume target for the next prompt in this session
+  systemPromptHash String? // hash of the system prompt claudeSessionId began with; a change means a fresh Claude session
+  error           String?
+  lastActivityAt  DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  stoppedAt       DateTime?
+
+  bot  Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  runs BotRun[]
+
+  @@index([botId])
+  @@index([status])
+}
+
+// BotRun - one prompt to a bot, executed in its session's container.
+model BotRun {
+  id         String    @id @default(cuid())
+  botId      String
+  sessionId  String
+  prompt     String
+  status     String    @default("queued") // queued | running | completed | error | canceled
+  log        String    @default("")
+  result     String? // Claude's final message
+  needsInput Boolean   @default(false) // the reply ends asking the user for something
+  error      String?
+  costUsd    Float?
+  durationMs Int?
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  bot     Bot        @relation(fields: [botId], references: [id], onDelete: Cascade)
+  session BotSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([botId])
+  @@index([sessionId])
+}
+
+// BotRoutine - recurring work a bot does on its own (spec 23): on `cron` (host
+// timezone) it wakes its computer and runs `prompt`. Created from the chat
+// (the bot ends a reply with a `routine` block) or from the bot's panel.
+model BotRoutine {
+  id        String    @id @default(cuid())
+  botId     String
+  name      String // unique per bot by convention: the bot updates a routine by name
+  prompt    String // self-contained instructions for each run
+  cron      String // 5-field cron, host timezone
+  enabled   Boolean   @default(true)
+  lastRunAt DateTime?
+  nextRunAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId])
+  @@index([enabled, nextRunAt])
+}
