@@ -106,6 +106,10 @@ test("the Claude command resumes, picks the model, and wires the browser MCP", (
 
   const fresh = buildBotClaudeCommand("hi", { systemPrompt: "s" });
   assert.match(fresh, /^claude -p 'hi'/);
+  assert.match(fresh, /--mcp-config \/etc\/nexux-bot\/mcp\.json --permission-mode/);
+  // The bot's own servers ride in a second config file.
+  const withOwn = buildBotClaudeCommand("hi", { systemPrompt: "s", userMcp: true });
+  assert.match(withOwn, /--mcp-config \/etc\/nexux-bot\/mcp\.json \/home\/bot\/\.nexux-mcp\.json --permission-mode/);
 });
 
 test("the system prompt carries the job, the computer rules and the input marker", () => {
@@ -127,6 +131,9 @@ test("the system prompt carries the job, the computer rules and the input marker
 
   const bare = renderBotSystemPrompt({ name: "B", needsInputMarker: "Q:" });
   assert.doesNotMatch(bare, /Standing instructions/);
+  assert.doesNotMatch(bare, /# Your tools/);
+  const tooled = renderBotSystemPrompt({ name: "B", needsInputMarker: "Q:", mcpServers: ["context7", "crm"] });
+  assert.match(tooled, /# Your tools\n\nBesides the browser, the user connected these MCP servers for you: `context7`, `crm`/);
   assert.doesNotMatch(bare, /whose job is/);
 });
 

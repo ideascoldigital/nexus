@@ -16,6 +16,7 @@ import {
   listBotContainers,
   renderBotSystemPrompt,
   runBotPrompt,
+  writeBotMcpConfig,
   stopBotClaudeRuns,
   stopBotContainer,
 } from "@nexux/sandbox";
@@ -36,6 +37,7 @@ import {
   replyRun,
 } from "@/lib/bot-handoffs";
 import { mailForClaude, mailRun } from "@/lib/bot-mail";
+import { validateBotMcpServers } from "@/lib/bot-mcp";
 import { applyRoutineSpecs, hostTimezone, nextRoutineRun } from "@/lib/bot-routine-store";
 import { describeCron, parseRoutineBlocks, renderRoutinePrompt, splitReply } from "@/lib/bot-routines";
 import {
@@ -327,6 +329,9 @@ async function drain(sessionId: string): Promise<void> {
       orderBy: { createdAt: "asc" },
       select: { name: true, role: true },
     });
+    // Its own MCP servers, as saved (validated on save; re-checked in case of hand edits).
+    const own = validateBotMcpServers(session.bot.mcpServers);
+    const mcpServers = own.ok ? own.servers : null;
     const systemPrompt = renderBotSystemPrompt({
       name: session.bot.name,
       role: session.bot.role,
@@ -336,6 +341,7 @@ async function drain(sessionId: string): Promise<void> {
       hostAppUrl: hostAppUrl(),
       teammates: team,
       workspaceFolder: workspaceFolderFor(session.bot.name),
+      mcpServers: mcpServers ? Object.keys(mcpServers) : [],
     });
     const sysHash = promptHash(systemPrompt);
     const resume =
@@ -383,11 +389,20 @@ async function drain(sessionId: string): Promise<void> {
     aborts.set(run.id, abort);
     const log = createRunLog(run.id);
     try {
+      // Rewritten every prompt, so a settings change applies on the next message.
+      let userMcp = false;
+      try {
+        await writeBotMcpConfig(session.containerName, mcpServers);
+        userMcp = Boolean(mcpServers);
+      } catch (err) {
+        console.warn(`[bots] ${session.bot.name}: MCP servers not loaded:`, err instanceof Error ? err.message : err);
+      }
       const result = await runBotPrompt(prompt, {
         container: session.containerName,
         systemPrompt,
         resumeSessionId: resume,
         model: session.bot.model,
+        userMcp,
         cwd: botWorkdir(session.bot.name),
         onLog: log.sink,
         timeoutMs: RUN_TIMEOUT_MS,

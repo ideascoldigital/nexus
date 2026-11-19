@@ -138,6 +138,29 @@ cron in the host timezone, enabled, next/last run).
 - API: `GET/POST /api/bots/:id/routines`, `PATCH/DELETE …/:routineId`,
   `POST …/:routineId/run`; the feed carries `routines`.
 
+## Tools (MCP servers)
+
+Besides the browser MCP every bot has, a bot can have its own MCP servers:
+`Bot.mcpServers`, Claude Code's native `mcpServers` JSON (the same shape a
+project's sandbox takes), edited in the bot's Settings → "Tools (MCP
+servers)". `lib/bot-mcp.ts` validates it on the form and the API: names
+`[A-Za-z0-9_-]{1,40}`, `browser` reserved, stdio entries need `command`
+(string `args`/`env`), `http`/`sse` entries need a `url` (string `headers`); a
+pasted whole config (`{"mcpServers": …}`) is unwrapped; empty clears it.
+
+- **On the computer:** before every prompt the manager writes them to
+  `/home/bot/.nexux-mcp.json` (`writeBotMcpConfig`: over stdin, `umask 077`,
+  since env/headers carry keys; removed when the bot has none) and Claude runs
+  with `--mcp-config <browser config> <that file>`. So an edit applies on the
+  next message, with no new computer.
+- **The bot knows:** the system prompt lists the servers by name ("# Your
+  tools") and says to prefer them over clicking through a site. A changed list
+  changes the prompt hash, so the next prompt starts a fresh Claude session.
+- **Limits:** stdio commands run inside the computer (Node/npx are there;
+  Python/uvx are not). OAuth-only remote MCPs can't complete a sign-in
+  headless: use API keys in `env`/`headers`. Secrets sit in the database in
+  plain JSON, like a project's `mcpServers`.
+
 ## Emails for review
 
 A bot never sends an email on its own. It drafts one as a `mail` block —

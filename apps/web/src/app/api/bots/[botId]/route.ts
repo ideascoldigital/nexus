@@ -1,10 +1,10 @@
-import { prisma } from "@nexux/db";
+import { Prisma, prisma } from "@nexux/db";
 import { NextRequest, NextResponse } from "next/server";
 import { removeBotFiles } from "@/lib/bot-files";
 import { removeBotProfile } from "@/lib/bot-workspace";
 import { removeCookieSnapshot } from "@/lib/team-cookies";
 import { stopBotSession } from "@/lib/bot-manager";
-import { botInputSchema } from "@/lib/bot-view";
+import { botDataFor, botInputSchema } from "@/lib/bot-view";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +25,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
   const exists = await prisma.bot.findUnique({ where: { id: botId }, select: { id: true } });
   if (!exists) return NextResponse.json({ error: "Bot not found" }, { status: 404 });
-  const bot = await prisma.bot.update({ where: { id: botId }, data: parsed.data });
+  const bot = await prisma.bot.update({ where: { id: botId }, data: botDataFor(parsed.data, Prisma.DbNull) as Prisma.BotUpdateInput });
   return NextResponse.json(bot);
 }
 

@@ -13,6 +13,8 @@ export type Bot = {
   color: string;
   shape: BotShape;
   model: string | null;
+  /** Its own MCP servers (Claude Code's native mcpServers shape), or null. */
+  mcpServers: Record<string, Record<string, unknown>> | null;
   claudeCredentialId: string | null;
   idleMinutes: number;
   createdAt: string;
@@ -106,6 +108,7 @@ export type BotInput = {
   shape?: BotShape;
   model?: string | null;
   idleMinutes?: number;
+  mcpServers?: Record<string, Record<string, unknown>> | null;
 };
 
 async function call<T>(url: string, init?: RequestInit): Promise<T> {

@@ -13,6 +13,7 @@ import { RoutineDialog } from "@/components/bots/bot-routine-dialog";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { parseBotMcpJson } from "@/lib/bot-mcp";
 import { promptLabel } from "@/lib/bot-routines";
 import { BOT_COLORS, BOT_SHAPES } from "@/lib/bot-shapes";
 import { cn } from "@/lib/utils";
@@ -255,6 +256,11 @@ function BotSettings({ bot, onDeleted }: { bot: BotListItem; onDeleted: () => vo
     model: bot.model ?? "",
     idleMinutes: bot.idleMinutes,
   });
+  // MCP servers edit as raw JSON (the native mcpServers shape), checked on save.
+  const [mcpJson, setMcpJson] = useState(() =>
+    bot.mcpServers && Object.keys(bot.mcpServers).length ? JSON.stringify(bot.mcpServers, null, 2) : "",
+  );
+  const mcp = parseBotMcpJson(mcpJson);
 
   const done = () => {
     qc.invalidateQueries({ queryKey: ["bots"] });
@@ -267,6 +273,7 @@ function BotSettings({ bot, onDeleted }: { bot: BotListItem; onDeleted: () => vo
         name: form.name.trim(),
         role: form.role?.trim() || null,
         model: form.model?.trim() || null,
+        mcpServers: mcp.ok ? mcp.servers : undefined,
       }),
     onSuccess: () => {
       done();
@@ -294,6 +301,10 @@ function BotSettings({ bot, onDeleted }: { bot: BotListItem; onDeleted: () => vo
       className="space-y-4"
       onSubmit={(e) => {
         e.preventDefault();
+        if (!mcp.ok) {
+          toast({ title: "Check the MCP servers", description: mcp.error, variant: "destructive" });
+          return;
+        }
         if (form.name.trim()) save.mutate();
       }}
     >
@@ -315,6 +326,20 @@ function BotSettings({ bot, onDeleted }: { bot: BotListItem; onDeleted: () => vo
           placeholder="Always cite the page you got each fact from."
           onChange={(e) => setForm({ ...form, instructions: e.target.value })}
         />
+      </Section>
+      <Section title="Tools (MCP servers)">
+        <textarea
+          className={cn(field, "min-h-24 resize-y font-mono text-[12px] leading-5", !mcp.ok && "border-destructive")}
+          value={mcpJson}
+          spellCheck={false}
+          placeholder={`{\n  "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },\n  "my-api": { "type": "http", "url": "https://mcp.example.com/mcp", "headers": { "Authorization": "Bearer …" } }\n}`}
+          onChange={(e) => setMcpJson(e.target.value)}
+        />
+        <p className={cn("px-1 text-[11.5px]", mcp.ok ? "text-muted-foreground" : "text-destructive")}>
+          {mcp.ok
+            ? "Claude Code's mcpServers JSON. Loaded on its computer next to the browser from the next message. Use API keys in env or headers: sign-in (OAuth) MCPs can't open a login here. Commands run inside the bot's computer (Node and npx are there)."
+            : mcp.error}
+        </p>
       </Section>
       <Section title="Look">
         <div className="space-y-3 rounded-xl border border-border bg-card/60 p-3">

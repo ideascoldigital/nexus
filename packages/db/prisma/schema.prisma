@@ -1196,6 +1196,7 @@ model Bot {
   model              String? // claude --model for its runs; null = CLI default
   claudeCredentialId String? // saved "claude" credential to run on; null = the first one (resolveClaudeCodeToken)
   idleMinutes        Int      @default(30) // the computer is deleted after this long without a prompt
+  mcpServers         Json? // its own MCP servers, Claude Code's native mcpServers shape — loaded next to the browser MCP
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

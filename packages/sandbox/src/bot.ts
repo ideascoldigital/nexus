@@ -38,6 +38,8 @@ export const BOT_CDP_PORT = 9222;
 export const BOT_READY_MARKER = "/tmp/nexux-bot-ready";
 export const BOT_FAILED_MARKER = "/tmp/nexux-bot-failed";
 export const BOT_MCP_CONFIG = "/etc/nexux-bot/mcp.json";
+/** The bot's own MCP servers (from its settings), rewritten before every prompt. Owner-only: may hold keys. */
+export const BOT_USER_MCP_CONFIG = `${BOT_HOME}/.nexux-mcp.json`;
 export const BOT_CONTAINER_LABEL = "nexux-bot=1";
 export const BOT_IMAGE_REPO = "nexux-bot";
 export const BOT_SCREEN = { width: 1440, height: 900 };
@@ -672,6 +674,22 @@ export async function getBotCookies(name: string): Promise<BotCookie[]> {
   return JSON.parse(res.stdout) as BotCookie[];
 }
 
+/**
+ * Write the bot's own MCP servers into its computer (or remove them when it
+ * has none). Their env/headers may hold API keys: they travel on stdin and the
+ * file is readable by the bot user only.
+ */
+export async function writeBotMcpConfig(name: string, servers: Record<string, unknown> | null): Promise<void> {
+  const script = servers
+    ? `umask 077 && cat > ${BOT_USER_MCP_CONFIG}`
+    : `rm -f ${BOT_USER_MCP_CONFIG}`;
+  const res = await docker(["exec", "-i", "-u", BOT_USER, name, "sh", "-c", script], {
+    stdin: servers ? JSON.stringify({ mcpServers: servers }) : "",
+    timeoutMs: 15_000,
+  });
+  if (res.code !== 0) throw new Error(`could not write the MCP config: ${tail(res.stderr, 200)}`);
+}
+
 /** Set cookies in a computer's browser. Values travel on stdin, never in argv. */
 export async function setBotCookies(name: string, cookies: Record<string, unknown>[]): Promise<void> {
   if (cookies.length === 0) return;
@@ -721,6 +739,8 @@ export function renderBotSystemPrompt(bot: {
   teammates?: { name: string; role?: string | null }[];
   /** Its own folder under the shared workspace, e.g. "creative-designer". */
   workspaceFolder?: string;
+  /** Names of its own MCP servers (besides the browser), from its settings. */
+  mcpServers?: string[];
 }): string {
   const parts = [
     `You are "${bot.name}", an AI teammate${bot.role?.trim() ? ` whose job is: ${bot.role.trim()}` : ""}.`,
@@ -810,6 +830,14 @@ export function renderBotSystemPrompt(bot: {
       parts.push(`- "${r.name}" — ${r.label} (\`${r.cron}\`)${r.enabled ? "" : ", paused"}: ${r.prompt}`);
     }
   }
+  if (bot.mcpServers?.length) {
+    parts.push(
+      "",
+      "# Your tools",
+      "",
+      `Besides the browser, the user connected these MCP servers for you: ${bot.mcpServers.map((n) => `\`${n}\``).join(", ")} (their tools are named \`mcp__<server>__<tool>\`). When one covers the task, use it instead of clicking through the website — it is faster and more reliable — and tell the user briefly which one you used. If one fails (not authorized, unreachable), say so plainly and fall back to the browser if you can.`,
+    );
+  }
   if (bot.instructions?.trim()) {
     parts.push("", "# Standing instructions", "", bot.instructions.trim());
   }
@@ -818,14 +846,20 @@ export function renderBotSystemPrompt(bot: {
 
 export function buildBotClaudeCommand(
   prompt: string,
-  opts: { systemPrompt: string; resumeSessionId?: string | null; model?: string | null },
+  opts: {
+    systemPrompt: string;
+    resumeSessionId?: string | null;
+    model?: string | null;
+    /** Also load BOT_USER_MCP_CONFIG (the bot's own servers, written by writeBotMcpConfig). */
+    userMcp?: boolean;
+  },
 ): string {
   const resume = opts.resumeSessionId ? `--resume ${shq(opts.resumeSessionId)} ` : "";
   const model = opts.model?.trim() ? `--model ${shq(opts.model.trim())} ` : "";
   return (
     `claude ${resume}${model}-p ${shq(prompt)}` +
     ` --append-system-prompt ${shq(opts.systemPrompt)}` +
-    ` --mcp-config ${BOT_MCP_CONFIG}` +
+    ` --mcp-config ${BOT_MCP_CONFIG}${opts.userMcp ? ` ${BOT_USER_MCP_CONFIG}` : ""}` +
     ` --permission-mode bypassPermissions --output-format stream-json --verbose`
   );
 }
@@ -838,6 +872,7 @@ export async function runBotPrompt(
     systemPrompt: string;
     resumeSessionId?: string | null;
     model?: string | null;
+    userMcp?: boolean;
     onLog?: LogSink;
     timeoutMs?: number;
     signal?: AbortSignal;

@@ -23,6 +23,7 @@ _Last updated: 2026-09-26._
 
 ## Milestones (timeline by PR)
 
+- **2026-11-19** — Bots get their own MCP servers (spec 31): Settings → "Tools (MCP servers)" takes Claude Code's native `mcpServers` JSON (validated: `browser` reserved, stdio needs `command`, http/sse need `url`). Written into the computer before every prompt (stdin, owner-only file) and loaded with a second `--mcp-config` next to the browser MCP; the system prompt names them.
 - **2026-11-19** — Bots draft emails for review (spec 31): a `mail` block in a reply renders as an editable card (From / To / Cc / subject / body) with Discard and Send (or Save as draft). Send queues a run that has the bot send it verbatim from Gmail in its own browser — no mail credentials in Nexus. Card state on `BotRun.mailState`; one action per card, retry after a failed send.
 - **2026-11-18** — Bots (spec 31, D-81): a `/bots` view of AI teammates, each with a job, that work on their own ephemeral computer. A session is a fresh `nexux-bot` container (Debian + Xvfb/fluxbox + Chromium + Claude Code + Playwright MCP over CDP), shown live through noVNC on host loopback and deleted on End session, after `idleMinutes`, or on restart. Runs on the Claude subscription token like sandboxes (`claude -p` inside the container only). New `Bot`/`BotSession`/`BotRun` models, `@nexux/sandbox` `bot.ts`, `lib/bot-manager.ts`, 5 routes, 20 tests. Not yet verified end to end against a real image build (Docker was not running when it landed).
 

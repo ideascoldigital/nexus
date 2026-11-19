@@ -239,6 +239,8 @@ export {
   BOT_CHROME_PROFILE,
   getBotCookies,
   setBotCookies,
+  writeBotMcpConfig,
+  BOT_USER_MCP_CONFIG,
   type BotCookie,
   BOT_OUTBOX,
   BOT_WORKSPACE,

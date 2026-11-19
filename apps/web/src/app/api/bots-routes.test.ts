@@ -264,3 +264,21 @@ test("email cards: discard once, reject bad addresses and unknown cards", async 
   // Nothing was queued for a discard.
   assert.equal(await prisma.botRun.count({ where: { botId: bot.id } }), 1);
 });
+
+test("a bot's MCP servers: saved in the native shape, rejected when wrong, cleared with null", async () => {
+  const created = await (await createBot(json("/api/bots?intro=0", "POST", { name: "Researcher" }))).json();
+  const patch = (body: unknown) => patchBot(json(`/api/bots/${created.id}`, "PATCH", body), p({ botId: created.id }));
+  const servers = { context7: { command: "npx", args: ["-y", "@upstash/context7-mcp"] } };
+
+  const saved = await patch({ mcpServers: servers });
+  assert.equal(saved.status, 200);
+  assert.deepEqual((await saved.json()).mcpServers, servers);
+
+  const bad = await patch({ mcpServers: { browser: { command: "x" } } });
+  assert.equal(bad.status, 400);
+  assert.match(JSON.stringify(await bad.json()), /taken by the bot's own browser/);
+
+  // Other edits leave them alone; null clears them.
+  assert.deepEqual((await (await patch({ role: "reads docs" })).json()).mcpServers, servers);
+  assert.equal((await (await patch({ mcpServers: null })).json()).mcpServers, null);
+});

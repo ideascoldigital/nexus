@@ -1,8 +1,8 @@
-import { prisma } from "@nexux/db";
+import { Prisma, prisma } from "@nexux/db";
 import { NextRequest, NextResponse } from "next/server";
 import { enqueueBotPrompt } from "@/lib/bot-manager";
 import { buildIntroPrompt } from "@/lib/bot-intro";
-import { botActivity, botInputSchema, botPreview } from "@/lib/bot-view";
+import { botActivity, botDataFor, botInputSchema, botPreview } from "@/lib/bot-view";
 
 export const dynamic = "force-dynamic";
 
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
-  const bot = await prisma.bot.create({ data: parsed.data });
+  const bot = await prisma.bot.create({ data: botDataFor(parsed.data, Prisma.DbNull) as Prisma.BotCreateInput });
   // `?intro=0` skips the greeting — imports create many bots at once, and each
   // greeting wakes a computer.
   if (req.nextUrl.searchParams.get("intro") === "0") return NextResponse.json(bot, { status: 201 });

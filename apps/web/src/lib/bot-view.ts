@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { handoffRun, replyRun } from "@/lib/bot-handoffs";
 import { mailRun } from "@/lib/bot-mail";
+import { validateBotMcpServers, type BotMcpServers } from "@/lib/bot-mcp";
 import { isHandback, isIntro } from "@/lib/bot-prompts";
 import { describeCron, routineRun, splitReply } from "@/lib/bot-routines";
 import { BOT_SHAPES } from "@/lib/bot-shapes";
@@ -22,7 +23,28 @@ export const botInputSchema = z.object({
   model: z.string().trim().max(60).nullish(),
   claudeCredentialId: z.string().nullish(),
   idleMinutes: z.number().int().min(5).max(24 * 60).optional(),
+  /** Its own MCP servers; null clears them. */
+  mcpServers: z
+    .unknown()
+    .transform((v, ctx) => {
+      const r = validateBotMcpServers(v);
+      if (!r.ok) {
+        ctx.addIssue({ code: "custom", message: `MCP servers: ${r.error}` });
+        return z.NEVER;
+      }
+      return r.servers;
+    })
+    .optional(),
 });
+
+/** botInputSchema output → Prisma data: a cleared Json column is DbNull, not null. */
+export function botDataFor<T extends { mcpServers?: BotMcpServers | null }>(
+  data: T,
+  dbNull: unknown,
+): Omit<T, "mcpServers"> & { mcpServers?: unknown } {
+  if (!("mcpServers" in data) || data.mcpServers === undefined) return data;
+  return { ...data, mcpServers: data.mcpServers ?? dbNull };
+}
 
 export type BotSessionView = {
   id: string;
