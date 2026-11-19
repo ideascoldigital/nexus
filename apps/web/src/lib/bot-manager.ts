@@ -16,6 +16,8 @@ import {
   listBotContainers,
   renderBotSystemPrompt,
   runBotPrompt,
+  botVaultMcpServer,
+  writeBotVaultScripts,
   writeBotMcpConfig,
   stopBotClaudeRuns,
   stopBotContainer,
@@ -38,6 +40,8 @@ import {
 } from "@/lib/bot-handoffs";
 import { mailForClaude, mailRun } from "@/lib/bot-mail";
 import { validateBotMcpServers } from "@/lib/bot-mcp";
+import { grantVault, revokeVault } from "@/lib/bot-vault-access";
+import { botMayUse, FILLABLE, resolveSecretRefs, type VaultType } from "@/lib/vault-items";
 import { applyRoutineSpecs, hostTimezone, nextRoutineRun } from "@/lib/bot-routine-store";
 import { describeCron, parseRoutineBlocks, renderRoutinePrompt, splitReply } from "@/lib/bot-routines";
 import {
@@ -331,7 +335,23 @@ async function drain(sessionId: string): Promise<void> {
     });
     // Its own MCP servers, as saved (validated on save; re-checked in case of hand edits).
     const own = validateBotMcpServers(session.bot.mcpServers);
-    const mcpServers = own.ok ? own.servers : null;
+    // The vault (spec 32): entries this bot may use. {{secret:name}} in its MCP
+    // servers resolve now, at the moment they go into its computer; logins,
+    // cards and contacts it uses through the vault MCP server, never reading them.
+    const vault = (await prisma.vaultItem.findMany({ orderBy: [{ type: "asc" }, { name: "asc" }] })).filter((v) =>
+      botMayUse(v, session.botId),
+    );
+    const secretOf = (name: string) => {
+      const v = vault.find((x) => x.type === "secret" && x.name === name);
+      const value = (v?.secret as { value?: unknown } | undefined)?.value;
+      return typeof value === "string" ? value : null;
+    };
+    const resolved = own.ok && own.servers ? resolveSecretRefs(own.servers, secretOf) : null;
+    const mcpServers = resolved && Object.keys(resolved.servers).length ? resolved.servers : null;
+    for (const m of resolved?.missing ?? []) {
+      console.warn(`[bots] ${session.bot.name}: MCP server "${m.server}" skipped — no vault secret "${m.secret}" it may use`);
+    }
+    const fillable = vault.filter((v) => (FILLABLE[v.type as VaultType] ?? []).length > 0);
     const systemPrompt = renderBotSystemPrompt({
       name: session.bot.name,
       role: session.bot.role,
@@ -342,6 +362,14 @@ async function drain(sessionId: string): Promise<void> {
       teammates: team,
       workspaceFolder: workspaceFolderFor(session.bot.name),
       mcpServers: mcpServers ? Object.keys(mcpServers) : [],
+      skippedMcp: resolved?.missing.map((m) => `${m.server} (needs the vault secret "${m.secret}")`) ?? [],
+      vault: fillable.map((v) => ({
+        type: v.type,
+        name: v.name,
+        websites: Array.isArray(v.websites) ? (v.websites as string[]) : [],
+        username: v.username,
+        hint: v.hint,
+      })),
     });
     const sysHash = promptHash(systemPrompt);
     const resume =
@@ -388,12 +416,20 @@ async function drain(sessionId: string): Promise<void> {
     const abort = new AbortController();
     aborts.set(run.id, abort);
     const log = createRunLog(run.id);
+    // Valid only while this prompt runs.
+    const vaultToken = fillable.length ? grantVault({ botId: session.botId, runId: run.id, container: session.containerName }) : null;
     try {
       // Rewritten every prompt, so a settings change applies on the next message.
       let userMcp = false;
       try {
-        await writeBotMcpConfig(session.containerName, mcpServers);
-        userMcp = Boolean(mcpServers);
+        const servers: Record<string, unknown> = { ...(mcpServers ?? {}) };
+        if (vaultToken) {
+          await writeBotVaultScripts(session.containerName);
+          servers.vault = botVaultMcpServer({ nexusUrl: hostAppUrl(), botId: session.botId, token: vaultToken });
+        }
+        const any = Object.keys(servers).length > 0;
+        await writeBotMcpConfig(session.containerName, any ? servers : null);
+        userMcp = any;
       } catch (err) {
         console.warn(`[bots] ${session.bot.name}: MCP servers not loaded:`, err instanceof Error ? err.message : err);
       }
@@ -492,6 +528,7 @@ async function drain(sessionId: string): Promise<void> {
       });
     } finally {
       aborts.delete(run.id);
+      revokeVault(vaultToken);
     }
     // Anything it signed into (or out of) during the task reaches the team.
     await shareSignIns(session.botId, session.containerName);

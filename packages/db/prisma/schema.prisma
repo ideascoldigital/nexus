@@ -1386,3 +1386,24 @@ model AssistantWatch {
 
   @@index([status, kind, targetId])
 }
+
+// VaultItem - something the user keeps for bots to use without reading it
+// (spec 32): a login, a secret (API key, connection string), a card, contact
+// details. `secret` is sealed (AES-256-GCM, key outside the database) and never
+// leaves the server; the rest is what lists and forms show.
+model VaultItem {
+  id         String    @id @default(cuid())
+  type       String // login | secret | card | contact
+  name       String // display name; a secret is referenced by it ({{secret:name}}), unique per type
+  websites   Json? // login: ["facebook.com", …] — its fields are only typed on these hosts
+  username   String? // login: shown and typed freely; not secret
+  label      String? // card: "Visa •••• 4242"; contact: the person's name — what the list shows
+  hint       String? // when a bot should use it ("the company's ad account")
+  secret     Json // sealed: login { password } | secret { value } | card { number, expiry, cvc, holder } | contact { email, phone, address }
+  botIds     Json? // bots allowed to use it; null = every bot
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([type, name])
+}

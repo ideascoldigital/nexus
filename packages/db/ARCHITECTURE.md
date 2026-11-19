@@ -10,7 +10,10 @@ Own the persistent data model and expose a single `prisma` client instance plus 
 
 | File | Role |
 |---|---|
-| `src/client.ts` | Builds `PrismaClient` with the better-sqlite3 adapter; resolves `file:` URL, ensures data dir exists, opt-in auto-migrate, caches on `globalThis` in non-prod |
+| `src/client.ts` | Builds `PrismaClient` with the better-sqlite3 adapter; resolves `file:` URL, ensures data dir exists, opt-in auto-migrate, caches on `globalThis` in non-prod. Exports the client **wrapped in the vault extension** (the raw one stays private) and `ensureVault()` for boot |
+| `src/vault.ts` | **Vault crypto** (spec 32): AES-256-GCM `sealString`/`openString`/`sealJson`/`openJson` (`nxv1:` / `{"$nxv"}`; plaintext reads through), the key (`NEXUX_VAULT_KEY` → ephemeral for temp-dir DBs → macOS Keychain `nexux-vault` → `vault.key` 0600), `keyCheck` |
+| `src/vault-extension.ts` | `SEALED_FIELDS` and `withVault`: seal on create/update/upsert/createMany, open on read (incl. nested `include`/`select`). Nested writes from a parent model bypass it — seal those explicitly |
+| `src/vault-admin.ts` | `prepareVault`: key check against `Settings.vault_key_check` (refuses a mismatched key), then seals every plaintext value left — the migration of existing secrets, idempotent |
 | `src/migrate.ts` | `ensureMigrated(dbPath, migrationsDir)` — forward-only runner tracked in `_nexux_migrations`, each `migration.sql` applied in a transaction |
 | `prisma/schema.prisma` | Source of truth for the schema |
 | `src/generated/prisma/**` | The live generated client — **git-ignored**, must be built locally (see Generate step) |

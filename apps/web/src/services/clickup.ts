@@ -13,7 +13,7 @@
  */
 
 import { randomBytes } from "crypto";
-import { prisma } from "@nexux/db";
+import { prisma, sealString } from "@nexux/db";
 
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 export const CLICKUP_AUTHORIZE_URL = "https://app.clickup.com/api";
@@ -231,7 +231,8 @@ export async function connectClickUpAccount(accessToken: string) {
       status: "connected",
       lastCheckedAt: new Date(),
       metadata,
-      oauthTokens: { create: { accessToken } },
+      // Nested writes skip the vault extension: seal here (spec 32).
+      oauthTokens: { create: { accessToken: sealString(accessToken) } },
     },
   });
 }

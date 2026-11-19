@@ -260,3 +260,13 @@ export {
   stopBotContainer,
   type BotReadiness,
 } from "./bot";
+export {
+  BOT_VAULT_MCP_SCRIPT,
+  BOT_VAULT_TYPE_SCRIPT,
+  botVaultMcpServer,
+  renderVaultMcpScript,
+  renderVaultTypeScript,
+  typeIntoBotBrowser,
+  writeBotVaultScripts,
+  type VaultTypeResult,
+} from "./bot-vault";

@@ -8,13 +8,15 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Plus, Search, X } from "lucide-react";
+import { ArrowLeft, Loader2, Plus, Search, ShieldCheck, X } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
 import { BotChat } from "@/components/bots/bot-chat";
 import { ComputerDialog } from "@/components/bots/bot-computer";
 import { BotPanel } from "@/components/bots/bot-panel";
 import { NewBotDialog } from "@/components/bots/new-bot-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { VaultSection } from "@/components/vault/vault-section";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { HANDBACK_PROMPT } from "@/lib/bot-prompts";
@@ -73,6 +75,7 @@ function isUnread(bot: BotListItem, seenAt: string | undefined): boolean {
 export function BotsView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [vaultOpen, setVaultOpen] = useState(false);
   const [query, setQuery] = useState<string | null>(null);
   const { seen, markSeen } = useSeen();
 
@@ -102,6 +105,9 @@ export function BotsView() {
               </span>
               <Button size="icon-sm" variant="secondary" className="rounded-full" onClick={() => setQuery("")} aria-label="Search bots" title="Search">
                 <Search className="h-3.5 w-3.5" />
+              </Button>
+              <Button size="icon-sm" variant="secondary" className="rounded-full" onClick={() => setVaultOpen(true)} aria-label="Vault" title="Vault">
+                <ShieldCheck className="h-3.5 w-3.5" />
               </Button>
               <Button size="icon-sm" variant="secondary" className="rounded-full" onClick={() => setCreating(true)} aria-label="New bot" title="New bot">
                 <Plus className="h-4 w-4" />
@@ -169,6 +175,14 @@ export function BotsView() {
       )}
 
       <NewBotDialog open={creating} onOpenChange={setCreating} onCreated={(id) => setSelectedId(id)} />
+      <Dialog open={vaultOpen} onOpenChange={setVaultOpen}>
+        <DialogContent className="gap-0 p-0 sm:max-w-[760px]">
+          <DialogHeader className="px-6 pt-5 pb-3">
+            <DialogTitle className="text-[17px] font-semibold">Vault</DialogTitle>
+          </DialogHeader>
+          <VaultSection className="max-h-[70vh] overflow-y-auto px-6 pb-6" />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

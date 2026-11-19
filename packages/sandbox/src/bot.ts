@@ -454,6 +454,11 @@ export function botImageTag(dockerfile = renderBotDockerfile()): string {
 
 // ---- Docker plumbing ----------------------------------------------------------
 
+/** `docker …` with optional stdin; shared with bot-vault.ts. */
+export function dockerRun(...a: Parameters<typeof docker>): ReturnType<typeof docker> {
+  return docker(...a);
+}
+
 function docker(
   args: string[],
   opts: {
@@ -741,6 +746,10 @@ export function renderBotSystemPrompt(bot: {
   workspaceFolder?: string;
   /** Names of its own MCP servers (besides the browser), from its settings. */
   mcpServers?: string[];
+  /** Its MCP servers that could not start (a vault secret missing), described. */
+  skippedMcp?: string[];
+  /** Vault entries it may use through vault_fill — never the secrets. */
+  vault?: { type: string; name: string; websites?: string[]; username?: string | null; hint?: string | null }[];
 }): string {
   const parts = [
     `You are "${bot.name}", an AI teammate${bot.role?.trim() ? ` whose job is: ${bot.role.trim()}` : ""}.`,
@@ -836,6 +845,32 @@ export function renderBotSystemPrompt(bot: {
       "# Your tools",
       "",
       `Besides the browser, the user connected these MCP servers for you: ${bot.mcpServers.map((n) => `\`${n}\``).join(", ")} (their tools are named \`mcp__<server>__<tool>\`). When one covers the task, use it instead of clicking through the website — it is faster and more reliable — and tell the user briefly which one you used. If one fails (not authorized, unreachable), say so plainly and fall back to the browser if you can.`,
+    );
+  }
+  if (bot.skippedMcp?.length) {
+    parts.push(
+      "",
+      `These MCP servers the user set up for you could not start: ${bot.skippedMcp.join("; ")}. If a task needs one, tell the user to add the missing secret in Nexus → Vault.`,
+    );
+  }
+  if (bot.vault?.length) {
+    parts.push(
+      "",
+      "# Your vault",
+      "",
+      "The user keeps these in Nexus's vault for you. You never see the secret values: Nexus types them for you with the `vault` MCP tools.",
+    );
+    for (const v of bot.vault) {
+      const where = v.websites?.length ? ` on ${v.websites.join(", ")}` : "";
+      const who = v.username ? ` as ${v.username}` : "";
+      parts.push(`- ${v.type} "${v.name}"${where}${who}${v.hint?.trim() ? ` — ${v.hint.trim()}` : ""}`);
+    }
+    parts.push(
+      "",
+      "- To sign in with a login: open the site's sign-in page, type the username yourself, click the password field, then call `vault_fill` with the entry's name and `field: \"password\"`. Then submit. Never ask the user for a password that is in the vault, and never try to read it back from the page.",
+      "- Cards: click each field and call `vault_fill` with `number`, `expiry`, `cvc` or `holder`. Before you pay, buy or subscribe to anything, confirm the merchant and the amount with the user (a choices question) unless they explicitly asked for that exact purchase.",
+      "- Contact details: click the field and `vault_fill` with `email`, `phone` or `address`.",
+      "- If `vault_fill` refuses (wrong field, wrong site), fix that — don't work around it. If you need something that isn't in the vault, ask the user to add it in Nexus → Vault, or to type it on your screen.",
     );
   }
   if (bot.instructions?.trim()) {

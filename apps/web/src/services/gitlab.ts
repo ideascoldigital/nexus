@@ -14,7 +14,7 @@
  *   still lands in `OAuthToken` the way GitHub's does.
  */
 
-import { prisma } from "@nexux/db";
+import { prisma, sealString } from "@nexux/db";
 
 /** A `ConnectedAccount` row, as Prisma hands it back. */
 type ConnectedAccountRow = Awaited<
@@ -468,7 +468,7 @@ export async function addGitLabAccount(input: {
         metadata: { ...metadata },
         ...(input.credentialId
           ? {}
-          : { oauthTokens: { create: { accessToken: token } } }),
+          : { oauthTokens: { create: { accessToken: sealString(token) } } }), // nested: seal here (spec 32)
       },
     }),
     created: true,
