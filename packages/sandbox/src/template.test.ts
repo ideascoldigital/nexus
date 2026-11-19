@@ -6,6 +6,10 @@ import path from "node:path";
 import { test } from "node:test";
 
 import {
+  BOOTSTRAP_REPORT_PATH,
+  renderStepHelpers,
+} from "./bootstrap-report";
+import {
   parseTailscaleAuthUrl,
   renderCloudInit,
   renderMainTf,
@@ -105,6 +109,28 @@ function tailscaleSection(script: string): string {
   return end > 0 ? rest.slice(0, end) : rest;
 }
 
+/**
+ * Runs one generated `nexus_step_run …` line in a real bash and returns what
+ * the wrapped command received, with `runuser` stubbed.
+ *
+ * Text assertions stop being readable once a command is single-quoted inside
+ * a single-quoted argument (spec 24 wraps the repo steps that way), and a
+ * wrong nesting produces a *plausible* string — so the only assertion worth
+ * making is what bash actually hands to the binary.
+ */
+function runGeneratedLine(line: string): string {
+  const harness = [
+    "nexus_bootstrap_fatal(){ echo FATAL:$1; }",
+    renderStepHelpers().replace(
+      new RegExp(BOOTSTRAP_REPORT_PATH, "g"),
+      "/dev/null",
+    ),
+    'runuser(){ shift 3; echo "RUNUSER-GOT:$*"; }',
+    line.trim(),
+  ].join("\n");
+  return execFileSync("bash", ["-c", harness], { encoding: "utf8" }).trim();
+}
+
 test("no tailscale section unless the toggle is on", () => {
   const script = renderCloudInit(baseSpec());
   assert.ok(!script.includes("installing tailscale"));
@@ -124,7 +150,13 @@ test("installTailscale with an auth key joins the tailnet without leaking the ke
   assert.ok(section.indexOf("set +x") < section.indexOf("tailscale up"));
   assert.ok(section.includes("rm -f /root/.tskey"));
   // Non-fatal: a failed join degrades to a WARN, never aborts the bootstrap.
-  assert.ok(!section.includes("FATAL"));
+  //
+  // Scoped to the tailscale block rather than "the rest of the script", which
+  // also contains the repo setup's own `nexus_bootstrap_fatal` fallback — a
+  // match there says nothing about how a failed *join* is handled.
+  const joinBlock = section.slice(0, section.indexOf("installing GitHub CLI"));
+  assert.ok(!joinBlock.includes("nexus_bootstrap_fatal"));
+  assert.ok(!joinBlock.includes("[nexux] FATAL"));
 });
 
 test("installTailscale without a key registers interactively", () => {
@@ -171,7 +203,15 @@ test("every apt install waits for the dpkg lock", () => {
     ts.indexOf("nexus_dpkg_wait") < ts.indexOf("tailscale.com/install.sh"),
     "the tailscale installer does not wait for the dpkg lock",
   );
-  assert.ok(script.includes("nexus_dpkg_wait\ncurl -fsSL https://get.docker.com"));
+  // Order, not adjacency: the docker install is wrapped in a recorded step
+  // (spec 24), so the curl no longer sits on the line after the wait — but it
+  // must still come after it.
+  const dockerWait = script.indexOf("nexus_dpkg_wait\n");
+  assert.ok(
+    dockerWait > -1 &&
+      dockerWait < script.indexOf("https://get.docker.com"),
+    "the docker installer does not wait for the dpkg lock",
+  );
   assert.ok(script.includes("nexus_dpkg_wait\nnpx --yes playwright install"));
 });
 
@@ -183,8 +223,18 @@ test("the apt wrapper retries a locked dpkg and nothing else", realBash, () => {
   // reporting the error it already had in hand.
   const fn = renderCloudInit(baseSpec()).match(/^nexus_apt\(\) \{[\s\S]*?^\}$/m);
   assert.ok(fn, "the apt wrapper is not in the rendered script");
+  // The wrapper logs to a fixed /tmp path, which is fine on a sandbox (one
+  // bootstrap per machine) but not here: `turbo run test test:coverage` runs
+  // this file twice at once, and the two bash harnesses then share the log the
+  // retry greps. A run that reads the other's log sees no lock message and
+  // returns on the first attempt, which surfaced as '100 1' !== '0 3'. Give
+  // each run its own path.
+  const logFile = path.join(
+    fs.mkdtempSync(path.join(os.tmpdir(), "nexux-apt-")),
+    "nexus-apt.log",
+  );
   const harness = (aptGet: string) => `
-${fn[0]}
+${fn[0].replaceAll("/tmp/nexus-apt.log", logFile)}
 sleep() { :; }              # the retry backoff, minus the waiting
 # The wrapper pipes apt-get into tee, which runs it in a subshell — an attempt
 # counter kept in a variable is discarded with it. A file survives.
@@ -1086,8 +1136,29 @@ test("install and build run as the agent user", () => {
 test("an inferred lockfile install also drops privileges", () => {
   const script = renderCloudInit(baseSpec());
   // corepack/bun install globally and stay root; only the install drops.
-  assert.ok(script.includes("runuser -u nexus -- bash -lc 'cd '\\''/opt/nexus/app'\\'' && pnpm install'"));
-  assert.ok(script.includes("runuser -u nexus -- bash -lc 'cd '\\''/opt/nexus/app'\\'' && npm install'"));
+  //
+  // Asserted by running the line rather than matching its text: since spec 24
+  // the install is an argument to `nexus_step_run`, so the `runuser` command
+  // is single-quoted *inside* an already single-quoted string and the literal
+  // form is unreadable. What matters is what bash hands to runuser after both
+  // layers unwrap, which is what this checks.
+  for (const [manager, lockfile] of [
+    ["pnpm", "pnpm-lock.yaml"],
+    ["npm", null],
+  ] as const) {
+    // `&& npm install` — anchored, because "npm install" is a substring of
+    // "pnpm install" and an unanchored find returns the pnpm line for both.
+    const line = script
+      .split("\n")
+      .find((l) => l.includes("nexus_step_run") && l.includes(`&& ${manager} install`));
+    assert.ok(line, `no recorded step for the ${manager} install`);
+    const got = runGeneratedLine(line!);
+    assert.equal(
+      got,
+      `RUNUSER-GOT:bash -lc cd '/opt/nexus/app' && ${manager} install`,
+      `the ${manager} install (${lockfile ?? "no lockfile"}) does not drop privileges intact`,
+    );
+  }
   assert.ok(script.includes("corepack enable"));
 });
 
@@ -1161,6 +1232,29 @@ test("no mcpServers â†’ onboarding-only .claude.json, no mcp mention", () =
   const script = renderCloudInit(baseSpec());
   assert.ok(script.includes('"hasCompletedOnboarding": true'));
   assert.ok(!script.includes("mcpServers"));
+});
+
+test("with OpenCode, the project's MCP servers land in opencode.json too", () => {
+  const script = renderCloudInit(
+    baseSpec({
+      installOpenCode: true,
+      mcpServers: {
+        context7: { command: "npx", args: ["-y", "@upstash/context7-mcp"] },
+        broken: {},
+      },
+    }),
+  );
+  const opencode = script.slice(script.indexOf("installing OpenCode"));
+  assert.ok(opencode.includes('"mcp"'));
+  assert.ok(opencode.includes('"type": "local"'));
+  assert.ok(opencode.includes("configuring 1 MCP server(s) for OpenCode"));
+  assert.ok(opencode.includes("not configured: broken"));
+});
+
+test("OpenCode without MCP servers gets no mcp key", () => {
+  const script = renderCloudInit(baseSpec({ installOpenCode: true }));
+  const opencode = script.slice(script.indexOf("installing OpenCode"));
+  assert.ok(!opencode.includes('"mcp"'));
 });
 
 test("bootstrap installs both gh and glab CLIs", () => {
@@ -1639,4 +1733,112 @@ test("the model does not displace the attribution or token settings", () => {
   assert.equal(s.model, "opus");
   assert.equal(s.includeCoAuthoredBy, false);
   assert.deepEqual(s.env, { CLAUDE_CODE_OAUTH_TOKEN: "tok-123" });
+});
+
+test("a repo with a run command and a port is probed after everything else", () => {
+  // Spec 24 piece 2: the probe has to run against the same environment the
+  // user's own Start will, so it lands after clone/install/build, after the
+  // launchers, and after the stack services came up.
+  const script = renderCloudInit(
+    baseSpec({
+      repos: [
+        {
+          name: "app",
+          repoUrl: "https://github.com/acme/app.git",
+          runCommand: "pnpm dev",
+          runPort: 3000,
+        },
+      ],
+    }),
+  );
+  assert.ok(script.includes("nexus_boot_probe 'boot:app' 'app'"));
+  const [install, probe] = orderOf(script, "install:app", "nexus_boot_probe");
+  assert.ok(install < probe, "the boot probe runs before the install");
+});
+
+test("a repo without a port is not probed", () => {
+  // "The process stayed alive for three seconds" is not evidence the app
+  // works, and reporting it as a pass would be the lie this piece removes.
+  const script = renderCloudInit(
+    baseSpec({
+      repos: [
+        {
+          name: "app",
+          repoUrl: "https://github.com/acme/app.git",
+          runCommand: "pnpm dev",
+        },
+      ],
+    }),
+  );
+  assert.ok(!script.includes("nexus_boot_probe"));
+  // …and the helper is not emitted either, since nothing would call it.
+  assert.ok(!script.includes("nexus_boot_probe()"));
+});
+
+test("no run command means no probe, whatever the port says", () => {
+  const script = renderCloudInit(
+    baseSpec({
+      repos: [
+        { name: "app", repoUrl: "https://github.com/acme/app.git", runPort: 3000 },
+      ],
+    }),
+  );
+  assert.ok(!script.includes("nexus_boot_probe"));
+});
+
+test("each repo with a port gets its own probe", () => {
+  // Multi-repo is the ordinary case — a front end and an API — and each one
+  // has to be proven separately. A single probe against "the" app node would
+  // pass a project whose second service does not build.
+  const script = renderCloudInit(
+    baseSpec({
+      repos: [
+        {
+          name: "api",
+          repoUrl: "https://github.com/acme/api.git",
+          isMain: true,
+          runCommand: "pnpm dev",
+          runPort: 8000,
+        },
+        {
+          name: "web",
+          repoUrl: "https://github.com/acme/web.git",
+          runCommand: "pnpm dev",
+          runPort: 3000,
+        },
+      ],
+    }),
+  );
+  assert.ok(script.includes("nexus_boot_probe 'boot:api' 'api'"));
+  assert.ok(script.includes("nexus_boot_probe 'boot:web' 'web'"));
+  assert.ok(script.includes("'8000'"));
+  assert.ok(script.includes("'3000'"));
+  // The helper is emitted once, not per repo: it is long, and EC2 caps
+  // user_data at 16KB.
+  assert.equal(script.split("nexus_boot_probe() {").length - 1, 1);
+});
+
+test("a repo name with spaces is slugged into the step name", () => {
+  // assertStepName would throw on the raw name; the checkout directory is
+  // already slugged, so the step and the path agree.
+  const script = renderCloudInit(
+    baseSpec({
+      repos: [
+        {
+          name: "My App (v2)",
+          repoUrl: "https://github.com/acme/app.git",
+          runCommand: "pnpm dev",
+          runPort: 3000,
+        },
+      ],
+    }),
+  );
+  const probe = script
+    .split("\n")
+    .find((l) => l.trim().startsWith("nexus_boot_probe '"));
+  assert.ok(probe, "no probe emitted");
+  // Same slug as the checkout it cds into.
+  const slug = probe!.match(/nexus_boot_probe 'boot:([^']+)'/)?.[1];
+  assert.ok(slug && /^[a-z0-9-]+$/.test(slug), `bad slug: ${slug}`);
+  assert.ok(probe!.includes(`'/opt/nexus/${slug}'`));
 });

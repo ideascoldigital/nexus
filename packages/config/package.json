@@ -9,7 +9,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-lines=92 --test-coverage-branches=84 --test-coverage-functions=92 \"src/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "^20",

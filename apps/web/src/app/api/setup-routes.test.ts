@@ -93,6 +93,8 @@ type SetupBody = {
     applied: boolean;
     reason: string | null;
     source: string;
+    credentialName?: string | null;
+    note?: string | null;
   }[];
   envVars: { key: string; valueMasked: string }[];
 };
@@ -226,6 +228,19 @@ test("an unknown provider or brain is rejected", async () => {
     (await put({ config: validConfig({ brain: "gpt" }) })).status,
     400
   );
+});
+
+test("local is a provider a project can be saved with", async () => {
+  // launchSandbox branches on `sandboxConfig.provider === "local"` to run the
+  // container path; a schema that refuses the value makes that branch
+  // reachable only through a per-launch override, and the drawer's choice is
+  // silently lost on every save.
+  const res = await put({
+    config: validConfig({ provider: "local", region: "local", size: "docker" }),
+  });
+  assert.equal(res.status, 200);
+  const setup = await (await get()).json();
+  assert.equal(setup.config.provider, "local");
 });
 
 test("a preview port outside the valid range is rejected", async () => {
@@ -560,4 +575,72 @@ test("a project with no repo urls still shows the selected credential", async ()
   assert.equal(saved.status, 200, "the config saved");
   const keys = credentialRows(await body(await get())).map((v) => v.key);
   assert.ok(keys.includes("GITLAB_TOKEN"));
+});
+
+test("the chosen Docker endpoint is kept, and a deleted one reads back as this machine", async () => {
+  const endpoint = await prisma.dockerEndpoint.create({
+    data: { name: "devbox", host: "ssh://devbox" },
+  });
+  let res = await put({ config: validConfig({ dockerEndpointId: endpoint.id }) });
+  assert.equal(res.status, 200);
+  assert.equal((await body(await get())).config?.dockerEndpointId, endpoint.id);
+
+  res = await put({ config: validConfig({ dockerEndpointId: "gone" }) });
+  assert.equal(res.status, 200, "a stale id does not fail the save");
+  assert.equal((await body(await get())).config?.dockerEndpointId, null);
+
+  await put({ config: validConfig({ dockerEndpointId: endpoint.id }) });
+  await prisma.dockerEndpoint.delete({ where: { id: endpoint.id } });
+  assert.equal((await body(await get())).config?.dockerEndpointId, null);
+});
+
+// --- the repo card's credential is the one a sandbox clones with ------------
+// A sandbox used to inject only the sandbox's own "Git token", so a repo card
+// showing a working credential still cloned with a dead one.
+
+async function repoWithCredential(name: string, repoUrl: string, credName: string | null, isMain = false) {
+  const cred = credName
+    ? await prisma.cloudCredential.findFirstOrThrow({ where: { name: credName } })
+    : null;
+  await prisma.repository.create({
+    data: { projectId, name, repoUrl, isMain, gitCredentialId: cred?.id ?? null },
+  });
+}
+
+test("a repo's own credential wins over the sandbox's git token", async () => {
+  await gitCredentials();
+  const dead = await prisma.cloudCredential.create({
+    data: { name: "dead", provider: "github", data: { token: "ghp_dead" }, workspaceId: "ws-setup-test" },
+  });
+  await prisma.repository.deleteMany({ where: { projectId } });
+  await repoWithCredential("app", "https://github.com/acme/app.git", "Github", true);
+  await put({ config: validConfig({ githubCredentialId: dead.id }) });
+  const row = credentialRows(await body(await get())).find((v) => v.key === "GITHUB_TOKEN");
+  assert.equal(row?.credentialName, "Github");
+  assert.equal(row?.note, null);
+});
+
+test("without a repo credential the sandbox's git token is the fallback", async () => {
+  await gitCredentials();
+  const chosen = await prisma.cloudCredential.create({
+    data: { name: "chosen", provider: "github", data: { token: "ghp_chosen" }, workspaceId: "ws-setup-test" },
+  });
+  await prisma.repository.deleteMany({ where: { projectId } });
+  await repoWithCredential("app", "https://github.com/acme/app.git", null, true);
+  await put({ config: validConfig({ githubCredentialId: chosen.id }) });
+  const row = credentialRows(await body(await get())).find((v) => v.key === "GITHUB_TOKEN");
+  assert.equal(row?.credentialName, "chosen");
+});
+
+test("repos naming different tokens: the main repo's wins, and it says so", async () => {
+  await gitCredentials();
+  await prisma.cloudCredential.create({
+    data: { name: "other", provider: "github", data: { token: "ghp_other" }, workspaceId: "ws-setup-test" },
+  });
+  await prisma.repository.deleteMany({ where: { projectId } });
+  await repoWithCredential("main", "https://github.com/acme/main.git", "other", true);
+  await repoWithCredential("lib", "https://github.com/acme/lib.git", "Github");
+  const row = credentialRows(await body(await get())).find((v) => v.key === "GITHUB_TOKEN");
+  assert.equal(row?.credentialName, "other");
+  assert.match(row?.note ?? "", /different tokens/);
 });

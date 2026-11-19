@@ -14,8 +14,11 @@
 
 import { useEffect, useState } from "react";
 
-import { ArrowUpCircle, Check, Loader2 } from "lucide-react";
+import { ArrowUpCircle, Check, Loader2, Sparkles } from "lucide-react";
 
+import { OPEN_ASSISTANT_EVENT } from "@/components/assistant/assistant-panel";
+import { SystemMeters } from "@/components/layout/system-meters";
+import { ZoomControl } from "@/components/layout/zoom-control";
 import { getVersion, type AppVersion } from "@/services/hosts";
 import {
   checkUpdates,
@@ -76,7 +79,7 @@ function UpdateBadge({ native }: { native: boolean }) {
         href={status.url}
         target="_blank"
         rel="noreferrer"
-        className="flex items-center gap-1 rounded-sm px-1 font-medium text-amber-600 hover:bg-accent dark:text-amber-500"
+        className="tap-target flex items-center gap-1 rounded-sm px-1 font-medium text-amber-600 hover:bg-accent dark:text-amber-500"
         title={`Update from ${status.current} to ${status.latest} — open the release to download.`}
       >
         <ArrowUpCircle className="size-3" aria-hidden />
@@ -119,7 +122,7 @@ function UpdateBadge({ native }: { native: boolean }) {
       type="button"
       onClick={phase === "installing" || phase === "done" ? undefined : run}
       disabled={phase === "installing" || phase === "done"}
-      className={`flex items-center gap-1 rounded-sm px-1 font-medium hover:bg-accent ${
+      className={`tap-target flex items-center gap-1 rounded-sm px-1 font-medium hover:bg-accent ${
         phase === "error"
           ? "text-destructive"
           : phase === "done"
@@ -191,7 +194,20 @@ export function StatusBar() {
   useExternalLinkBridge(native);
 
   return (
-    <footer className="flex h-6 shrink-0 items-center justify-end gap-3 border-t bg-background px-3 text-[11px] text-muted-foreground">
+    <footer className="flex h-6 shrink-0 items-center gap-3 border-t bg-background px-3 text-[11px] text-muted-foreground">
+      {/* Resources sit left, build identity right: the numbers are glanced at
+          constantly and the version is looked up deliberately. */}
+      <SystemMeters />
+      <span className="ml-auto" />
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new CustomEvent(OPEN_ASSISTANT_EVENT))}
+        className="flex items-center gap-1 hover:text-foreground"
+        title="Open the assistant (⌘I)"
+      >
+        <Sparkles className="h-3 w-3" /> Assistant
+      </button>
+      <ZoomControl />
       <UpdateBadge native={native} />
       {version && (
         <span
@@ -202,7 +218,7 @@ export function StatusBar() {
             href={version.releaseUrl}
             target="_blank"
             rel="noreferrer"
-            className="rounded-sm px-1 font-medium hover:bg-accent hover:text-foreground"
+            className="tap-target rounded-sm px-1 font-medium hover:bg-accent hover:text-foreground"
             title={`Open release v${version.version} on GitHub`}
           >
             v{version.version}
@@ -212,7 +228,7 @@ export function StatusBar() {
               href={version.commitUrl}
               target="_blank"
               rel="noreferrer"
-              className="rounded-sm px-1 font-mono hover:bg-accent hover:text-foreground"
+              className="tap-target rounded-sm px-1 font-mono hover:bg-accent hover:text-foreground"
               title={`Open commit ${version.gitSha} on GitHub`}
             >
               @{version.gitSha.slice(0, 7)}

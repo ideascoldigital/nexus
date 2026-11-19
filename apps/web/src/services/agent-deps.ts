@@ -9,6 +9,7 @@ import type { InlineMessage } from "@ideascol/agents-generator-sdk";
 import { searchProject } from "@nexux/embeddings";
 
 import { createAgentClient } from "./agents-generator";
+import { ollamaHostForProject } from "@/lib/ollama-host";
 import { workspaceIdOfProject } from "@/lib/workspace";
 
 /** A handoff the SDK reports after routing a turn to a sub-agent. */
@@ -55,24 +56,28 @@ export type AgentDeps = {
   workspaceIdOfProject(projectId: string): Promise<string | undefined>;
 };
 
-const MODEL_NAME = "gpt-5.4";
+// The model is resolved per call from the install's configured credential
+// (lib/host-model.ts) rather than pinned here — a host agent runs on whatever
+// LLM the user actually has a key for.
 
 /** Real implementations — the agents SDK, the embeddings index, prisma. */
 export function defaultAgentDeps(): AgentDeps {
   return {
     defineAgent: async ({ name, instructions, workspaceId }) => {
-      const { client, apiKey } = await createAgentClient(workspaceId);
+      const { client, apiKey, modelProvider, modelName } =
+        await createAgentClient(workspaceId);
       return client.defineAgent({
         name,
         instructions,
-        modelProvider: "openai",
-        modelName: MODEL_NAME,
+        modelProvider,
+        modelName,
         apiKey,
         maxToolIterations: 1,
       });
     },
     search: async (projectId, query, k) => {
-      const results = await searchProject(projectId, query, { k });
+      const { host } = await ollamaHostForProject(projectId);
+      const results = await searchProject(projectId, query, { k, ollamaHost: host });
       return { repos: results.repos, projectData: results.projectData };
     },
     workspaceIdOfProject,

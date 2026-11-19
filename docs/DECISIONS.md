@@ -490,13 +490,29 @@ Answering a blocked run is deliberately *not* in the surface. `nexux_activity` r
 
 **Consequences:** Selecting what to import is a per-issue checkbox plus a row of chips — all, none, and one per board column with its chosen/total — since a board's worth of issues over eight columns is not a list anyone ticks by hand. That row exists because the first cut shipped with none of it reachable: the gate choosing between a picker prompt and the review tree ignored a resolved URL, so a pasted board rendered "Pick a project to load its issues." and the whole tree never appeared. The API had been driven end to end against the live instance; nobody had opened the dialog. The gate and the grouping now live in `lib/gitlab-import-review.ts` with tests, because logic that decides whether a list renders belongs where a test can reach it, not in a component this repo has no way to render in CI. **Consequences:** The board that prompted this imports as one phase named after its milestone, with every issue landing in todo/in_progress/in_review/done as it sat on the board — verified end to end against the live instance. A board is only "this owner's issues, narrowed to a milestone", so it needed no reader of its own: the cache scopes collapsed into one `IssueScope` union covering project id, group path prefix, exact project path and epic id, plus an optional milestone filter. Costs and limits: the review is a flat list, not columns rendered side by side, so the mapping is shown per row (source column next to target status) instead of being drawn; a board with no milestone imports its owner's whole issue set, since the columns filter the view rather than the query; GraphQL is a second API surface to keep working against future GitLab versions; and `mapColumnToStatus` is now load-bearing for two providers, so a change made for one has to be weighed for the other.
 
-## D-69 — A bot owns no machine: every session is a fresh desktop container (2026-11-18)
+## D-69 — The browser moves to the app, because the ports are what cannot move (2026-09-12)
 
-**Context:** The ask was Grok Bot's concept — teammates with a job and "their own computer" — running on the Claude subscription like the rest of Nexux, with everything happening inside an ephemeral container that has a browser. Nexux already had a long-lived chat target (the dedicated dev sandbox), but that is a project checkout with a PR pipeline around it, not a desktop, and it is never thrown away.
+**Context:** A sandbox running a front end and a back end could not be tested by hand. Each process gets its own Cloudflare quick tunnel (`sandbox-process-manager.ts`), so the two arrive on unrelated random hostnames and the front's `API_URL` is wrong from the viewer's browser whatever it says — rewriting it per start only trades that for a value baked at build time and stale before it boots. The symptoms that usually get patched individually are all the same cause: CORS between two unrelated origins, cookies that are now cross-site, and dev servers rejecting a `Host` they do not know — which is already why the preview script pins `--http-host-header localhost:<port>`. The request named Browserbase as the experience to aim for, and it does not fit for the same reason: a browser in someone else's cloud resolves `localhost` against *their* container, relocating the identity problem rather than solving it.
 
-**Decision:** A new `Bot` → `BotSession` → `BotRun` model rather than reusing `Sandbox`: a bot has no project, no repos and no Terraform, and its machine is per-session. The machine is a locally built `nexux-bot:<hash>` image whose Dockerfile is rendered in code and piped over stdin, so no build context has to ship with the native app and a changed recipe is a new tag. Debian, not Ubuntu, because Chromium must be a real package on arm64. Claude drives the *visible* Chromium through the Playwright MCP over CDP instead of a headless browser, so what the bot does is what the user watches. The container is `--rm` with no volumes; the session ends on request, after `idleMinutes`, or on any restart (a new process cannot supervise the old one's runs, so recovery deletes every labelled container). The Claude token is injected the way sandboxes get it, referenced by name in argv. noVNC is published on host loopback with a per-session password.
+**Decision:** Run the browser **inside the sandbox**, where `localhost:3000` and `localhost:8000` both exist and already agree, and reach it from the dashboard over an **SSH port-forward** — never a public tunnel. Chromium is not installed for this: `installAgentBrowser` already puts Playwright's build at `/usr/local/bin/google-chrome` for the agents' screenshots, so the bootstrap adds only Xvfb, x11vnc and websockify, and the same Chromium serves both the human (VNC) and programmatic drive (CDP). Every listener is loopback — `x11vnc -localhost`, websockify on `127.0.0.1`, `Xvfb -nolisten tcp`, and CDP pinned with `--remote-debugging-address=127.0.0.1`. The forward is a child of the web process (`ssh -N -L 127.0.0.1:…`, `ExitOnForwardFailure=yes`), so `reapForwards` settles rows on restart the way `recoverOrphanSandboxes` settles interrupted provisions. Navigation goes over CDP rather than VNC, which carries pixels and input and has no concept of a URL, and `isLocalTarget` restricts it to loopback: a session that could be pointed anywhere turns a browser holding the instance's localhost into a general-purpose fetcher for whatever reaches the route.
 
-**Consequences:** Nothing a bot does survives its session unless it reports it back, which is the point and also the main limitation: Claude's own memory resets with each computer, shown in the chat as a divider. The first boot builds a ~1 GB image and takes minutes. The live screen only works where the dashboard runs on the same machine as Nexux; a remote Nexus host needs a WebSocket proxy that does not exist yet. Unpinned npm installs make rebuilds pick up new Claude Code versions, at the cost of reproducibility.
+**Consequences:** Testing two services by hand needs no tunnel, no env rewriting and no CORS work — the app's own configuration is what gets exercised, which is the point. The costs are real and named: the VNC password is a per-session secret that must never reach a command line (`/proc/<pid>/cmdline` is world-readable), so it goes in through `x11vnc -storepasswd` inside a `set +x` window and the test asserts it appears exactly once; the session is off by default and forced off without `installAgentBrowser`, because a display serving no browser is memory spent on an instance nobody is looking at; a restart drops every forward, so a row saying `running` with nothing behind it would offer an iframe that can never connect; and per-process tunnels stay, since sharing a running app with someone not at this machine is a different need than testing it yourself. `shq` moved into the package's public exports — three callers now build remote commands with it, and one escaping implementation means a fix cannot land on only some of them.
+
+## D-70 — The embedded browser, walked end to end on a container (2026-09-18)
+
+**Context:** D-69 shipped the browser session — bootstrap, model, manager, routes and panel, with 27 tests — and every part of it had been exercised except the one that matters: nobody had opened the panel. Walking a local Docker sandbox from an empty database to a rendered app surfaced nine defects, of which exactly one was a missing feature; the rest were code that existed, typechecked, passed its tests and could never have worked. They are listed here because each one is a different way for a green suite to mean nothing.
+
+**Decision:** Fix all nine, and add the local transport D-69 left open.
+
+*Unreachable before the first pixel.* The panel imported `@novnc/novnc/core/rfb.js`; the package's `exports` is the **string** `"./core/rfb.js"`, so the bare specifier resolves and every subpath is refused — the whole project page 500'd, not just the browser. `installBrowserSession` had a column, a spec field and a template section but no UI and no field in the setup schema, so nothing could turn it on. "New sandbox" was gated on terraform plus a cloud token, which a container needs neither of, so a Docker-only machine never got to try. `SandboxConfig.provider` accepted only `civo | aws` although `launchSandbox` branches on `"local"`, and the drawer coerced a saved `"local"` back to `"civo"` — the two halves of one round trip, each making the other unobservable.
+
+*Correct-looking code that cannot work.* The bootstrap runs as root and created the session directory `0700 root:root`; the session script runs as the agent user, so its first write failed and took the log with it — the panel reported "the virtual display did not start" and the evidence was the file that could not be created. The readiness probe was `curl -fs` against websockify, which answers a plain `GET` with **405**; `-f` fails on 4xx, so a healthy bridge was declared dead on every start. Navigation used CDP's `/json/new?url=<url>`, which Chrome 153 ignores while still answering 200 — one blank tab per click, success reported each time.
+
+*The security one.* The password was written with `x11vnc -storepasswd - <file>`, read as "take it from stdin". x11vnc does not read stdin: it stores the literal `-` as the password. Every session on every sandbox authenticated against a dash while the UI handed out a per-session token that had never once worked. Confirmed by byte-comparing the stored file against `-storepasswd '-'`. The fix is `-passwdfile`, which exists precisely for this — it reads the plaintext from a file's first line *because* `-passwd` would expose it in `ps` — so the secret still never reaches a command line, and the token is now what actually authenticates.
+
+*The transport.* A container has no sshd, so D-69's forward has nothing to attach to and `localUrl` stayed null: the panel showed a running session it could not display. `docker run` now publishes the bridge on an **ephemeral** host port (`-p 127.0.0.1::6080`) — ephemeral because a fixed 6080 collides the moment a second local sandbox runs — and `browserWsPort` reads it back with `docker port`. That forced one deliberate loosening: docker forwards a published port to the container's *own* interface, which a loopback-only listener never answers, so websockify binds `0.0.0.0` under an explicit `wsAllInterfaces` flag set only for `provider === "local"`. The privacy boundary moves from the bind address to docker's `127.0.0.1::` binding, which never leaves the host's loopback. VNC and CDP are untouched: VNC is reached *through* the bridge, and an open CDP port is remote code execution against every origin the browser can see.
+
+**Consequences:** A local Docker sandbox now runs the demo's front end on `:3000`, which fetches its back end on `:8000`, rendered in the dashboard — the case D-69 was written for, finally executed. 297 sandbox and 1254 web tests pass, with new cases pinning each defect above: the directory's owner, a probe carrying no `-f`, `local` surviving a save and a reload, the stored password being the token rather than a dash, the CDP target being the query string rather than a named parameter, the port parser against IPv4/IPv6/absent bindings, and the widened bind being opt-in with VNC and CDP still loopback. The deeper cost is the one worth keeping in view: this feature was merged with tests that asserted the *shape* of its scripts — that a `-storepasswd` appeared, that a probe preceded a marker — and shapes are what kept passing while the behaviour was wrong end to end. Two of the nine (the `-` password, the `url=` parameter) are external-contract mistakes no unit test of a rendered string can catch, and they were found in ten minutes of running the thing. `apps/web/.env` also does not exist in a fresh checkout and the dev path never runs `prisma migrate deploy` (auto-migrate is gated on `NEXUX_MIGRATIONS_DIR`, which only the packaged app sets), so a clean clone starts against an empty database and every page 500s — worth its own fix, and left out of this one.
 
 ---
 
@@ -509,3 +525,253 @@ Answering a blocked run is deliberately *not* in the surface. `nexux_activity` r
 **Decision:** …
 **Consequences:** …
 ```
+
+## D-71 — A bootstrap step records what it did, instead of being read back out of its own prose (2026-09-21)
+
+**Context:** The bootstrap has always *logged* what it did and never *recorded* it. Only two things were ever fatal — the main repo's clone, and its missing mount; every apt install, the docker install, `docker compose up` for the stack services, every non-main clone and **every install and build for every repo** degraded to `|| echo "[nexux] WARN: …"`, and the completion marker was written anyway. The only structured consumer of that was `retrySandboxSetup`, which recovered the failed steps by running `/^\[nexux\] WARN: (?:clone|install|build) failed for (.+?)$/gm` over the setup log. A failed stack `up` matched nothing, so a sandbox whose database never came up reported a successful retry. Spec 24 piece 1.
+
+**Decision:** Keep the policy, fix the reporting. Every step that mattered now runs through `nexus_step` / `nexus_step_run` (`packages/sandbox/src/bootstrap-report.ts`) and appends one JSON line to `/opt/nexus/bootstrap-report.jsonl`: step name, severity, exit code, duration, timestamp. The `echo` stays beside it — the log is still the live surface the UI tails, and a WARN vanishing from it would be a regression for anyone reading along.
+
+**Why JSONL and not a document:** the writer is bash on a box that may be killed mid-run — a provider timeout, a reboot, the OOM killer. A half-written array is unparseable; a half-written JSONL file is merely shorter, and whatever ran is still readable. That is the case the format exists for, so the parser treats a truncated final line as expected rather than exceptional, and keeps it in `malformed` so a recorder bug stays visible.
+
+**Why severity is an argument:** "fatal" and "warn" were already the policy, encoded as *which function the call site called*. Deriving it from the exit code would collapse the distinction — a failed main clone and a failed tailscale install both exit non-zero, and only one of them means the box is useless. Passing it makes the same policy readable by a machine.
+
+**Three things the implementation forced, each a bug found by running the generated shell rather than matching its text:**
+
+- `renderRepoSetup` is also run standalone by the retry action, where the bootstrap preamble is not in scope — so it re-emits the helpers, and declares a `nexus_bootstrap_fatal` fallback only `if ! declare -f`, so the bootstrap's own version (which writes the marker the host polls) is never replaced.
+- `date +%s%3N` is GNU-only. BSD `date` does not expand `%N` and returns the seconds with a literal `3N` glued on — a string that is not a number, which every arithmetic use of it then fails on. `nexus_millis` falls back to whole seconds: coarse, not wrong.
+- Timing variables are `local` inside the helper rather than assigned at the call site. The sites nest (a repo section runs inside the repo setup block), and a bare global would be overwritten by an inner step before the outer one read it — producing a *plausible* duration rather than an error.
+
+**Two defects fixed in passing.** `parseBootstrapLog` derived `complete` from `/bootstrap finished/` over the tail, but the failing branch prints `bootstrap FAILED`, which does not match — so a bootstrap that had already failed read as still running and the log viewer polled forever, while the health strip (reading the markers) already knew. Completion now comes from the marker files, with `failed` as a separate field: *finished* and *succeeded* are two questions, and the old field answered neither reliably. The log is untrusted text anyway — a repo's own build output can print "bootstrap finished", and used to be believed. The marker query also needed `|| true`: a missing marker is the normal case mid-run, and `test -f` failing would otherwise become the exit status of the whole command, so `execRemote` would report a failed read and hide the log behind an error about a file that is absent on purpose.
+
+## D-72 — The sandbox now starts the app before calling itself ready (2026-09-21)
+
+**Context:** A sandbox has always been declared ready without ever starting the app it exists to run. `runCommand` reached `/opt/nexus/nexus.json` and the process plans, but no bootstrap section invoked it — so "provisioned successfully" meant "the tooling installed", and whether the project compiles, binds and serves was discovered by a human clicking Start, minutes later. The health strip reinforced it: five pills answering *is claude installed*, none answering *does the app respond*. Spec 24 piece 2.
+
+**Decision:** Two changes, one per half of the lie.
+
+**Healthchecks, derived from the image.** The bootstrap has always run `docker compose up -d --wait --wait-timeout 180`, which reads as "wait until they are ready". Without a `healthcheck` block it is not: compose waits for *running*, and for postgres that is true several seconds before it accepts a connection — the race a repo's install loses when it runs migrations. `healthcheckFor(image)` (`packages/harness/src/healthcheck.ts`) now supplies one for the families we recognize, and `depends_on` became long-form so a dependency with a healthcheck is waited *for* rather than merely started before.
+
+Derived from the image rather than carried on the node, deliberately: a `StackNode` persists its image but not which catalog entry it came from, and a user may type `postgres:16-alpine` themselves. Matching the image means a hand-typed database gets the same guarantee as a catalog one. An unrecognized image gets **null**, which is a real answer — a generic port probe tells us no more than `--wait` already does, and a guessed probe can mark a healthy service unhealthy and block the whole `up`. `service_started` is used for those dependencies, since demanding health from something with no healthcheck hangs forever.
+
+**The boot probe.** Each repo that declares both a run command and a port is now started, waited for, and **stopped again**, as a `boot:<repo>` step. A test, not a launch: leaving it running would make every provision also a deploy, and would race the user's own Start, which kills by its own recorded PID and knows nothing about this one. A repo without a port is skipped rather than probed loosely — "the process stayed alive for three seconds" is not evidence anything works, and reporting that as a pass would be the same lie in a new place.
+
+**Three things the implementation forced:**
+
+- **`set -m`, not `setsid`.** The kill has to reach the process *group*: `pnpm dev` spawns the real server as a child, so killing the recorded PID alone leaves the port held by an orphan and the user's later Start fails with EADDRINUSE on a box that had just passed its probe. `setsid` is util-linux and absent on macOS, where these helpers are unit-tested — a kill that is only correct on the platform the tests cannot exercise is a kill nothing verifies. Bash's own job control puts the job in its own group on every platform.
+- **`curl -s`, not `curl -f`.** `-f` fails on 4xx, and an app whose `/` legitimately answers 401 or 404 is nonetheless up. The question is "does something serve HTTP here", not "is the root route happy" — the second is the app's business.
+- **The failure carries a log tail**, JSON-escaped through python3 (`nexus_step_tail`). "Did not answer on port 3000" is not actionable on its own, and a build error routinely contains quotes, backslashes and newlines — any one of which, unescaped, produces a report line the parser drops.
+
+**A false green worth recording.** The two tests that assert the app is stopped afterwards initially passed for the wrong reason: `setsid` was missing on macOS, so the server never started, and "the port is free" is trivially true of a server that never ran. Both now assert the app came up *before* asserting it went down. A test that cannot fail for the right reason is not covering anything.
+
+## D-73 — Validation answers two questions, and says which is which (2026-09-21)
+
+**Context:** Pieces 1 and 2 made a bootstrap record what it did and prove the app boots. Nothing surfaced either: the report sat on the sandbox, and the only pre-flight a definition ever got was `generateCompose`'s four structural warnings — which only ever described the YAML it was about to emit. Spec 24 piece 4.
+
+**Decision:** A **Validate** action, between Preview compose and Up, and two read-only MCP tools. Its answer has two halves that are never merged:
+
+- **static** — definition checks (`lib/stack/validate.ts`): dependency cycles *naming the nodes in them*, port collisions, services with no image, docker repos with nothing to build, placeholder env values, and dependencies nothing can probe. Pure: no filesystem, no docker, no network.
+- **observed** — the `boot:*` / `install:*` / `stack:up` steps the project's most recent sandbox actually recorded, read back over SSH.
+
+**Why they stay apart.** Merging them into one verdict forces a choice between two lies: claiming a definition boots because it passed a lint, or calling it unvalidated because nobody has provisioned it yet. The static half cannot prove anything runs; the observed half is the only evidence that does, and it may be absent, stale or unreachable. The UI says which it has, and `booted` is **null** — not false — when no app declared a port, because "nothing was probed" and "the app failed to start" are different answers.
+
+**Most recent sandbox, not a healthy one.** A sandbox that failed to provision is the most informative evidence available; preferring an older green one would report a stack as working *because* its latest attempt broke.
+
+**What validation does not do.** It does not resolve a port collision for you — picking one changes the URL you expect, and which node should move depends on which is "the" app. It does not gate the wizard. And it does not provision: both MCP tools are `projects:read`, because the static half is pure and the observed half reads a report off a machine that already exists. A token that can look at a project can ask whether its stack holds together.
+
+**Verified against a real sandbox**, not only in tests: a three-day-old box, provisioned before the recorder existed, answered "That sandbox recorded no steps — it predates step reporting", which is the fallback path behaving exactly as designed rather than an error.
+
+**Note on scope.** Piece 3 (the fast dry-run sandbox) is not built, so `validate` reports on the last *real* provision rather than running one on demand. That is the honest version of the feature at this stage — it never claims to have run something it did not.
+
+## D-74 — A dry run starts where the validation does (2026-09-23)
+
+**Context:** Pieces 1, 2 and 4 made a bootstrap record its steps, prove the app boots, and surface both. They did not make asking cheap. A local sandbox is byte-identical to a cloud one — `local.ts` calls the same `renderCloudInit`, only in container mode — so every run paid apt update, build-essential, the NodeSource curl|bash, `get.docker.com`, a global `npm i -g` for the agent CLIs, the gh keyring, a glab `.deb` and, longest of all, `playwright install --with-deps chromium`, into a bare `ubuntu:22.04` with no layer cache. With spec 25's repair loop running up to three rounds, that is an hour to answer one question. Spec 24 piece 3.
+
+**Decision:** Two levers, both already latent in the code.
+
+**A prebuilt base image**, `nexux/sandbox-base:v<N>`, holding the tooling half of the bootstrap. It is generated from `base-image.ts` rather than hand-written, and a test asserts the same install markers appear in both it and `renderCloudInit` — a parallel definition is one that drifts, and the drift here produces the worst possible failure: a dry run passing against tooling the real sandbox does not have.
+
+**A trimmed spec** (`dryRunSpec`) that drops the agent CLIs, Chromium, the tunnel and the tailnet. Each is either tooling a validation does not use or reachability it does not need — a dry run works off bind-mounted checkouts, so there is nothing behind a tailnet to clone. `installDocker` is deliberately *not* dropped: the caller may have forced it on because the canvas has compose services, and a dry run that quietly removed Docker would report a stack as broken for a reason the real provision would not have.
+
+**Measured, not asserted.** With a real repo (pnpm install, a build, an express server on :3000): **52s → 23s**, all three steps recorded green. The image itself builds in ~45s and is cached after that.
+
+**Never builds inline.** `resolveBaseImage` falls back to `ubuntu:22.04` when the image is absent or its version label is stale, and the bootstrap then installs what it needs exactly as before. A launch that quietly spent five minutes building would be the same twenty-minute surprise this piece exists to remove, with a different cause — so building is an explicit action the caller pays for knowingly.
+
+**The version is a label, not a tag.** `baseImageIsCurrent` reads `org.nexux.base-version` off the image, because a tag can be retagged and an image claiming v1 while holding v0's tooling is precisely the silent wrong answer the whole spec is about.
+
+**One thing the first build got wrong**, caught by running the image rather than trusting it: `corepack prepare --activate` writes a *shim*, not the binary — the real pnpm downloads on first use ("Downloading the pnpm 12.6.0 binary for linux-arm64"). The image had baked a package manager that still needed the network before it could install anything. Invoking `pnpm --version` and `yarn --version` in the same layer pulls the binaries in; v2 answers instantly.
+
+**End to end on a deliberately broken app**, to check the loop reports what a repair agent would need: 24 seconds from launch to `install=0 build=0 boot=1`, with the boot step carrying `Error: Cannot find module '@acme/does-not-exist'` in its tail. That is the actionable failure spec 25's repair loop reads.
+
+## D-75 — A repository is not a node, in the schema as well as the model (2026-09-23)
+
+**Context:** Detection has always been good and always been unused: `detectRepo` finds the Dockerfile, the compose file, the package manager, the scripts, the env keys and the ports, and parses each Makefile target's recipe so a `make dev` that is secretly `docker compose up -d postgres` is recorded as such. All of it fired only when a human dragged a repo onto the canvas, and prefilled exactly one node. Nothing turned it into a graph, so every project started blank. Spec 25 piece 1.
+
+**Decision:** Discovery in two passes. `findRunnableUnits` reads the workspace declaration (`pnpm-workspace.yaml`, `workspaces` in package.json) and expands it into directories; `detectRepo` then scans each one, unchanged — it already took an arbitrary path. `seedStack` turns the results into nodes, inferred services and edges.
+
+Two repos with one app each, and one monorepo with two apps, now produce **the same graph**. Only discovery differs, which is the point: the stack describes what boots, and a git is how the code arrived.
+
+**The schema said otherwise.** `StackNode.repositoryId` was `@unique` — "one repo, one node", enforced by the database. The seed hit it on the first real monorepo. Nothing depended on the uniqueness (every read is by `id`; the one query filtering on the column already used `findMany`), so the migration replaces the unique index with a plain one and the `Repository` back-relation becomes a list. Worth recording because the spec treated this as a matter of inference and it was also a constraint.
+
+**What the inference will and will not claim:**
+
+- **Scheme first, name second.** `DATABASE_URL=postgres://…` names its engine and is conclusive. `POSTGRES_HOST` alone is suggestive: the node is still created, flagged low confidence with the evidence attached. Silence would leave the blank canvas this piece removes; an unlabelled guess would be worse.
+- **One service per project, not per unit.** Three units naming a database want one postgres between them. Three containers racing for 5432 is a boot failure nobody asked for.
+- **A repo that ships its own compose file suppresses inference entirely** — it has declared its services, and duplicating them starts a second postgres fighting the first.
+- **Unit-to-unit edges are never inferred.** A front end's `API_URL` pointing at a back end's port is suggestive, not conclusive, and a wrong edge changes boot order in a way that is hard to debug. Two apps in one git are no more related than two gits; treating co-location as evidence is exactly the wrong inference.
+- **A library is not a node.** A unit earns one only if it has something to run — a dev/start script, a Dockerfile, or a flagged make target. A workspace of nine libraries and two apps is two nodes.
+- **Port collisions are flagged, not resolved.** Two apps defaulting to 3000 is common; picking one for the user changes the URL they expect.
+
+**Seeding refuses a non-empty canvas.** A merge cannot tell a deliberate edit from a stale one, and silently reverting a hand-written fix is the worst outcome available. Re-seeding is explicit, and then it replaces.
+
+**One bug only the real monorepo revealed.** A workspace member does not declare its own package manager — the root does, and detection scans each unit in isolation. The first real seed gave every app in a pnpm monorepo `npm install`, which at best ignores the workspace and at worst writes a package-lock.json beside pnpm-lock.yaml. Members now inherit the root's manager, unless they detected their own (a lockfile of their own is better information than the root's).
+
+**Walked end to end** on a monorepo with two apps and a library: two run nodes, postgres and redis inferred from the API's `.env.example` with the connection strings as evidence, edges only from the unit that named them, the library reported as a library — and `validate` then answered clean on the result.
+
+## D-76 — The repair loop's rules live in the applier, not the prompt (2026-09-23)
+
+**Context:** Spec 24 made a failure readable — a `boot:api` step carrying `Cannot find module '@/generated/prisma'` in its tail. A human reads that and knows the install is missing a codegen step; the system did not, so the developer was still the one closing the loop. Spec 25 piece 2.
+
+**Decision:** Validate → read the failures → the stack assistant proposes patches → apply → re-validate, up to three rounds. The agent is the existing assistant with a different prompt and caller: its suggestion format is already an applied patch with a reason, and its tools are already the right three. A second agent would be a second definition of what a stack patch is.
+
+**The split that matters.** A prompt is a *request*. "Never remove a run command" in an instruction block is a sentence a model may ignore, misread, or reason its way out of when a failure is stubborn. So every rule the loop must not break lives in `lib/stack/repair.ts`, which is the only thing that writes:
+
+- **Never weaken the check.** Blanking a `localCommand` or a `ports` array makes validation pass by *not running* — the node stops being started, or the boot probe is skipped and "the app failed" becomes "nothing was probed". Refused, with the field named. Changing a command to a different one is fine; the rule is about removal.
+- **Never touch a node the user wrote.** This needed a fact the database did not record and that cannot be recovered afterwards, so `StackNode.seededBy` is new, defaulting to `"user"` — every node that exists today was put there by a person, and the safe direction for a rule protecting hand edits is to assume the edit was one. The seed writes `"detect"`, a repair writes `"agent"`, and a later round may revise its own work.
+- **Never create a node.** Adding a service the project never asked for is a guess with a container attached. Inference belongs to the seed, where it is driven by the repos' own evidence.
+- **Never patch a node that does not exist** — the ordinary failure of a model reading a truncated tool result.
+
+Good and bad suggestions in one reply are separated rather than rejected together: the fix lands and the weakening does not.
+
+**Three rounds, and a round that proposes nothing stops immediately.** Each round costs a validation — a container, and real money on a cloud provider. Re-validating after changing nothing would ask the same question and get the same answer, so the loop returns rather than spending it.
+
+**No separate "propose" mode.** `POST /stack/validate` already is one: it reports what is wrong and changes nothing. A second endpoint that ran the agent without applying would spend a validation to produce advice the user cannot act on without re-running everything anyway.
+
+**Every round records what changed and why**, plus what was refused. The safety story is that nothing happens silently — an agent that rewrote three nodes over two rounds has to be reviewable without reading the database.
+
+**Verified end to end against a real port collision**, where it behaved correctly for a reason worth recording: the run stopped at the agent (no OpenAI key configured) and the canvas was untouched — and both nodes were marked `user`, so even a working agent's patches would have been refused. The rule held without the model's cooperation, which is the whole point of putting it in the applier.
+
+## D-77 — Host agents run on whichever LLM you actually have a key for (2026-09-23)
+
+**Context:** Nexus has been multi-provider everywhere except the one place it mattered most. Sandboxes fan six LLM credentials out as env vars (`LLM_CREDENTIAL_ENV`), the brain picker offers Claude or OpenCode — and every agent running *on the host* (the stack assistant, the repair loop, the roadmap generator, the definer, the skill recommender) hardcoded `modelProvider: "openai"` across seven call sites and read a single `openai_api_key` setting. A user holding an Anthropic key and no OpenAI one was told to "add it in Settings", which reads as a missing configuration and was really a default nobody had parameterised.
+
+**The SDK was never the constraint.** `@ideascol/agents-generator-sdk` takes provider, model and key per `defineAgent` call and ships **75 providers** — including every one Nexus already stores. Checked rather than assumed, which also caught a default model name (`zai/glm-4-plus`) that does not exist; the real list has `zai/glm-4.5`.
+
+**Decision:** `resolveHostModel` reads the same `CloudCredential` rows the rest of the product does, mapping our provider names to the SDK's (`anthropic-key` → `anthropic`, `xai-llm` → `xai`, `google` → `gemini`). Precedence: the credential the user chose → any usable saved one, oldest first → the legacy `openai_api_key` setting.
+
+**Three judgements in that ordering:**
+
+- **The legacy setting stays.** Every install that exists today is configured that way, and breaking them to introduce a choice is a poor trade.
+- **A chosen credential that has since been deleted, or had its key emptied, falls through rather than failing.** The user's intent was "use a model"; serving that with a different key beats doing nothing.
+- **`claude` is deliberately not in the map.** It holds an OAuth token for the Claude Code CLI, which is not an API key this SDK can send — a project with only that is still unconfigured, and pretending otherwise would fail at the API with a confusing error.
+
+The error message now names every provider that would work, instead of sending people after an OpenAI key they may have had no reason to own. `GET/PUT /api/settings/host-model` exposes the choice, and lists a credential with an empty key as *unusable* rather than hiding it — "I added that key" and "that key is empty" are different problems, and a hidden row makes the second look like the first.
+
+Found while the repair loop (D-76) stopped on a missing key and the honest answer to "why can't I pick another token?" turned out to be: you could have, nobody wired it.
+
+## D-78 — A lock describes a boot; it does not pin one (2026-09-23)
+
+"Reproducible" had no definition in this codebase, and the largest source of
+drift was structural and invisible: a local sandbox bind-mounts repo folders
+([local.ts:231](../packages/sandbox/src/local.ts:231)) while a cloud sandbox
+clones by URL. A stack validated locally was validated against someone's working
+tree — uncommitted files included — and nothing anywhere said so.
+
+`StackLock` records what a green validation passed against: commits, dirty
+flags, lockfile hashes, image digests, tooling versions, and how the code
+arrived. Spec 25 piece 3.
+
+- **It is not a pin.** Nothing reads a lock back to force a digest. Pinning an
+  image the user did not pin has real consequences — a postgres that never gets
+  a security patch — and that choice is theirs. The lock *describes*; if pinning
+  is wanted later, this is the data to generate it from.
+- **A lock needs proof of a boot, not a passing lint.** It is written only when
+  `observed.booted === true` and no step failed. Spec 24 spent its fourth piece
+  keeping "the definition is well-formed" apart from "it runs"; locking on a
+  static pass would have collapsed that distinction from the other side, by
+  stamping "booted against these commits" on a stack nobody ever ran.
+- **`source` comes from the repos, not the provider.** `local.ts` mounts only
+  repos with no clone URL, so a local sandbox whose repos all have remotes
+  clones exactly like a cloud one. Reading it off the provider would have
+  labelled those runs `mount` and told the user their green was weaker than it
+  was. Mixed reports `mount`: if any repo was mounted, the run saw a working
+  tree, which is the weaker of the two claims.
+- **Digests come from the local daemon only.** Resolving a tag against a
+  registry turns a validation into something that fails when the network does,
+  for a field that is a nice-to-have. An unpulled image records `null`, read as
+  "we do not know" rather than "it has no digest" — and the diff treats
+  null-to-null as no change rather than as drift.
+- **One row per green run, not one per project.** The whole point is to diff
+  this run against the last one, and a single overwritten row can only ever
+  describe the present.
+
+Committing the lock into the user's repo was the more honest framing of what it
+is, and was rejected for the same reason: one file in a working tree describes
+now, and the question a lock answers — "it was green on Tuesday and red today"
+— is a question about history. It would also have made Nexux the only tool here
+that writes files into someone else's git.
+
+Collection is best-effort throughout. A missing git, a stopped docker, a path
+that is not a checkout: each yields a null field rather than an exception, and
+the lock write is wrapped so that failing to record one never changes the
+verdict of the validation that earned it. A lock with a null digest is worth
+strictly more than no lock.
+
+## D-79 — Remote Docker is a per-sandbox `-H ssh://`, never a process-wide `DOCKER_HOST` (2026-09-26)
+
+Setting `DOCKER_HOST` on the Nexux process already moves local sandboxes to
+another machine, because every container-path `spawn("docker")` inherits the
+env. It is still the wrong unit. Spec 26.
+
+- **Per sandbox, not per process.** A global env var also moves the stack
+  runner, the stack lock and the harness — which are about the developer's own
+  machine — and strands every existing local sandbox on the daemon it was
+  created on. So a sandbox records its daemon (`Sandbox.dockerEndpointId`, null
+  = this machine) and `provider` stays `"local"`: the ~30 `provider ===
+  "local"` checks mean "container transport, no Terraform", which is still true.
+- **`-H` in argv, not `DOCKER_HOST` in the env.** The destination is visible in
+  logs and tests, needs no env threaded into node-pty, and cannot leak into a
+  child that was never meant to see it. `dockerHostArgs` is the only way an
+  argv gets pointed elsewhere, and it re-validates the host even though the
+  API already did.
+- **ssh:// only.** tcp:// without TLS is root on the remote for anyone who
+  reaches the port; with TLS there is no channel to forward the browser
+  session through, and the alternative — publishing the VNC bridge on the
+  remote's LAN address — is what spec 23 forbids.
+- **Probe before saving.** An endpoint that cannot run a sandbox is not worth
+  a row, and the error is most useful while the form is still open. Later
+  re-checks record failures instead, next to the last facts that were true.
+
+## D-80 — One server per database; the installed app can point at any (2026-09-26)
+
+Letting the packaged app use the dev server's database (`~/.nexux/native.json`)
+made two servers on one SQLite file a two-click accident.
+
+- **The lock is about work, not the file.** SQLite survives two writers. The
+  work does not: each server boots by failing "orphaned" tasks and settling
+  "orphaned" provisions, judged by in-memory state, so a second server kills
+  the first one's runs; both would also run the scheduler twice and poll
+  Telegram (409). `<db>.lock` (atomic create, pid + origin) is taken before
+  anything else in startup — including migration, which is why it has a
+  client-free entry point — and a live holder means refuse, naming it. A dead
+  pid is stale and taken over.
+- **`native.json`, not env vars.** An app launched from Finder or the Start
+  menu has no shell environment. The file lives at a fixed place because it
+  says where everything else is, and the log stays beside it.
+- **A broken override never falls back.** An unknown key, a relative path or a
+  directory for a database stops the launch with the reason on screen. Silently
+  opening the default database instead would show a different set of projects
+  — indistinguishable, to the user, from losing theirs.
+- **Two migration ledgers, kept in agreement.** The dev database is migrated by
+  `prisma migrate` (`_prisma_migrations`), the sidecar by `ensureMigrated`
+  (`_nexux_migrations`). The runner adopts Prisma's finished rows and writes
+  Prisma's (sha256 checksum) for what it applies, so neither tool re-runs the
+  other's work.
+
+## D-81 — A bot owns no machine: every session is a fresh desktop container (2026-11-18)
+
+**Context:** The ask was Grok Bot's concept — teammates with a job and "their own computer" — running on the Claude subscription like the rest of Nexux, with everything happening inside an ephemeral container that has a browser. Nexux already had a long-lived chat target (the dedicated dev sandbox), but that is a project checkout with a PR pipeline around it, not a desktop, and it is never thrown away.
+
+**Decision:** A new `Bot` → `BotSession` → `BotRun` model rather than reusing `Sandbox`: a bot has no project, no repos and no Terraform, and its machine is per-session. The machine is a locally built `nexux-bot:<hash>` image whose Dockerfile is rendered in code and piped over stdin, so no build context has to ship with the native app and a changed recipe is a new tag. Debian, not Ubuntu, because Chromium must be a real package on arm64. Claude drives the *visible* Chromium through the Playwright MCP over CDP instead of a headless browser, so what the bot does is what the user watches. The container is `--rm` with no volumes; the session ends on request, after `idleMinutes`, or on any restart (a new process cannot supervise the old one's runs, so recovery deletes every labelled container). The Claude token is injected the way sandboxes get it, referenced by name in argv. noVNC is published on host loopback with a per-session password.
+
+**Consequences:** Nothing a bot does survives its session unless it reports it back, which is the point and also the main limitation: Claude's own memory resets with each computer, shown in the chat as a divider. The first boot builds a ~1 GB image and takes minutes. The live screen only works where the dashboard runs on the same machine as Nexux; a remote Nexus host needs a WebSocket proxy that does not exist yet. Unpinned npm installs make rebuilds pick up new Claude Code versions, at the cost of reproducibility.

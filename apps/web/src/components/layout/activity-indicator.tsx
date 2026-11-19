@@ -6,6 +6,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { CirclePause, Play, Server } from "lucide-react";
 
+import { useHydrated } from "@/hooks/use-hydrated";
 import { activityCounts, getActivity } from "@/services/activity";
 
 /**
@@ -24,7 +25,12 @@ export function ActivityIndicator() {
     queryFn: getActivity,
     refetchInterval: 10_000,
   });
-  const counts = activityCounts(activity.data);
+  // The header hydrates inside the page's Suspense boundary, often after the
+  // shell's ⌘J switcher has already filled the shared ["activity"] cache — so
+  // the first client render had counts the server (no data) never rendered,
+  // and React threw a hydration mismatch. Render the server's nothing first.
+  const hydrated = useHydrated();
+  const counts = activityCounts(hydrated ? activity.data : undefined);
 
   // Nothing up and nothing running: an all-zero row is noise on a fresh
   // install, so it stays out of the way until there is something to say.

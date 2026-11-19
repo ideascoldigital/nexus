@@ -51,6 +51,8 @@ model Project {
   sandboxes     Sandbox[]
   stackNodes    StackNode[]
   stackEdges    StackEdge[]
+  stackLocks    StackLock[]
+  seeds         SeedData[]
   taskSchedules TaskSchedule[]
 }
 
@@ -74,7 +76,8 @@ model Repository {
   project       Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   setup         RepositorySetup?
   envVars       ProjectEnvVar[]
-  stackNode     StackNode?
+  /// One per runnable unit: a monorepo contributes several (spec 25 piece 1).
+  stackNodes    StackNode[]
   // SetNull, not Cascade: deleting a credential must never delete the repo row
   // — it just returns this repo to the provider-wide fallback.
   gitCredential CloudCredential? @relation("RepositoryGitCredential", fields: [gitCredentialId], references: [id], onDelete: SetNull)
@@ -123,7 +126,14 @@ model StackNode {
   id           String  @id @default(cuid())
   projectId    String
   kind         String // "repo" | "service"
-  repositoryId String? @unique // set when kind = "repo"
+  /// Set when kind = "repo". NOT unique: a monorepo contributes one node per
+  /// runnable unit, all pointing at the same repository (spec 25 piece 1).
+  repositoryId String?
+  /// Who put this node here: "detect" (the seed), "agent" (a repair), or
+  /// "user". The repair loop may rewrite the first two and never the last —
+  /// an agent silently overwriting a hand edit is the worst outcome available,
+  /// and "who wrote this" cannot be re-derived after the fact (spec 25 p2).
+  seededBy     String  @default("user")
   name         String // display + compose service name (slugified at generation)
   runMode      String  @default("docker") // "docker" | "local"
 
@@ -164,6 +174,36 @@ model StackNode {
   repository Repository? @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
   edgesFrom  StackEdge[] @relation("StackEdgeSource")
   edgesTo    StackEdge[] @relation("StackEdgeTarget")
+  seed       SeedData?
+
+  @@index([projectId])
+  @@index([repositoryId])
+}
+
+// SeedData - a database backup restored into one stack service when a sandbox
+// starts (spec 29). The file lives at <dataDir>/seeds/<projectId>/<id>/ —
+// never in this database and never in git.
+model SeedData {
+  id          String   @id @default(cuid())
+  projectId   String
+  stackNodeId String   @unique // one seed per service; replacing is re-uploading
+  fileName    String   // as given, for display
+  // What the file is, read from its bytes: pg-sql | pg-custom | mysql-sql |
+  // mongo-archive. Gzip is recorded separately; the restorer undoes it.
+  format      String
+  gzipped     Boolean  @default(false)
+  sizeBytes   BigInt
+  sha256      String
+  // A dump may carry real people's data. Drives the export rule and the cloud
+  // launch warning (spec 29). Defaults to true — assuming a dump is safe is
+  // the expensive mistake.
+  sensitive   Boolean  @default(true)
+  enabled     Boolean  @default(true) // attached but not restored, without deleting it
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stackNode StackNode @relation(fields: [stackNodeId], references: [id], onDelete: Cascade)
 
   @@index([projectId])
 }
@@ -194,6 +234,11 @@ model CloudCredential {
   name        String
   provider    String // civo | aws | github | gitlab | bitbucket | claude | openai | openrouter | google | xai-llm | anthropic-key | zai | tailscale
   data        Json
+  // The last Test result (spec 28): what the credential is and what it can do.
+  // Never contains the secret. Stored so the list shows a status without
+  // re-checking on every render.
+  lastCheck     Json?
+  lastCheckedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -220,7 +265,7 @@ model NexusHost {
   id       String @id @default(cuid())
   name     String // instance hostname
   status   String @default("pending") // pending | provisioning | bootstrapping | running | error | destroying | destroyed
-  provider String @default("civo") // civo | aws
+  provider String @default("civo") // civo | aws | docker-endpoint
 
   credentialId String? // cloud credential used to provision; destroy prefers the same account
   // Tailscale auth key (provider "tailscale"). Provisioning is refused without
@@ -259,7 +304,13 @@ model NexusHost {
   updatedAt   DateTime  @updatedAt
   destroyedAt DateTime?
 
+  // provider "docker-endpoint" only (spec 27): the machine whose Docker runs
+  // this host's stack. Restrict, not SetNull — a host whose endpoint vanished
+  // could be neither updated nor destroyed.
+  dockerEndpointId String?
+
   credential          CloudCredential? @relation("NexusHostCredential", fields: [credentialId], references: [id], onDelete: SetNull)
+  dockerEndpoint      DockerEndpoint?  @relation(fields: [dockerEndpointId], references: [id], onDelete: Restrict)
   tailscaleCredential CloudCredential? @relation("NexusHostTailscaleCredential", fields: [tailscaleCredentialId], references: [id], onDelete: SetNull)
   registryCredential  CloudCredential? @relation("NexusHostRegistryCredential", fields: [registryCredentialId], references: [id], onDelete: SetNull)
 
@@ -291,6 +342,12 @@ model SandboxConfig {
   githubCredentialId   String? // saved GitHub token injected as GITHUB_TOKEN (project env var wins; null = first github credential)
   claudeCredentialId   String? // saved Claude Code token injected as CLAUDE_CODE_OAUTH_TOKEN (project env var wins; null = first claude credential)
   region               String   @default("NYC1") // provider region (Civo: NYC1..., AWS: us-east-1...)
+  // For provider "local": which machine's Docker (spec 26). Null = this one.
+  // Saved with the rest, so the choice survives reopening the drawer and a
+  // scheduled launch uses it too. SET NULL: removing the endpoint falls back
+  // to this machine rather than failing every future launch.
+  dockerEndpointId     String?
+  dockerEndpoint       DockerEndpoint? @relation(fields: [dockerEndpointId], references: [id], onDelete: SetNull)
   size                 String   @default("g3.medium")
   diskImage            String   @default("ubuntu-jammy")
   branch               String? // base branch: cloned in the sandbox, task branches and PRs start from it (null = repo default)
@@ -300,6 +357,7 @@ model SandboxConfig {
   installClaudeCode    Boolean  @default(true)
   installAgentBrowser  Boolean  @default(true)
   installCloudflared   Boolean  @default(true) // quick tunnels for live previews
+  installBrowserSession Boolean @default(false) // xvfb + x11vnc + websockify, for the embedded browser (spec 23)
   installTailscale     Boolean  @default(false) // join the instance to a Tailscale tailnet at bootstrap
   tailscaleCredentialId String? // saved tailscale auth key used to join (null = first tailscale credential)
   includeStackServices Boolean  @default(true) // start the Stack tab's docker services on the instance
@@ -361,12 +419,52 @@ model Sandbox {
   updatedAt     DateTime  @updatedAt
   destroyedAt   DateTime?
 
-  project    Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  credential CloudCredential?  @relation(fields: [credentialId], references: [id], onDelete: SetNull)
-  tasks      SandboxTask[]
+  // Which Docker daemon a local sandbox lives on (spec 26). Null = this
+  // machine's default daemon. A property of where the container runs, not of
+  // what kind of sandbox it is — `provider` stays "local".
+  dockerEndpointId String?
+  // The endpoint's host, copied at launch: the address lives on the row like
+  // publicIp and instanceId do, so every exec path reaches the right daemon
+  // without a join. It cannot drift — an endpoint's host is not editable.
+  dockerHost       String?
+
+  project        Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  credential     CloudCredential? @relation(fields: [credentialId], references: [id], onDelete: SetNull)
+  dockerEndpoint DockerEndpoint?  @relation(fields: [dockerEndpointId], references: [id], onDelete: SetNull)
+  tasks          SandboxTask[]
   processes  SandboxProcess[]
+  browser    BrowserSession?
 
   @@index([projectId])
+}
+
+// DockerEndpoint - another machine's Docker daemon that local sandboxes can
+// run on (spec 26). Machine-level like NexusHost, not workspace-scoped: it is
+// a place containers run, not a secret. `host` is always ssh:// — the browser
+// session is forwarded through the same SSH, and plain tcp:// is root on the
+// remote for anyone who reaches the port.
+//
+// The probe columns record the last `docker version` / `docker info` answer,
+// so the settings list shows state without re-probing on every render.
+model DockerEndpoint {
+  id            String    @id @default(cuid())
+  name          String
+  host          String    @unique // ssh://user@host[:port]
+  serverVersion String?
+  arch          String? // the base image is built on the remote, natively
+  memTotalMb    Int?
+  lastCheckedAt DateTime?
+  lastError     String?
+  // Whether a sandbox would actually work here (spec 28 phase 5): privileged
+  // containers, DNS on the default bridge and on a compose-style network,
+  // internet, disk. A CredentialCheck; the probe above only says it answers.
+  sandboxCheck  Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sandboxes      Sandbox[]
+  nexusHosts     NexusHost[]
+  sandboxConfigs SandboxConfig[]
 }
 
 // SandboxProcess - one long-running command started on a sandbox instance
@@ -398,6 +496,38 @@ model SandboxProcess {
   sandbox Sandbox @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
 
   @@unique([sandboxId, key])
+  @@index([sandboxId])
+}
+
+// BrowserSession - the interactive browser running on a sandbox (spec 23).
+//
+// A front end and a back end on one instance cannot be tested through tunnels:
+// each process gets its own random public hostname, so the front's API_URL is
+// wrong from the viewer's browser. Inside the sandbox both are localhost ports
+// that already agree, so the browser runs there and the dashboard reaches it
+// over an SSH port-forward — never a public tunnel, since the session can read
+// anything on that instance's localhost.
+//
+// One per sandbox: a second would need its own display, port trio and
+// supervision to solve a problem nobody has. Starting again replaces.
+model BrowserSession {
+  id        String    @id @default(cuid())
+  sandboxId String    @unique
+  status    String    @default("stopped") // stopped | starting | running | error
+  display   String    @default(":99")
+  vncPort   Int       @default(5900)
+  wsPort    Int       @default(6080) // what the SSH forward lands on
+  cdpPort   Int       @default(9222) // loopback only; an open CDP port is RCE
+  token     String // VNC password, generated per session, never logged
+  width     Int       @default(1440)
+  height    Int       @default(900)
+  error     String?
+  startedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  sandbox Sandbox @relation(fields: [sandboxId], references: [id], onDelete: Cascade)
+
   @@index([sandboxId])
 }
 
@@ -1053,7 +1183,7 @@ model TaskSchedule {
   @@index([enabled, nextRunAt])
 }
 
-// Bot - an AI teammate with a job (spec 23). It owns no machine: every session
+// Bot - an AI teammate with a job (spec 31). It owns no machine: every session
 // runs in a fresh, ephemeral desktop container (Chromium + Claude Code on the
 // Claude subscription token) that is deleted when the session ends.
 model Bot {
@@ -1122,7 +1252,7 @@ model BotRun {
   @@index([sessionId])
 }
 
-// BotRoutine - recurring work a bot does on its own (spec 23): on `cron` (host
+// BotRoutine - recurring work a bot does on its own (spec 31): on `cron` (host
 // timezone) it wakes its computer and runs `prompt`. Created from the chat
 // (the bot ends a reply with a `routine` block) or from the bot's panel.
 model BotRoutine {
@@ -1141,4 +1271,116 @@ model BotRoutine {
 
   @@index([botId])
   @@index([enabled, nextRunAt])
+}
+
+// StackLock - what a green validation passed against (spec 25 piece 3).
+//
+// Not a pin. Nothing reads this back to force a digest: pinning an image the
+// user did not pin is a decision with real consequences (a postgres that never
+// gets a security patch) and it is theirs to make. This *describes* — so that
+// "it was green on Tuesday and red today" has an answer, which today it does
+// not.
+//
+// One row per green validation rather than one per project: the whole point is
+// to diff two of them, and a single overwritten row can only ever say what is
+// true now. Red validations are not recorded — a lock is a statement that
+// something booted, and there is nothing to reproduce about a failure.
+model StackLock {
+  id          String   @id @default(cuid())
+  projectId   String
+  lockVersion Int      @default(1)
+  /// "local" | "civo" | "aws" — which provider produced the evidence.
+  provider    String
+  /// "mount" (a local sandbox bind-mounts your working tree) or "clone" (a
+  /// cloud sandbox clones by URL). The single most important field here: a
+  /// stack validated by mount was validated against uncommitted files, and
+  /// saying so is the whole of what "reproducible" can honestly mean before a
+  /// cloud run.
+  source      String
+  /// The sandbox whose bootstrap report backed this, when there was one.
+  sandboxId   String?
+  /// [{ name, repositoryId, commit, dirty, lockfile, lockfileSha256 }]
+  repos       Json
+  /// [{ name, image, digest, healthcheck }]
+  services    Json
+  /// { node, pnpm, docker, ... } — whatever the host could report.
+  tooling     Json
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Global assistant (spec 30). A thread is workspace-level: Conversation
+// requires a project and is Claude-session shaped, so these are their own.
+// ---------------------------------------------------------------------------
+
+model AssistantThread {
+  id          String   @id @default(cuid())
+  workspaceId String
+  title       String?
+  // The project it was started from — context for the model, not a boundary.
+  projectId   String?
+  // Scope[] the thread's tools are limited to (packages/mcp SCOPES).
+  scopes      Json
+  // "general" (the ⌘I panel) or "stack" (the Stack tab's assistant for
+  // projectId: its instructions, apply-to-canvas suggestions, one per project).
+  mode        String   @default("general")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  events  AssistantEvent[]
+  actions AssistantAction[]
+  watches AssistantWatch[]
+
+  @@index([workspaceId])
+  @@index([projectId, mode])
+}
+
+/// The transcript, in order: user | assistant | tool_call | tool_result | action | watch_report | error.
+model AssistantEvent {
+  id        String   @id @default(cuid())
+  threadId  String
+  kind      String
+  content   Json
+  createdAt DateTime @default(now())
+
+  thread AssistantThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+}
+
+/// A write tool the model asked for, waiting on the user (spec 30: reads run, writes ask).
+model AssistantAction {
+  id        String    @id @default(cuid())
+  threadId  String
+  tool      String
+  args      Json
+  summary   String
+  status    String    @default("pending") // pending | running | done | failed | cancelled
+  result    Json?
+  createdAt DateTime  @default(now())
+  decidedAt DateTime?
+
+  thread AssistantThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, status])
+}
+
+/// Something the assistant keeps an eye on after its turn ends (spec 30 phase 3).
+model AssistantWatch {
+  id        String   @id @default(cuid())
+  threadId  String
+  kind      String // task | sandbox
+  targetId  String
+  until     String // finished | needs_input | running | any_change
+  status    String   @default("open") // open | fired | expired | cancelled
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  thread AssistantThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([status, kind, targetId])
 }

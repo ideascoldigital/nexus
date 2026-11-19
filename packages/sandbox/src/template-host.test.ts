@@ -17,6 +17,8 @@ import {
   registryHost,
   renderHostCloudInit,
   renderHostCompose,
+  renderEndpointUpdater,
+  endpointHostProject,
   HOST_WORKSPACE_DIR,
   safeHostName,
   type NexusHostSpec,
@@ -610,4 +612,134 @@ test("a custom setup script runs before the marker", () => {
   const custom = script.indexOf("echo custom-step");
   const marker = script.indexOf(`> ${HOST_MARKER}`);
   assert.ok(custom > 0 && custom < marker);
+});
+
+// ---- endpoint hosts (spec 27) ------------------------------------------------
+
+const endpointCompose = () =>
+  renderHostCompose({ imageRef: "ghcr.io/o/r:latest", mode: "endpoint", name: "Devbox Host" });
+
+test("an endpoint host publishes nothing — the tailnet is the only way in", () => {
+  const compose = endpointCompose();
+  // No ports: key at all, not merely none on 0.0.0.0. The LAN of a machine we
+  // do not own must not see an app with no authentication.
+  assert.ok(!/^\s+ports:/m.test(compose), compose);
+  assert.ok(compose.includes("network_mode: service:tailscale"));
+  // Userspace: no tun device or capabilities to ask of someone's daemon.
+  assert.ok(compose.includes('TS_USERSPACE: "true"'));
+  // Checked on the YAML, not the prose: the comment explaining the rule names
+  // both things it rules out.
+  const yaml = compose
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("#"))
+    .join("\n");
+  assert.ok(!/cap_add|NET_ADMIN|\/dev\/net\/tun|devices:/.test(yaml), yaml);
+});
+
+test("an endpoint host's secrets are variables, never values", () => {
+  const compose = endpointCompose();
+  assert.ok(compose.includes('TS_AUTHKEY: "${TS_AUTHKEY}"'));
+  assert.ok(!compose.includes("tskey-"));
+});
+
+test("only the updater holds the docker socket — the app can only leave a note", () => {
+  const compose = endpointCompose();
+  const service = (name: string) =>
+    compose.split(`\n  ${name}:\n`)[1].split(/\n {2}[a-z]+:\n|\nvolumes:\n/)[0];
+  // Root on the endpoint lives in exactly one container.
+  assert.equal(compose.split("\n").filter((l) => l.includes("/var/run/docker.sock")).length, 1);
+  assert.ok(service("updater").includes("/var/run/docker.sock:/var/run/docker.sock"));
+  assert.ok(!service("nexux").includes("docker.sock"));
+  // The app's side of the channel is the same path a VM host uses, so the same
+  // Settings button works on both.
+  assert.ok(service("nexux").includes("- host-control:/host-control"));
+  assert.ok(service("updater").includes("- host-control:/control"));
+  assert.ok(!service("nexux").includes("host-config"), "the app never sees the stack's secrets file");
+  assert.ok(compose.includes('NEXUX_HOST_KIND: "endpoint"'));
+  // The app is not root; the updater opens the channel for it.
+  assert.ok(service("updater").includes("chmod 1777 /control"));
+});
+
+test("the updater consumes the request, never recreates itself, and logs like a VM host", () => {
+  const script = renderEndpointUpdater(endpointHostProject("Home Box"));
+  assert.ok(script.includes("docker compose -p nexus-host-home-box"));
+  // Consumed before acting, or the loop would fire again mid-update.
+  assert.ok(script.indexOf("rm -f /control/update-requested") < script.indexOf("pull $SERVICES"));
+  // Its own container is left out of pull and up: recreating itself would
+  // kill the run halfway.
+  assert.match(script, /SERVICES="tailscale nexux ollama"/);
+  assert.ok(!/up -d(?! \$SERVICES)/.test(script), "every up names its services");
+  // Never down: the volumes are the host's data.
+  assert.ok(!/compose[^\n]* down/.test(script));
+  // The markers self-update-log.ts parses.
+  for (const marker of ["[nexus-update] started", "[nexus-update] finished", "[nexus-update] FAILED"]) {
+    assert.ok(script.includes(marker), marker);
+  }
+});
+
+test("the node keeps its identity across recreation, under a safe hostname", () => {
+  const compose = endpointCompose();
+  assert.ok(compose.includes("- ts-state:/var/lib/tailscale"));
+  assert.match(compose, /^volumes:$[\s\S]*^ {2}ts-state:$/m);
+  assert.ok(compose.includes(`hostname: ${safeHostName("Devbox Host")}`));
+  assert.throws(
+    () => renderHostCompose({ imageRef: "x", mode: "endpoint" }),
+    /needs its tailnet name/,
+  );
+});
+
+test("the app is configured the same on a VM host and an endpoint host", () => {
+  // Pull each file's nexux environment block and compare: the only allowed
+  // difference is the endpoint's NEXUX_HOST_KIND.
+  const envOf = (compose: string) => {
+    const block = compose.split("  nexux:\n")[1].split("\n    environment:\n")[1];
+    return block
+      .split("\n")
+      .filter((l) => /^ {6}[A-Z_]+: /.test(l))
+      .filter((l) => !l.includes("NEXUX_HOST_KIND"));
+  };
+  const vm = envOf(renderHostCompose({ imageRef: "ghcr.io/o/r:latest" }));
+  assert.ok(vm.length >= 8, vm.join("\n"));
+  assert.deepEqual(envOf(endpointCompose()), vm);
+});
+
+// --- release channel switch from the host's own Settings -------------------------
+
+import { execFileSync } from "node:child_process";
+import nodeFs from "node:fs";
+import nodeOs from "node:os";
+import nodePath from "node:path";
+import { renderChannelSwitch } from "./template-host";
+
+function runSwitch(request: string) {
+  const dir = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), "chan-"));
+  const compose = nodePath.join(dir, "compose.yml");
+  const req = nodePath.join(dir, "update-requested");
+  nodeFs.writeFileSync(
+    compose,
+    renderHostCompose({ imageRef: "ghcr.io/o/nexus:latest", mode: "endpoint", name: "box" }),
+  );
+  nodeFs.writeFileSync(req, request);
+  const out = execFileSync("sh", ["-c", renderChannelSwitch(req, compose)]).toString();
+  return { out, file: nodeFs.readFileSync(compose, "utf8") };
+}
+
+test("a channel request repoints only the app's image, and its NEXUX_IMAGE", () => {
+  const { out, file } = runSwitch("2026-09-28T00:00:00Z\nchannel=edge\n");
+  assert.match(out, /channel: ghcr.io\/o\/nexus:latest -> ghcr.io\/o\/nexus:edge/);
+  assert.match(file, /image: ghcr.io\/o\/nexus:edge/);
+  assert.match(file, /NEXUX_IMAGE: "ghcr.io\/o\/nexus:edge"/);
+  assert.match(file, /image: ollama\/ollama:latest/, "other services untouched");
+  assert.doesNotMatch(file, /nexus:latest/);
+});
+
+test("a plain update request changes nothing in the compose file", () => {
+  const { out, file } = runSwitch("2026-09-28T00:00:00Z\n");
+  assert.equal(out, "");
+  assert.match(file, /image: ghcr.io\/o\/nexus:latest/);
+});
+
+test("a channel outside edge/latest is ignored", () => {
+  const { file } = runSwitch("channel=0.1.0\n");
+  assert.match(file, /image: ghcr.io\/o\/nexus:latest/);
 });

@@ -14,6 +14,7 @@ Give any brain (Claude, Codex, Ollama…) non-interactive, isolated, structured 
 | `src/docker.ts` | Argv-based `docker()` / `run()` spawn wrapper (no shell-injection surface), `dockerAvailable()` |
 | `src/sandbox.ts` | `DockerSandbox`: hardened `docker run -d` (`--cap-drop ALL`, `--read-only` root + tmpfs workdir, no-new-privileges, pids/mem/cpu limits, `--network none` default); `exec` / `writeFile` / `readFile` / `destroy` |
 | `src/harness.ts` | `createHarness()` factory — ephemeral only; `warm` lifecycle throws "not implemented (P1)" |
+| `src/healthcheck.ts` | Spec 24 piece 2: `healthcheckFor(image)` — readiness probes by image family, so the bootstrap's `--wait` means ready rather than running. Unknown images get null, deliberately |
 | `src/compose.ts` | Pure `generateCompose()`: stack nodes/edges → compose YAML (service-name dedup, cycle detection, `depends_on`, volumes/ports/env) |
 
 ## `writeFile` streams over stdin — do not "fix" it to `docker cp`

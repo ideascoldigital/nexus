@@ -159,12 +159,26 @@ async function firstUnwritableAncestor(dir: string): Promise<string | null> {
 }
 
 /**
- * Bring an existing checkout up to date with its remote.
+ * Bring an existing checkout up to date with its remote — as far as can be
+ * done without ever risking someone's work.
  *
- * `git pull --ff-only`, never a merge: this runs unattended from a button, and
- * a merge here could leave a conflicted working tree on a machine nobody is
- * sitting at. Diverged or dirty is reported for a human to resolve, which is
- * the honest outcome — the alternative is a sync that quietly invents commits.
+ * Never merges, never rebases, never stashes: this runs unattended from a
+ * button, and each of those can leave a tree in a state its owner did not
+ * choose. What it does instead, in order:
+ *
+ * 1. `fetch --prune` — always safe, it moves only remote-tracking refs.
+ * 2. A branch with no upstream adopts `origin/<same name>` when there is one.
+ *    A branch that exists only here is not an error: there is nothing to
+ *    pull, and saying so beats git's "no tracking information".
+ * 3. Fast-forward the current branch with `merge --ff-only`, letting *git*
+ *    judge uncommitted work: it proceeds when the incoming commits do not
+ *    touch the edited files, and refuses — touching nothing — when they do.
+ *    Refusing up front on any dirty file was stricter than it needed to be.
+ * 4. Fast-forward the default branch too when it is not the one checked out
+ *    (`fetch origin main:main` moves the ref only, never the working tree), so
+ *    "update" still means main is current while a feature branch is open.
+ *
+ * Diverged history is reported with its counts for a human to resolve.
  */
 async function pullRepository(
   dir: string,
@@ -175,42 +189,95 @@ async function pullRepository(
       timeout: CLONE_TIMEOUT_MS,
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
     });
+  const read = (args: string[]) => git(args).then((r) => r.stdout.trim(), () => "");
 
-  // Uncommitted work makes a fast-forward fail halfway; say so before touching
-  // anything rather than after.
   try {
-    const { stdout } = await git(["status", "--porcelain"]);
-    if (stdout.trim()) {
+    await git([...auth, "fetch", "--prune", "origin"]);
+  } catch (err) {
+    return { ok: false, message: safeGitError(err) };
+  }
+
+  const notes: string[] = [];
+  const branch = await read(["symbolic-ref", "--short", "-q", "HEAD"]);
+  // origin/HEAD names the default branch; "origin/main" → "main".
+  const defaultBranch = (await read(["symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"])).replace(/^origin\//, "") || "main";
+
+  // The default branch, when it is not the one checked out: ref-only, so a
+  // feature branch's working tree is never touched.
+  const bumpDefault = async () => {
+    if (!branch || branch === defaultBranch) return;
+    const hasLocal = await read(["rev-parse", "--verify", "-q", `refs/heads/${defaultBranch}`]);
+    const hasRemote = await read(["rev-parse", "--verify", "-q", `refs/remotes/origin/${defaultBranch}`]);
+    if (!hasLocal || !hasRemote || hasLocal === hasRemote) return;
+    try {
+      await git(["fetch", ".", `refs/remotes/origin/${defaultBranch}:refs/heads/${defaultBranch}`]);
+      notes.push(`${defaultBranch} updated to ${hasRemote.slice(0, 7)}`);
+    } catch {
+      notes.push(`${defaultBranch} has local commits — left as is`);
+    }
+  };
+
+  if (!branch) {
+    await bumpDefault();
+    return { ok: true, message: ["Detached HEAD — fetched, nothing to pull", ...notes].join("; ") };
+  }
+
+  let upstream = await read(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+  if (!upstream) {
+    if (await read(["rev-parse", "--verify", "-q", `refs/remotes/origin/${branch}`])) {
+      await git(["branch", `--set-upstream-to=origin/${branch}`, branch]).catch(() => undefined);
+      upstream = `origin/${branch}`;
+      notes.push(`now tracking origin/${branch}`);
+    } else {
+      await bumpDefault();
       return {
-        ok: false,
-        message: "Local changes — commit or stash them, then sync again.",
+        ok: true,
+        message: [`${branch} is only local — nothing to pull (push it to share it)`, ...notes].join("; "),
       };
     }
-  } catch (err) {
-    return { ok: false, message: safeGitError(err) };
   }
 
-  const before = await git(["rev-parse", "HEAD"]).then(
-    (r) => r.stdout.trim(),
-    () => "",
-  );
+  const counts = (await read(["rev-list", "--left-right", "--count", `HEAD...${upstream}`])).split(/\s+/);
+  const ahead = Number(counts[0] ?? 0);
+  const behind = Number(counts[1] ?? 0);
 
-  try {
-    await git([...auth, "pull", "--ff-only"]);
-  } catch (err) {
-    return { ok: false, message: safeGitError(err) };
+  if (behind > 0 && ahead > 0) {
+    await bumpDefault();
+    return {
+      ok: false,
+      message: [
+        `${branch} has diverged from ${upstream}: ${ahead} local and ${behind} remote commit${behind === 1 ? "" : "s"} — merge or rebase it yourself`,
+        ...notes,
+      ].join("; "),
+    };
   }
 
-  const after = await git(["rev-parse", "HEAD"]).then(
-    (r) => r.stdout.trim(),
-    () => "",
-  );
+  if (behind > 0) {
+    const before = await read(["rev-parse", "HEAD"]);
+    try {
+      await git(["merge", "--ff-only", upstream]);
+    } catch (err) {
+      const msg = safeGitError(err);
+      await bumpDefault();
+      return {
+        ok: false,
+        message: /would be overwritten/i.test(msg)
+          ? [`Local changes in files the update touches — commit or stash them, then sync again`, ...notes].join("; ")
+          : msg,
+      };
+    }
+    const after = await read(["rev-parse", "HEAD"]);
+    await bumpDefault();
+    return { ok: true, message: [before === after ? "Already up to date" : `Updated to ${after.slice(0, 7)}`, ...notes].join("; ") };
+  }
+
+  await bumpDefault();
   return {
     ok: true,
-    message:
-      before && after && before !== after
-        ? `Updated to ${after.slice(0, 7)}`
-        : "Already up to date",
+    message: [
+      ahead > 0 ? `Already up to date — ${ahead} local commit${ahead === 1 ? "" : "s"} not pushed` : "Already up to date",
+      ...notes,
+    ].join("; "),
   };
 }
 

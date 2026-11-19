@@ -11,7 +11,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-lines=94 --test-coverage-branches=88 --test-coverage-functions=79 \"src/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "^20",

@@ -15,10 +15,12 @@ export type NexusHostSummary = {
   id: string;
   name: string;
   status: HostStatus;
-  provider: "civo" | "aws";
+  provider: "civo" | "aws" | "docker-endpoint";
   region: string;
   size: string;
   instanceId: string | null;
+  /** provider "docker-endpoint" (spec 27): the machine its stack runs on. */
+  dockerEndpointId: string | null;
   publicIp: string | null;
   /** The address the dashboard is actually served on. */
   tailscaleIp: string | null;
@@ -38,12 +40,16 @@ export type HostReadiness = {
   hasTailscaleCredential: boolean;
   /** True when this install is itself a host — the panel hides itself. */
   isHost: boolean;
+  /** When it is a host: a VM, or a stack on a Docker endpoint (spec 27). */
+  hostKind: "vm" | "endpoint" | null;
   defaultImage: string;
 };
 
 export type CreateHostInput = {
   name: string;
-  provider: "civo" | "aws";
+  provider: "civo" | "aws" | "docker-endpoint";
+  /** provider "docker-endpoint" (spec 27): the machine the stack runs on. */
+  dockerEndpointId?: string | null;
   credentialId?: string | null;
   tailscaleCredentialId?: string | null;
   /** GitHub credential the host pulls a private GHCR image with. */
@@ -171,8 +177,16 @@ export async function getVersion(): Promise<AppVersion | null> {
 }
 
 /** Pull the newer image on a host and restart its stack, over SSH. */
-export async function updateHost(hostId: string): Promise<HostUpdateResult> {
-  const res = await fetch(`/api/hosts/${hostId}/update`, { method: "POST" });
+export async function updateHost(
+  hostId: string,
+  /** Also move the host to this release channel (edge / latest). */
+  channel?: "edge" | "latest",
+): Promise<HostUpdateResult> {
+  const res = await fetch(`/api/hosts/${hostId}/update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(channel ? { channel } : {}),
+  });
   if (!res.ok) throw new Error(await errorFrom(res));
   return res.json();
 }
@@ -183,8 +197,12 @@ export async function updateHost(hostId: string): Promise<HostUpdateResult> {
  * The app restarts as part of it, so the request being accepted is all the
  * caller ever learns; the result arrives as the page coming back.
  */
-export async function selfUpdate(): Promise<HostUpdateResult> {
-  const res = await fetch("/api/hosts/self-update", { method: "POST" });
+export async function selfUpdate(channel?: "edge" | "latest"): Promise<HostUpdateResult> {
+  const res = await fetch("/api/hosts/self-update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(channel ? { channel } : {}),
+  });
   if (!res.ok) throw new Error(await errorFrom(res));
   return res.json();
 }
@@ -193,6 +211,9 @@ export async function selfUpdate(): Promise<HostUpdateResult> {
 export async function getSelfUpdateLog(): Promise<{
   log: string | null;
   isHost: boolean;
+  /** This host's image and release channel (null for a custom tag or an old host). */
+  image?: string | null;
+  channel?: "edge" | "latest" | null;
 }> {
   const res = await fetch("/api/hosts/self-update");
   if (!res.ok) throw new Error(await errorFrom(res));

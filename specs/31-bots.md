@@ -1,4 +1,4 @@
-# 23 — Bots: AI teammates with their own ephemeral computer
+# 31 — Bots: AI teammates with their own ephemeral computer
 
 ## Goal
 

@@ -1,0 +1,403 @@
+/**
+ * The global assistant's threads (spec 30 phase 1): a turn runs the shared
+ * tool loop over the MCP tools (plus the context tools when the thread has a
+ * project in focus), and everything it did is kept as events — what the user
+ * said, each tool call and result, the reply, and any write it asked for.
+ *
+ * A write is never run by the turn. It becomes an AssistantAction the user
+ * approves or cancels; approving runs it through `callTool` and resumes the
+ * loop with its result, so the assistant can react to what happened.
+ *
+ * The model's history is rebuilt from the events every turn — the exact
+ * texts it saw, in order — so a reload, a restart or a second tab changes
+ * nothing about what it remembers.
+ */
+
+import type { InlineMessage } from "@ideascol/agents-generator-sdk";
+import { Prisma, prisma } from "@nexux/db";
+import { SCOPES, type NexuxContext, type Scope } from "@nexux/mcp";
+
+import { createMcpContext } from "@/lib/mcp-context";
+import { DEFAULT_WORKSPACE_ID } from "@/lib/workspace";
+import { defaultAgentDeps, type RunnableAgent } from "@/services/agent-deps";
+import {
+  renderToolCatalog,
+  runToolLoop,
+  toolResultMessage,
+  type LoopResult,
+  type LoopTool,
+  type LoopToolCall,
+} from "./loop";
+import { stackAssistantInstructions } from "@/services/stack-assistant-agent";
+import { contextTools, mcpTools } from "./tools";
+import { watchTool } from "./watches";
+
+export type AssistantDeps = {
+  defineAgent(spec: { name: string; instructions: string; workspaceId?: string }): Promise<RunnableAgent>;
+  /** The MCP context tools run against; a fake in tests. */
+  ctx(): NexuxContext;
+};
+
+export function defaultAssistantDeps(): AssistantDeps {
+  return { defineAgent: defaultAgentDeps().defineAgent, ctx: createMcpContext };
+}
+
+export type EventKind = "user" | "assistant" | "tool_call" | "tool_result" | "action" | "watch_report" | "error";
+
+type EventContent = {
+  /** What the model saw or said, verbatim — history is rebuilt from it. */
+  text: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
+  actionId?: string;
+  summary?: string;
+  /** Route context the user's message was sent with. */
+  context?: { projectId?: string | null };
+};
+
+const INTRO = `You are the Nexus assistant, inside Nexux — a local-first orchestrator where AI agents build software in sandboxes. You act for the user through the tools below: you can see their projects, sandboxes and tasks, launch and pause sandboxes, give an agent a task, read how it is going, validate and repair a project's stack, and reset a sandbox's seed data.`;
+
+/** How to act — shared by general threads and the Stack tab's. */
+const RULES = `How to work:
+- Ground answers in tool results; do not guess ids, names or states — look them up.
+- Before a write, make sure you have what it needs (the project id, the sandbox that should run it). Ask the user when a choice is theirs to make (which project, cloud or local, which endpoint).
+- One write at a time. Do not ask for permission in prose: requesting a [WRITE] tool IS asking — the user gets a card with Run / Cancel. When the request is clear, request the tool directly.
+- A task runs for minutes to an hour and a sandbox takes minutes to come up. After one you started is accepted, call watch on it (a task until finished, a sandbox until running) unless the user said not to — you will be told here when it happens, and can report it then. Never claim it finished before that.
+- Be brief. Answer in the user's language.`;
+
+const INSTRUCTIONS = `${INTRO}
+
+${RULES}
+
+{{FOCUS}}
+
+{{TOOLS}}`;
+
+function focusLine(projectId: string | null, projectName: string | null): string {
+  return projectId
+    ? `The user is looking at the project "${projectName ?? projectId}" (id ${projectId}). "This project", "a sandbox", "the stack" mean this one unless they say otherwise. You also have its context tools: get_stack_context, read_repo_file, search_project.`
+    : "The user is not on a project page; ask which project when it matters.";
+}
+
+/**
+ * One line a person can decide on — built from the tool and its arguments.
+ * `names` swaps ids for what the user calls things; an id nobody resolved
+ * stays an id rather than being guessed at.
+ */
+export function summarizeAction(
+  tool: string,
+  args: Record<string, unknown>,
+  names: { sandbox?: string | null; project?: string | null } = {},
+): string {
+  const raw = (k: string) => (typeof args[k] === "string" ? (args[k] as string) : null);
+  const s = (k: string) =>
+    k === "sandboxId" && names.sandbox ? names.sandbox : k === "projectId" && names.project ? names.project : raw(k);
+  switch (tool) {
+    case "nexux_launch_sandbox":
+      return `Launch a ${s("provider") ?? "new"} sandbox${s("dockerEndpoint") ? ` on ${s("dockerEndpoint")}` : ""}${s("name") ? ` named ${s("name")}` : ""} for project ${s("projectId")}`;
+    case "nexux_create_task":
+      return `Start a task in sandbox ${s("sandboxId")}: “${(s("prompt") ?? "").slice(0, 140)}”`;
+    case "nexux_sandbox_power":
+      return `${s("action") === "pause" ? "Pause" : "Resume"} sandbox ${s("sandboxId")}`;
+    case "nexux_reset_sandbox_data":
+      return `Reset ${s("service") ?? "every seeded database"} in sandbox ${s("sandboxId")} to the project's seed (its current data is lost)`;
+    case "nexux_repair_stack":
+      return `Repair the stack of project ${s("projectId")} (edits the canvas, may run validations)`;
+    default:
+      return `${tool} ${JSON.stringify(args)}`;
+  }
+}
+
+// --- threads -----------------------------------------------------------------
+
+export async function createThread(opts: { projectId?: string | null; scopes?: Scope[] } = {}) {
+  return prisma.assistantThread.create({
+    data: {
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      projectId: opts.projectId ?? null,
+      scopes: (opts.scopes ?? [...SCOPES]) as unknown as Prisma.InputJsonValue,
+    },
+  });
+}
+
+export async function listThreads() {
+  return prisma.assistantThread.findMany({
+    // The Stack tab's threads live in the Stack tab.
+    where: { workspaceId: DEFAULT_WORKSPACE_ID, mode: "general" },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true, title: true, projectId: true, createdAt: true, updatedAt: true },
+  });
+}
+
+export async function getThread(threadId: string) {
+  return prisma.assistantThread.findFirst({
+    where: { id: threadId, workspaceId: DEFAULT_WORKSPACE_ID },
+    include: {
+      events: { orderBy: { createdAt: "asc" } },
+      actions: { orderBy: { createdAt: "asc" } },
+      watches: { where: { status: "open" }, orderBy: { createdAt: "asc" } },
+    },
+  });
+}
+
+/** The model's history, rebuilt from what it actually saw and said. */
+export function historyFromEvents(events: Array<{ kind: string; content: unknown }>): InlineMessage[] {
+  const out: InlineMessage[] = [];
+  for (const e of events) {
+    const text = (e.content as EventContent | null)?.text ?? "";
+    if (e.kind === "user" || e.kind === "tool_result" || e.kind === "watch_report") {
+      out.push({ role: "user", content: text } as InlineMessage);
+    } else if (e.kind === "assistant" || e.kind === "tool_call" || e.kind === "action") {
+      out.push({ role: "assistant", content: text } as InlineMessage);
+    }
+  }
+  return out;
+}
+
+/** Receives each event as it is stored — the SSE stream of a turn. */
+export type EventSink = (event: { id: string; kind: string; content: unknown; createdAt: Date }) => void;
+
+export async function addEvent(threadId: string, kind: EventKind, content: EventContent, emit?: EventSink) {
+  const event = await prisma.assistantEvent.create({
+    data: { threadId, kind, content: content as unknown as Prisma.InputJsonValue },
+  });
+  emit?.(event);
+  return event;
+}
+
+function threadScopes(thread: { scopes: unknown }): Scope[] {
+  const raw = Array.isArray(thread.scopes) ? (thread.scopes as string[]) : [];
+  return raw.filter((s): s is Scope => (SCOPES as readonly string[]).includes(s));
+}
+
+export async function threadTools(thread: { id: string; scopes: unknown; projectId: string | null }, deps: AssistantDeps) {
+  return [
+    ...mcpTools(threadScopes(thread), deps.ctx()),
+    ...(thread.projectId ? contextTools(thread.projectId) : []),
+    watchTool(thread.id),
+  ];
+}
+
+export async function agentFor(
+  thread: { projectId: string | null; mode?: string },
+  tools: LoopTool[],
+  deps: AssistantDeps,
+) {
+  const project = thread.projectId
+    ? await prisma.project.findUnique({ where: { id: thread.projectId }, select: { name: true } })
+    : null;
+  const catalog = renderToolCatalog(tools);
+  // The Stack tab's thread keeps the Stack assistant's job and its
+  // apply-to-canvas suggestions, and can act like any thread.
+  const instructions =
+    thread.mode === "stack"
+      ? `${stackAssistantInstructions(catalog)}\n\n## Acting\n\n${RULES}\n\n${focusLine(thread.projectId, project?.name ?? null)}`
+      : INSTRUCTIONS.replace("{{FOCUS}}", focusLine(thread.projectId, project?.name ?? null)).replace("{{TOOLS}}", catalog);
+  return deps.defineAgent({
+    name: thread.mode === "stack" ? "stack-assistant" : "nexus-assistant",
+    instructions,
+    workspaceId: DEFAULT_WORKSPACE_ID,
+  });
+}
+
+/** A read the loop ran: its verbatim request and the TOOL_RESULT the model then saw. */
+async function persistToolCall(threadId: string, call: LoopToolCall, emit?: EventSink) {
+  const request = "```json\n" + JSON.stringify({ tool: call.tool, args: call.args }) + "\n```";
+  await addEvent(threadId, "tool_call", { text: request, tool: call.tool, args: call.args }, emit);
+  await addEvent(
+    threadId,
+    "tool_result",
+    { text: toolResultMessage(call.tool, call.result), tool: call.tool, result: call.result },
+    emit,
+  );
+}
+
+/** How a loop run ended: the reply, or the write it asked for as a pending action. */
+async function persistOutcome(threadId: string, turn: LoopResult, emit?: EventSink) {
+  if (turn.pending) {
+    const summary = summarizeAction(turn.pending.tool, turn.pending.args, await namesFor(turn.pending.args));
+    const action = await prisma.assistantAction.create({
+      data: {
+        threadId,
+        tool: turn.pending.tool,
+        args: turn.pending.args as Prisma.InputJsonValue,
+        summary,
+      },
+    });
+    await addEvent(
+      threadId,
+      "action",
+      { text: turn.raw, tool: turn.pending.tool, args: turn.pending.args, actionId: action.id, summary },
+      emit,
+    );
+  } else {
+    await addEvent(threadId, "assistant", { text: turn.raw }, emit);
+  }
+  await prisma.assistantThread.update({ where: { id: threadId }, data: { updatedAt: new Date() } });
+}
+
+/** Run the loop with each read stored (and streamed) as it completes. */
+export async function loopAndPersist(
+  threadId: string,
+  opts: Omit<Parameters<typeof runToolLoop>[0], "onToolCall">,
+  emit?: EventSink,
+) {
+  try {
+    const turn = await runToolLoop({ ...opts, onToolCall: (call) => persistToolCall(threadId, call, emit) });
+    await persistOutcome(threadId, turn, emit);
+  } catch (err) {
+    await addEvent(threadId, "error", { text: err instanceof Error ? err.message : String(err) }, emit);
+  }
+}
+
+/** The names behind the ids a write names, for its card. */
+async function namesFor(args: Record<string, unknown>) {
+  const id = (k: string) => (typeof args[k] === "string" ? (args[k] as string) : null);
+  const [sandbox, project] = await Promise.all([
+    id("sandboxId") ? prisma.sandbox.findUnique({ where: { id: id("sandboxId")! }, select: { name: true } }) : null,
+    id("projectId") ? prisma.project.findUnique({ where: { id: id("projectId")! }, select: { name: true } }) : null,
+  ]);
+  return { sandbox: sandbox?.name ?? null, project: project?.name ?? null };
+}
+
+export class AssistantError extends Error {
+  constructor(
+    message: string,
+    readonly status = 400,
+  ) {
+    super(message);
+  }
+}
+
+/** One user message: run the loop, keep what happened. */
+export async function runThreadTurn(
+  threadId: string,
+  message: string,
+  opts: { context?: { projectId?: string | null }; emit?: EventSink } = {},
+  deps: AssistantDeps = defaultAssistantDeps(),
+) {
+  const thread = await getThread(threadId);
+  if (!thread) throw new AssistantError("Thread not found", 404);
+  if (thread.actions.some((a) => a.status === "pending" || a.status === "running")) {
+    throw new AssistantError("An action is waiting for your decision — run or cancel it first.", 409);
+  }
+  // The page the message was sent from moves a general thread's focus; a
+  // Stack tab thread belongs to its project.
+  if (
+    thread.mode !== "stack" &&
+    opts.context &&
+    opts.context.projectId !== undefined &&
+    opts.context.projectId !== thread.projectId
+  ) {
+    await prisma.assistantThread.update({ where: { id: threadId }, data: { projectId: opts.context.projectId } });
+    thread.projectId = opts.context.projectId ?? null;
+  }
+  if (!thread.title) {
+    await prisma.assistantThread.update({ where: { id: threadId }, data: { title: message.trim().slice(0, 80) } });
+  }
+
+  const history = historyFromEvents(thread.events);
+  await addEvent(threadId, "user", { text: message, context: opts.context }, opts.emit);
+  const tools = await threadTools(thread, deps);
+  const agent = await agentFor(thread, tools, deps);
+  await loopAndPersist(threadId, { agent, tools, message, history }, opts.emit);
+  return getThread(threadId);
+}
+
+/** Run an approved write, record its result, and let the assistant react. */
+export async function approveAction(
+  threadId: string,
+  actionId: string,
+  deps: AssistantDeps = defaultAssistantDeps(),
+  emit?: EventSink,
+) {
+  const thread = await getThread(threadId);
+  if (!thread) throw new AssistantError("Thread not found", 404);
+  const action = thread.actions.find((a) => a.id === actionId);
+  if (!action) throw new AssistantError("Action not found", 404);
+  // Claimed atomically: two clicks, or two tabs, must not run it twice.
+  const claimed = await prisma.assistantAction.updateMany({
+    where: { id: actionId, status: "pending" },
+    data: { status: "running", decidedAt: new Date() },
+  });
+  if (claimed.count === 0) throw new AssistantError(`This action is already ${action.status}.`, 409);
+
+  const tools = await threadTools(thread, deps);
+  const tool = tools.find((t) => t.name === action.tool);
+  const result = tool
+    ? await tool.run(action.args as Record<string, unknown>)
+    : { error: `${action.tool} is no longer available to this thread` };
+  const failed = !!(result && typeof result === "object" && "error" in result);
+  await prisma.assistantAction.update({
+    where: { id: actionId },
+    data: { status: failed ? "failed" : "done", result: (result ?? null) as Prisma.InputJsonValue },
+  });
+  const message = toolResultMessage(action.tool, result);
+  const history = historyFromEvents(thread.events);
+  await addEvent(threadId, "tool_result", { text: message, tool: action.tool, result, actionId }, emit);
+
+  const agent = await agentFor(thread, tools, deps);
+  await loopAndPersist(threadId, { agent, tools, message, history }, emit);
+  return getThread(threadId);
+}
+
+/** Decline a write. Recorded for the model; no new turn — the user speaks next. */
+export async function cancelAction(threadId: string, actionId: string) {
+  const claimed = await prisma.assistantAction.updateMany({
+    where: { id: actionId, threadId, status: "pending" },
+    data: { status: "cancelled", decidedAt: new Date() },
+  });
+  if (claimed.count === 0) throw new AssistantError("No pending action to cancel.", 409);
+  const action = await prisma.assistantAction.findUniqueOrThrow({ where: { id: actionId } });
+  await addEvent(threadId, "tool_result", {
+    text: toolResultMessage(action.tool, { cancelled: "The user declined this action. It did not run." }),
+    tool: action.tool,
+    result: { cancelled: true },
+    actionId,
+  });
+  return getThread(threadId);
+}
+
+/**
+ * The Stack tab's thread for a project — created on first use, with the
+ * Stack assistant's earlier conversation (sessionId stack-<projectId>)
+ * carried over as its opening events, verbatim, so nothing said there is lost.
+ */
+export async function stackThreadFor(projectId: string) {
+  const existing = await prisma.assistantThread.findFirst({
+    where: { projectId, mode: "stack", workspaceId: DEFAULT_WORKSPACE_ID },
+    orderBy: { createdAt: "asc" },
+  });
+  if (existing) return existing;
+  const thread = await prisma.assistantThread.create({
+    data: {
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      projectId,
+      mode: "stack",
+      title: "Stack assistant",
+      scopes: [...SCOPES] as unknown as Prisma.InputJsonValue,
+    },
+  });
+  const legacy = await prisma.conversation.findUnique({
+    where: { sessionId: `stack-${projectId}` },
+    include: { messages: { orderBy: { createdAt: "asc" } } },
+  });
+  for (const m of legacy?.messages ?? []) {
+    if (m.role !== "user" && m.role !== "assistant") continue;
+    await prisma.assistantEvent.create({
+      data: {
+        threadId: thread.id,
+        kind: m.role,
+        content: { text: m.content } as Prisma.InputJsonValue,
+        createdAt: m.createdAt,
+      },
+    });
+  }
+  return thread;
+}
+
+export async function deleteThread(threadId: string) {
+  const res = await prisma.assistantThread.deleteMany({ where: { id: threadId, workspaceId: DEFAULT_WORKSPACE_ID } });
+  if (res.count === 0) throw new AssistantError("Thread not found", 404);
+}

@@ -4,6 +4,7 @@ import { prisma, type SandboxTask } from "@nexux/db";
 import { getConfig } from "@nexux/config";
 import { searchProject } from "@nexux/embeddings";
 import { notifyTaskFinished } from "@/lib/notify";
+import { ollamaHostForProject } from "@/lib/ollama-host";
 import {
   AGENT_USER,
   SANDBOX_ROOT,
@@ -153,7 +154,8 @@ export async function buildSearchContext(
   query: string,
 ): Promise<string | null> {
   try {
-    const results = await searchProject(projectId, query, { k: 6 });
+    const { host } = await ollamaHostForProject(projectId);
+    const results = await searchProject(projectId, query, { k: 6, ollamaHost: host });
     const clip = (s: string, n = 320) =>
       s.replace(/\s+/g, " ").trim().slice(0, n);
     const repoLines = results.repos
@@ -238,6 +240,7 @@ export async function pushAttachments(opts: {
         user: opts.rootTarget.user,
         privateKeyPath: opts.rootTarget.privateKeyPath,
         container: opts.rootTarget.container,
+        dockerHost: opts.rootTarget.dockerHost,
         localDir,
         remoteDir,
         timeoutMs: 180_000,
@@ -322,6 +325,7 @@ export async function materializeContext(
       user: ssh.user,
       privateKeyPath: ssh.privateKeyPath,
       container: ssh.container,
+      dockerHost: ssh.dockerHost,
       localDir: hostTmpDir,
       remoteDir: remoteTmpDir,
       timeoutMs: 120_000,
@@ -419,6 +423,7 @@ export async function collectScreenshots(
   const res = await fetchRemoteDir({
     host: ssh.host,
     container: ssh.container,
+    dockerHost: ssh.dockerHost,
     user: ssh.user,
     privateKeyPath: ssh.privateKeyPath,
     remoteDir: REMOTE_SHOT_DIR,

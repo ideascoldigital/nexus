@@ -186,13 +186,13 @@ export async function generateRoadmapProposal(projectId: string): Promise<{
   sectionTitles: Record<string, string>;
 }> {
   const { text, sectionTitles } = await renderDefinitionForRoadmap(projectId);
-  const { client, apiKey } = await createAgentClient();
+  const { client, apiKey, modelProvider, modelName } = await createAgentClient();
 
   const agent = client.defineAgent({
     name: "roadmap-generator",
     instructions: buildInstructions(Object.keys(sectionTitles)),
-    modelProvider: "openai",
-    modelName: "gpt-5.4",
+    modelProvider,
+    modelName,
     apiKey,
     maxToolIterations: 1,
   });

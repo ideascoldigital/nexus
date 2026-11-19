@@ -12,6 +12,8 @@ import type { EnvVar, PortMapping, VolumeMapping } from "./types";
 export type SandboxStackService = {
   /** Compose service name (slugified). */
   name: string;
+  /** The canvas node it came from — what a seed (spec 29) is attached to. */
+  nodeId: string;
   image: string;
   ports: PortMapping[];
 };
@@ -100,6 +102,7 @@ export async function buildSandboxStackCompose(
     .filter((n) => compose.serviceNames[n.id] && n.image)
     .map((n) => ({
       name: compose.serviceNames[n.id],
+      nodeId: n.id,
       image: n.image!,
       ports: (n.ports as PortMapping[] | null) ?? [],
     }));

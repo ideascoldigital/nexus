@@ -21,7 +21,7 @@ test("handoff blocks are parsed out; malformed ones dropped", () => {
     "Le pedí el banner a Creative Designer.",
     block({ to: "Creative Designer", message: "Banner 1080x1080 para el lanzamiento" }),
     block({ to: "", message: "x" }),
-    block({ to: "Isa" }),
+    block({ to: "Maya" }),
     "```handoff\nnope\n```",
   ].join("\n");
   const { body, handoffs } = parseHandoffBlocks(text);
@@ -59,28 +59,28 @@ test("a teammate's message round-trips through the run prompt", () => {
 test("teammates are matched by name, ignoring case and spacing", () => {
   const team = [
     { id: "a", name: "Creative Designer" },
-    { id: "b", name: "Isa" },
+    { id: "b", name: "Maya" },
   ];
   assert.equal(findTeammate(team, "creative  designer")?.id, "a");
-  assert.equal(findTeammate(team, " ISA ")?.id, "b");
+  assert.equal(findTeammate(team, " MAYA ")?.id, "b");
   assert.equal(findTeammate(team, "Designer"), null);
 });
 
 test("previews say who a message went to", () => {
-  const reply = "Listo.\n" + block({ to: "Isa", message: "agenda la reunión" });
+  const reply = "Listo.\n" + block({ to: "Maya", message: "agenda la reunión" });
   assert.equal(botPreview({ prompt: "x", status: "completed", result: reply, error: null, needsInput: false }), "Listo.");
-  const only = block({ to: "Isa", message: "agenda la reunión" });
-  assert.equal(botPreview({ prompt: "x", status: "completed", result: only, error: null, needsInput: false }), "Sent to Isa");
+  const only = block({ to: "Maya", message: "agenda la reunión" });
+  assert.equal(botPreview({ prompt: "x", status: "completed", result: only, error: null, needsInput: false }), "Sent to Maya");
 });
 
 test("the system prompt teaches the handoff block and lists the team", () => {
   const sys = renderBotSystemPrompt({
     name: "Marketero",
     needsInputMarker: "NEEDS_INPUT:",
-    teammates: [{ name: "Creative Designer", role: "Diseño de piezas" }, { name: "Isa" }],
+    teammates: [{ name: "Creative Designer", role: "Diseño de piezas" }, { name: "Maya" }],
   });
   assert.ok(sys.includes("```" + HANDOFF_FENCE + "\n"));
-  assert.match(sys, /- Creative Designer — Diseño de piezas\n- Isa/);
+  assert.match(sys, /- Creative Designer — Diseño de piezas\n- Maya/);
   const example = sys.slice(sys.indexOf("```" + HANDOFF_FENCE));
   assert.equal(parseHandoffBlocks(example.slice(0, example.indexOf("```", 3) + 3)).handoffs.length, 1);
   assert.match(renderBotSystemPrompt({ name: "Solo", needsInputMarker: "Q:" }), /no teammates yet/);

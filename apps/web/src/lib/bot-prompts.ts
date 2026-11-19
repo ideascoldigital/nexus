@@ -1,4 +1,4 @@
-// Prompts the bots view sends on the user's behalf (spec 23). Client-safe:
+// Prompts the bots view sends on the user's behalf (spec 31). Client-safe:
 // the chat renders them as system lines, the inbox preview recognises them.
 
 /**

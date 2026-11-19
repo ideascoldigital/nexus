@@ -9,26 +9,40 @@ use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+mod native_config;
+
 /// Holds the spawned sidecar process so it can be killed on app exit.
 /// Without this, the node sidecar outlives the app and keeps serving the
 /// previous build on port 3030 (stale UI on next launch).
 struct SidecarChild(Mutex<Option<CommandChild>>);
 
-/// Current webview zoom factor. Kept app-side because the webview does not
-/// expose a getter, so relative zoom (in/out) needs the last applied value.
-struct ZoomLevel(Mutex<f64>);
-
-const ZOOM_STEP: f64 = 1.1;
 const ZOOM_MIN: f64 = 0.5;
 const ZOOM_MAX: f64 = 3.0;
 
-fn apply_zoom(app: &AppHandle, level: f64) {
-    let level = level.clamp(ZOOM_MIN, ZOOM_MAX);
-    if let Some(state) = app.try_state::<ZoomLevel>() {
-        *state.0.lock().unwrap() = level;
+/// Set the webview's zoom — a browser's zoom, which scales viewport units and
+/// everything else consistently (CSS `zoom` on the page does not: its `vh`
+/// layouts overflow). Called by the page, which owns the number: it persists
+/// it, steps it, and shows it in Settings and the status bar.
+#[tauri::command]
+fn set_zoom(app: AppHandle, level: f64) -> Result<f64, String> {
+    if !level.is_finite() {
+        return Err("zoom must be a number".into());
     }
+    let level = level.clamp(ZOOM_MIN, ZOOM_MAX);
+    let window = app.get_webview_window("main").ok_or("no main window")?;
+    window.set_zoom(level).map_err(|e| e.to_string())?;
+    Ok(level)
+}
+
+/// The View menu's shortcuts call the page's hook rather than zooming here, so
+/// the menu, Settings and the status bar step through the same number, stored
+/// in one place. Before the page has loaded (the placeholder) there is nothing
+/// to zoom.
+fn page_zoom(app: &AppHandle, dir: &str) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_zoom(level);
+        let _ = window.eval(format!(
+            "window.__nexuxZoom && window.__nexuxZoom(\"{dir}\")"
+        ));
     }
 }
 
@@ -155,7 +169,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
-        .manage(ZoomLevel(Mutex::new(1.0)))
+        .invoke_handler(tauri::generate_handler![set_zoom])
         .setup(|app| {
             // View menu with webview zoom, appended to the default menu so the
             // standard Edit/Window items (copy, paste, minimize) stay intact.
@@ -201,16 +215,53 @@ pub fn run() {
 
             let handle = app.handle().clone();
 
-            // Data dir + log file first, so everything below is diagnosable even
-            // when it fails. GUI apps on Windows have no visible stderr.
-            let data_dir = handle
+            // Bootstrap dir + log file first, so everything below is diagnosable
+            // even when it fails. GUI apps on Windows have no visible stderr.
+            // The log and native.json always live here, even when native.json
+            // moves the data elsewhere: this is where to look when it does not
+            // start.
+            let home = handle
                 .path()
                 .home_dir()
-                .map(|h| h.join(".nexux"))
-                .unwrap_or_else(|_| PathBuf::from(".nexux"));
-            std::fs::create_dir_all(&data_dir).ok();
-            let log_file = Some(data_dir.join("native.log"));
+                .unwrap_or_else(|_| PathBuf::from("."));
+            let bootstrap_dir = home.join(".nexux");
+            std::fs::create_dir_all(&bootstrap_dir).ok();
+            let log_file = Some(bootstrap_dir.join("native.log"));
             log_line(&log_file, "[native] setup start");
+
+            let config_path = bootstrap_dir.join(native_config::CONFIG_FILE);
+            let config_text = std::fs::read_to_string(&config_path).ok();
+            let paths = match native_config::resolve(
+                config_text.as_deref(),
+                &bootstrap_dir,
+                &home,
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    // Never fall back to the default database: a broken override
+                    // that silently opened a different set of projects would look
+                    // like data loss.
+                    log_line(&log_file, &format!("[native] ERROR: {e}"));
+                    show_status(
+                        &handle,
+                        &format!("{e}. Fix {} and reopen Nexus.", config_path.to_string_lossy()),
+                    );
+                    return Ok(());
+                }
+            };
+            let data_dir = paths.data_dir;
+            std::fs::create_dir_all(&data_dir).ok();
+            if paths.overridden {
+                log_line(
+                    &log_file,
+                    &format!(
+                        "[native] {} → database={} data_dir={}",
+                        native_config::CONFIG_FILE,
+                        paths.database_path.to_string_lossy(),
+                        data_dir.to_string_lossy()
+                    ),
+                );
+            }
 
             let resource_dir = match handle.path().resource_dir() {
                 Ok(d) => strip_verbatim_prefix(d),
@@ -233,8 +284,7 @@ pub fn run() {
                 ),
             );
 
-            let db_path = data_dir.join("nexux.db");
-            let db_url = format!("file:{}", db_path.to_string_lossy());
+            let db_url = format!("file:{}", paths.database_path.to_string_lossy());
 
             // Refuse to start on an occupied port instead of racing for it. The
             // sidecar would die with EADDRINUSE and the readiness probe — which
@@ -276,6 +326,9 @@ pub fn run() {
                 .env("HOSTNAME", SIDECAR_HOST)
                 .env("NEXUX_TERMINAL_PORT", SIDECAR_TERMINAL_PORT.to_string())
                 .env("NEXUX_MODE", "local")
+                // Lets the server tell the desktop app from `pnpm dev` — the
+                // data-location settings say "reopen Nexus" only in the app.
+                .env("NEXUX_SHELL", "native")
                 .env("DATABASE_URL", &db_url)
                 .env("NEXUX_DATA_DIR", data_dir.to_string_lossy().to_string())
                 .env(
@@ -307,16 +360,23 @@ pub fn run() {
             // Pipe every sidecar line to the log file so a crash/stack trace from
             // Next.js or the DB layer is recoverable after the fact.
             let sidecar_died = Arc::new(AtomicBool::new(false));
+            // The server's own reason for refusing to start, when it gave one —
+            // "another Nexux is running against this database" is worth showing
+            // on screen rather than behind "see native.log".
+            let refusal: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
             let log_pipe = log_file.clone();
             let died_pipe = sidecar_died.clone();
+            let refusal_pipe = refusal.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = rx.recv().await {
                     match event {
                         CommandEvent::Stdout(line) | CommandEvent::Stderr(line) => {
-                            log_line(
-                                &log_pipe,
-                                &format!("[sidecar] {}", String::from_utf8_lossy(&line).trim_end()),
-                            );
+                            let text = String::from_utf8_lossy(&line);
+                            let text = text.trim_end();
+                            if let Some(reason) = text.split("[instance-lock] ").nth(1) {
+                                *refusal_pipe.lock().unwrap() = Some(reason.to_string());
+                            }
+                            log_line(&log_pipe, &format!("[sidecar] {text}"));
                         }
                         CommandEvent::Terminated(payload) => {
                             log_line(
@@ -341,6 +401,7 @@ pub fn run() {
             let ready_handle = handle.clone();
             let ready_log = log_file.clone();
             let ready_died = sidecar_died.clone();
+            let ready_refusal = refusal.clone();
             std::thread::spawn(move || {
                 let start = std::time::Instant::now();
                 let timeout = Duration::from_secs(SIDECAR_READY_TIMEOUT_SECS);
@@ -350,10 +411,17 @@ pub fn run() {
                             &ready_log,
                             "[native] ERROR: sidecar exited before it was ready",
                         );
+                        // The Terminated event can land before the last stderr
+                        // line is piped; give the reader a moment to catch up.
+                        std::thread::sleep(Duration::from_millis(300));
+                        let reason = ready_refusal.lock().unwrap().clone();
                         show_status(
                             &ready_handle,
-                            "Nexus's server stopped while starting. \
-                             See ~/.nexux/native.log for what it reported.",
+                            &reason.unwrap_or_else(|| {
+                                "Nexus's server stopped while starting. \
+                                 See ~/.nexux/native.log for what it reported."
+                                    .to_string()
+                            }),
                         );
                         return;
                     }
@@ -390,14 +458,11 @@ pub fn run() {
 
             Ok(())
         })
-        .on_menu_event(|app, event| {
-            let current = *app.state::<ZoomLevel>().0.lock().unwrap();
-            match event.id().as_ref() {
-                "zoom_in" => apply_zoom(app, current * ZOOM_STEP),
-                "zoom_out" => apply_zoom(app, current / ZOOM_STEP),
-                "zoom_reset" => apply_zoom(app, 1.0),
-                _ => {}
-            }
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "zoom_in" => page_zoom(app, "in"),
+            "zoom_out" => page_zoom(app, "out"),
+            "zoom_reset" => page_zoom(app, "reset"),
+            _ => {}
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

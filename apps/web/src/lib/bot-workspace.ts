@@ -1,4 +1,4 @@
-// What survives a bot's computer (spec 23): the shared workspace and each
+// What survives a bot's computer (spec 31): the shared workspace and each
 // bot's browser profile. Both are host folders bind-mounted into every
 // computer, so a bot that wakes up finds its files and its sign-ins, and
 // bots see each other's work — like teammates on a shared drive.

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useResolvedTheme } from "@/hooks/use-resolved-theme";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -31,6 +32,7 @@ Loader2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { LG_BREAKPOINT, useBelowBreakpoint } from "@/hooks/use-breakpoint";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
@@ -402,6 +404,7 @@ function CatalogSidebar({
 }
 
 function CanvasInner({ projectId }: { projectId: string }) {
+  const theme = useResolvedTheme();
   const qc = useQueryClient();
   const { toast } = useToast();
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -421,6 +424,10 @@ function CanvasInner({ projectId }: { projectId: string }) {
     queryKey: ["catalog-skills"],
     queryFn: getSkills,
   });
+
+  // Below lg the canvas is a strip of dots — the graph is unreadable and
+  // dragging, which is the point of it, is not what a phone offers.
+  const narrow = useBelowBreakpoint(LG_BREAKPOINT);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
@@ -720,6 +727,41 @@ function CanvasInner({ projectId }: { projectId: string }) {
           Save
         </Button>
       </div>
+      {narrow ? (
+        <div className="rounded-lg border bg-background p-3">
+          {nodes.length === 0 ? (
+            <p className="py-6 text-center text-xs text-muted-foreground">
+              No agents or skills wired yet. Open this project on a larger
+              screen to connect them.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {nodes.map((n) => {
+                const label = String(
+                  (n.data as { label?: unknown })?.label ?? n.id,
+                );
+                const edgeCount = edges.filter(
+                  (e) => e.source === n.id || e.target === n.id,
+                ).length;
+                return (
+                  <div
+                    key={n.id}
+                    className="flex items-center gap-2 rounded-lg border border-border/50 bg-card/40 p-3"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-sm">
+                      {label}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {n.type}
+                      {edgeCount ? ` · ${edgeCount} link${edgeCount === 1 ? "" : "s"}` : ""}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : (
       <div className="flex h-[700px] rounded-lg border bg-background overflow-hidden">
         <CatalogSidebar
           onRecommend={(kind) => setRecommendKind(kind)}
@@ -740,7 +782,9 @@ function CanvasInner({ projectId }: { projectId: string }) {
             onNodesDelete={onNodesDelete}
             onEdgesChange={handleEdgesChange}
             onConnect={onConnect}
-            colorMode="dark"
+            // Follows the page: pinned to dark, a light theme got light node text on
+            // white cards (the nodes are bg-card, React Flow colours the text).
+            colorMode={theme}
             fitView
             deleteKeyCode={["Backspace", "Delete"]}
           >
@@ -749,7 +793,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
             <MiniMap
               pannable
               zoomable
-              maskColor="rgba(0,0,0,0.6)"
+              maskColor={theme === "dark" ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.12)"}
               nodeColor={(n) =>
                 n.type === "agent"
                   ? ((n.data as { color?: string } | undefined)?.color ?? "#3b82f6")
@@ -759,6 +803,7 @@ function CanvasInner({ projectId }: { projectId: string }) {
           </ReactFlow>
         </div>
       </div>
+      )}
       {recommendKind && (
         <SkillRecommendationsDialog
           projectId={projectId}

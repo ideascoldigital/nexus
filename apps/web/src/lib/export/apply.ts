@@ -586,6 +586,20 @@ async function applyProject(
     });
     if (row) counts.stackNodes.update++;
     else counts.stackNodes.create++;
+    // A seed's file is never in an export (spec 29). Say so, unless this
+    // install already holds the very same file for the node.
+    if (node.seed) {
+      const here = await prisma.seedData.findUnique({
+        where: { stackNodeId: node.id },
+        select: { sha256: true },
+      });
+      if (here?.sha256 !== node.seed.sha256) {
+        const mb = node.seed.sizeBytes / (1024 * 1024);
+        plan.warnings.push(
+          `Seed data for "${node.name}" in ${p.name} (${node.seed.fileName}, ${mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.max(1, Math.round(node.seed.sizeBytes / 1024))} KB`}) is not part of an export — attach it again on that project's Stack canvas.`,
+        );
+      }
+    }
     if (!write) continue;
     const data = {
       kind: node.kind,

@@ -65,6 +65,9 @@ import {
   sandboxProviderLabel,
 } from "@/components/settings/cloud-credentials";
 import { HostSshAccess } from "@/components/settings/host-ssh-access";
+import { EndpointHostAccess } from "@/components/settings/endpoint-host-access";
+import { ContextCheck } from "@/components/settings/credential-check";
+import { channelOf, HOST_CHANNELS, withChannel, type HostChannel } from "@/lib/host-channel";
 import {
   lastUpdateFailed,
   lastUpdateFinished,
@@ -73,6 +76,7 @@ import {
   getCredentials,
   type CloudCredentialSummary,
 } from "@/services/sandbox";
+import { getDockerEndpoints, type DockerEndpoint } from "@/services/docker-endpoints";
 import {
   HOST_IN_FLIGHT,
   HOST_REGIONS,
@@ -155,6 +159,11 @@ export function NexusHostsSection() {
     queryKey: ["host-readiness"],
     queryFn: getHostReadiness,
   });
+  // Machines you already have, which can hold a host instead of a VM (spec 27).
+  const { data: endpoints = [] } = useQuery({
+    queryKey: ["docker-endpoints"],
+    queryFn: getDockerEndpoints,
+  });
 
   // A destroy in flight counts as "something is moving" on its own. The row is
   // only marked `destroying` a couple of awaits into the request, so the
@@ -207,15 +216,24 @@ export function NexusHostsSection() {
   // A host creating hosts is confusing and almost certainly unintended — but
   // updating *itself* is exactly what someone standing on the host wants.
   if (readiness?.isHost) {
+    // VM and endpoint hosts update themselves the same way: a note in
+    // /host-control that a root-side helper acts on — a systemd unit on a VM,
+    // the stack's updater service on an endpoint (spec 27 phase 5).
     return <SelfUpdateCard />;
   }
 
+  // Two ways to get a machine: a cloud VM (terraform + a cloud credential),
+  // or a Docker endpoint you already have (spec 27). Either is enough; the
+  // tailnet key is required by both, because it is each host's only door.
   const blockers: string[] = [];
-  if (readiness && !readiness.terraformInstalled) {
-    blockers.push("terraform is not installed on this machine");
-  }
-  if (readiness && !readiness.hasCloudCredential) {
-    blockers.push("no Civo or AWS credential saved (Settings → Cloud)");
+  const vmReady = Boolean(readiness?.terraformInstalled && readiness?.hasCloudCredential);
+  const endpointReady = endpoints.length > 0;
+  if (readiness && !vmReady && !endpointReady) {
+    blockers.push(
+      !readiness.terraformInstalled
+        ? "no machine to put it on: terraform is not installed for a cloud VM, and no Docker endpoint is added (Settings → Cloud)"
+        : "no machine to put it on: no Civo or AWS credential, and no Docker endpoint (Settings → Cloud)",
+    );
   }
   if (readiness && !readiness.hasTailscaleCredential) {
     blockers.push("no Tailscale auth key saved (Settings → Cloud)");
@@ -276,6 +294,8 @@ export function NexusHostsSection() {
         {showForm ? (
           <CreateHostForm
             defaultImage={readiness?.defaultImage ?? ""}
+            endpoints={endpoints}
+            vmReady={vmReady}
             onDone={() => {
               setShowForm(false);
               queryClient.invalidateQueries({ queryKey: ["hosts"] });
@@ -302,10 +322,22 @@ export function NexusHostsSection() {
               Destroy “{destroyTarget?.name}”?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              The {destroyTarget?.size} instance and everything on it — including
-              the database and search indexes — are deleted permanently. Export
-              its configuration first if you want to keep it. This cannot be
-              undone.
+              {destroyTarget?.provider === "docker-endpoint" ? (
+                <>
+                  Its containers on {destroyTarget.region} <strong>and their volumes</strong>{" "}
+                  — the database, credentials, checkouts and search indexes —
+                  are deleted permanently, the same as destroying a VM host.
+                  Export its configuration first if you want to keep it. This
+                  cannot be undone.
+                </>
+              ) : (
+                <>
+                  The {destroyTarget?.size} instance and everything on it —
+                  including the database and search indexes — are deleted
+                  permanently. Export its configuration first if you want to
+                  keep it. This cannot be undone.
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -438,9 +470,12 @@ function SelfUpdateCard() {
     }
   }, [pending, data, dataUpdatedAt, queryClient, toast]);
 
+  // A channel picked but not yet confirmed — switching pulls and restarts.
+  const [switchTo, setSwitchTo] = useState<HostChannel | null>(null);
   const update = useMutation({
-    mutationFn: selfUpdate,
+    mutationFn: (channel?: HostChannel) => selfUpdate(channel),
     onSuccess: (res) => {
+      setSwitchTo(null);
       toast({
         title: res.ok ? "Updating" : "Could not update",
         description: res.message,
@@ -492,8 +527,55 @@ function SelfUpdateCard() {
             " — this image predates version reporting; updating fixes that."}
         </p>
 
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Release channel</span>
+            <div className="flex rounded-md border p-0.5" role="group" aria-label="Release channel">
+              {HOST_CHANNELS.map((c) => (
+                <button
+                  key={c.value}
+                  type="button"
+                  title={c.detail}
+                  disabled={busy || !data?.image}
+                  onClick={() => setSwitchTo(c.value === data?.channel ? null : c.value)}
+                  className={`rounded px-2.5 py-0.5 text-xs transition-colors disabled:opacity-50 ${
+                    (switchTo ?? data?.channel) === c.value
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            {data?.image ? (
+              <span className="truncate font-mono text-xs text-muted-foreground">{data.image}</span>
+            ) : (
+              <span className="text-xs text-muted-foreground">
+                Update once from the install that created this host to enable switching here.
+              </span>
+            )}
+          </div>
+          {switchTo && data?.image && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-xs">
+              <span className="text-muted-foreground">
+                Switch to <code className="font-mono">{withChannel(data.image, switchTo)}</code>, pull it and
+                restart.
+                {switchTo === "latest" &&
+                  " If Edge is ahead of the last release, this runs older code on a database newer code may have migrated."}
+              </span>
+              <Button size="sm" className="h-6 px-2 text-xs" disabled={busy} onClick={() => update.mutate(switchTo)}>
+                Switch
+              </Button>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={busy} onClick={() => setSwitchTo(null)}>
+                Cancel
+              </Button>
+            </div>
+          )}
+        </div>
+
         <div className="flex items-center gap-2">
-          <Button onClick={() => update.mutate()} disabled={busy}>
+          <Button onClick={() => update.mutate(undefined)} disabled={busy}>
             {busy ? (
               <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
             ) : (
@@ -542,6 +624,10 @@ function HostRow({
   // Kept in state rather than refetched: the pull's output exists only in the
   // response to the request that caused it.
   const [updateLog, setUpdateLog] = useState<string | null>(null);
+  const qc = useQueryClient();
+  // A channel picked but not yet confirmed — switching pulls and restarts.
+  const [switchTo, setSwitchTo] = useState<HostChannel | null>(null);
+  const channel = channelOf(host.imageRef);
   const busy = HOST_IN_FLIGHT.includes(host.status);
 
   // Only fetched while the row is moving or the user opened the log — it is the
@@ -557,9 +643,12 @@ function HostRow({
   // already set up. Unlike the host's own button this side has a shell, so it
   // reports what the pull actually did.
   const update = useMutation({
-    mutationFn: () => updateHost(host.id),
+    mutationFn: (channel?: HostChannel) => updateHost(host.id, channel),
     onSuccess: (res) => {
       setUpdateLog(res.log ?? null);
+      setSwitchTo(null);
+      // A channel switch changes the row's image.
+      void qc.invalidateQueries({ queryKey: ["hosts"] });
       toast({
         title: !res.ok
           ? "The update failed"
@@ -579,6 +668,7 @@ function HostRow({
   });
 
   const url = host.tailscaleIp ? `http://${host.tailscaleIp}:3030` : null;
+  const onEndpoint = host.provider === "docker-endpoint";
 
   return (
     <div className="rounded-lg border p-4 space-y-3">
@@ -593,12 +683,49 @@ function HostRow({
           </p>
           {/* Which image the host runs — the tag Update pulls. Whether a newer
               build of it exists is what the Update button answers. */}
-          <p
-            className="text-xs font-mono text-muted-foreground truncate"
-            title={host.imageRef}
-          >
-            {host.imageRef}
-          </p>
+          <div className="flex min-w-0 items-center gap-2">
+            {/* Release channel: the tag Update pulls. Stable = release tags,
+                Edge = every merge to main (host-channel.ts). */}
+            <div className="flex shrink-0 rounded-md border p-0.5" role="group" aria-label="Release channel">
+              {HOST_CHANNELS.map((c) => (
+                <button
+                  key={c.value}
+                  type="button"
+                  title={c.detail}
+                  disabled={host.status !== "running" || update.isPending}
+                  onClick={() => setSwitchTo(c.value === channel ? null : c.value)}
+                  className={`rounded px-2 py-0.5 text-xs transition-colors disabled:opacity-50 ${
+                    (switchTo ?? channel) === c.value
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            <p
+              className="text-xs font-mono text-muted-foreground truncate"
+              title={host.imageRef}
+            >
+              {host.imageRef}
+            </p>
+          </div>
+          {switchTo && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-xs">
+              <span className="text-muted-foreground">
+                Pull <code className="font-mono">{withChannel(host.imageRef, switchTo)}</code> and restart.
+                {switchTo === "latest" &&
+                  " If Edge is ahead of the last release, this runs older code on a database newer code may have migrated."}
+              </span>
+              <Button size="sm" className="h-6 px-2 text-xs" disabled={update.isPending} onClick={() => update.mutate(switchTo)}>
+                {update.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Switch"}
+              </Button>
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={update.isPending} onClick={() => setSwitchTo(null)}>
+                Cancel
+              </Button>
+            </div>
+          )}
           {url ? (
             <div className="flex items-center gap-2 pt-1">
               <a
@@ -627,7 +754,7 @@ function HostRow({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => update.mutate()}
+            onClick={() => update.mutate(undefined)}
             // Only a running host has a stack to pull into; anything else is
             // still being built or taken down.
             disabled={host.status !== "running" || update.isPending}
@@ -667,15 +794,18 @@ function HostRow({
             <Check className="h-4 w-4 mt-0.5 shrink-0 text-emerald-600" />
             Open Backup &amp; migration below to move your configuration onto it.
           </p>
-          <HostSshAccess host={host} />
+          {onEndpoint ? <EndpointHostAccess host={host} /> : <HostSshAccess host={host} />}
         </>
       )}
 
-      {/* A failed host is the case where SSH matters most — the bootstrap log
-          in the UI is a tail, and the rest of the story is on the machine. */}
-      {host.status === "error" && (host.publicIp || host.tailscaleIp) && (
-        <HostSshAccess host={host} />
-      )}
+      {/* A failed host is the case where access matters most — the bootstrap
+          log in the UI is a tail, and the rest of the story is on the machine. */}
+      {host.status === "error" &&
+        (onEndpoint ? (
+          <EndpointHostAccess host={host} />
+        ) : (
+          (host.publicIp || host.tailscaleIp) && <HostSshAccess host={host} />
+        ))}
 
       {host.error && (
         <p className="text-sm text-destructive flex gap-1.5">
@@ -786,16 +916,30 @@ function CredentialField({
 
 function CreateHostForm({
   defaultImage,
+  endpoints,
+  vmReady,
   onDone,
   onCancel,
 }: {
   defaultImage: string;
+  endpoints: DockerEndpoint[];
+  /** Terraform and a cloud credential are both there. */
+  vmReady: boolean;
   onDone: () => void;
   onCancel: () => void;
 }) {
   const { toast } = useToast();
   const [name, setName] = useState("nexus-host");
-  const [provider, setProvider] = useState<"civo" | "aws">("civo");
+  // Start where the user can actually create one: a VM when that is set up,
+  // otherwise their first endpoint.
+  const [provider, setProvider] = useState<"civo" | "aws" | "docker-endpoint">(
+    vmReady || endpoints.length === 0 ? "civo" : "docker-endpoint",
+  );
+  const [dockerEndpointId, setDockerEndpointId] = useState<string | null>(
+    endpoints[0]?.id ?? null,
+  );
+  const onEndpoint = provider === "docker-endpoint";
+  const endpoint = endpoints.find((e) => e.id === dockerEndpointId) ?? null;
   const [region, setRegion] = useState(HOST_REGIONS.civo[0]);
   const [size, setSize] = useState(HOST_SIZES.civo[2].value);
   const [imageRef, setImageRef] = useState(defaultImage);
@@ -851,6 +995,11 @@ function CreateHostForm({
   // Base UI's Select emits null when a selection is cleared; every field here
   // is required, so a null is ignored rather than written as an empty value.
   const onProviderChange = (value: string | null) => {
+    if (value === "docker-endpoint") {
+      setProvider(value);
+      setCredentialId(null);
+      return;
+    }
     if (value !== "civo" && value !== "aws") return;
     const p = value;
     setProvider(p);
@@ -863,8 +1012,9 @@ function CreateHostForm({
     setCredentialId(null);
   };
 
-  const sizeLabel =
-    HOST_SIZES[provider].find((s) => s.value === size)?.label ?? size;
+  const sizeLabel = onEndpoint
+    ? ""
+    : (HOST_SIZES[provider as "civo" | "aws"].find((s) => s.value === size)?.label ?? size);
 
   return (
     <div className="space-y-4 rounded-lg border p-4">
@@ -883,15 +1033,48 @@ function CreateHostForm({
           <Label htmlFor="host-provider">Provider</Label>
           <Select value={provider} onValueChange={onProviderChange}>
             <SelectTrigger id="host-provider">
-              <SelectValue />
+              <SelectValue>
+                {(v) =>
+                  v === "docker-endpoint" ? "Docker endpoint" : v === "aws" ? "AWS EC2" : "Civo"
+                }
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="civo">Civo</SelectItem>
               <SelectItem value="aws">AWS EC2</SelectItem>
+              {endpoints.length > 0 && (
+                <SelectItem value="docker-endpoint">Docker endpoint (a machine you have)</SelectItem>
+              )}
             </SelectContent>
           </Select>
         </div>
 
+        {onEndpoint && (
+          <div className="space-y-2 sm:col-span-2">
+            <Label htmlFor="host-endpoint">Machine</Label>
+            <Select
+              value={dockerEndpointId ?? ""}
+              onValueChange={(v) => v && setDockerEndpointId(v)}
+            >
+              <SelectTrigger id="host-endpoint">
+                <SelectValue>
+                  {(v) => endpoints.find((e) => e.id === v)?.name ?? "Pick an endpoint"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {endpoints.map((e) => (
+                  <SelectItem key={e.id} value={e.id}>
+                    {e.name} · {e.host.replace(/^ssh:\/\//, "")}
+                    {e.arch ? ` · ${e.arch}` : ""}
+                    {e.memTotalMb != null ? ` · ${Math.round(e.memTotalMb / 1024)} GB RAM` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {!onEndpoint && (<>
         <div className="space-y-2">
           <Label htmlFor="host-region">Region</Label>
           <Select
@@ -902,7 +1085,7 @@ function CreateHostForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {HOST_REGIONS[provider].map((r) => (
+              {HOST_REGIONS[provider as "civo" | "aws"].map((r) => (
                 <SelectItem key={r} value={r}>
                   {r}
                 </SelectItem>
@@ -918,7 +1101,7 @@ function CreateHostForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {HOST_SIZES[provider].map((s) => (
+              {HOST_SIZES[provider as "civo" | "aws"].map((s) => (
                 <SelectItem key={s.value} value={s.value}>
                   {s.label}
                 </SelectItem>
@@ -926,17 +1109,20 @@ function CreateHostForm({
             </SelectContent>
           </Select>
         </div>
+        </>)}
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <CredentialField
-          id="host-credential"
-          label={provider === "aws" ? "AWS credential" : "Civo credential"}
-          credentials={cloudCredentials}
-          value={credentialId}
-          onChange={setCredentialId}
-          empty={`No ${provider === "aws" ? "AWS" : "Civo"} credential saved (Settings → Cloud).`}
-        />
+        {!onEndpoint && (
+          <CredentialField
+            id="host-credential"
+            label={provider === "aws" ? "AWS credential" : "Civo credential"}
+            credentials={cloudCredentials}
+            value={credentialId}
+            onChange={setCredentialId}
+            empty={`No ${provider === "aws" ? "AWS" : "Civo"} credential saved (Settings → Cloud).`}
+          />
+        )}
         <CredentialField
           id="host-tailscale-credential"
           label="Tailscale auth key"
@@ -955,8 +1141,20 @@ function CreateHostForm({
           onChange={(e) => setImageRef(e.target.value)}
           className="font-mono text-sm"
         />
-        <p className="text-sm text-muted-foreground">
-          Pulled at boot. A private package needs a registry credential below.
+        <p className="flex flex-wrap items-center gap-x-2 text-sm text-muted-foreground">
+          <span>Channel:</span>
+          {HOST_CHANNELS.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              onClick={() => setImageRef(withChannel(imageRef || defaultImage, c.value))}
+              className={`underline-offset-2 hover:underline ${channelOf(imageRef) === c.value ? "font-medium text-foreground" : ""}`}
+              title={c.detail}
+            >
+              {c.label}
+            </button>
+          ))}
+          <span>· pulled at boot. A private package needs a registry credential below.</span>
         </p>
       </div>
 
@@ -971,6 +1169,13 @@ function CreateHostForm({
           showProvider
           empty={`No saved git token logs in to ${imageRegistry}. Add one in Settings → Git — set its registry host if it is a self-hosted install. Only needed if the image is private.`}
           hint={`The token the host runs docker login with against ${imageRegistry}. It needs registry read access to that image; a public image needs none.`}
+        />
+      )}
+      {needsRegistryLogin && (
+        <ContextCheck
+          credentialId={registryCredentialId}
+          image={imageRef.trim()}
+          label="Check it can pull this image"
         />
       )}
 
@@ -990,10 +1195,18 @@ function CreateHostForm({
         />
       </div>
 
-      <p className="text-sm text-muted-foreground">
-        This launches a <strong>{sizeLabel}</strong> instance on {provider} and
-        starts billing immediately.
-      </p>
+      {onEndpoint ? (
+        <p className="text-sm text-muted-foreground">
+          Runs as containers on <strong>{endpoint?.name ?? "the endpoint"}</strong>&apos;s
+          Docker — nothing is billed and nothing is installed on the machine
+          itself. It publishes no port there: only your tailnet can reach it.
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          This launches a <strong>{sizeLabel}</strong> instance on {provider} and
+          starts billing immediately.
+        </p>
+      )}
 
       <div className="flex gap-2">
         <Button
@@ -1001,7 +1214,8 @@ function CreateHostForm({
             create.mutate({
               name,
               provider,
-              credentialId,
+              dockerEndpointId: onEndpoint ? dockerEndpointId : null,
+              credentialId: onEndpoint ? null : credentialId,
               tailscaleCredentialId,
               registryCredentialId: needsRegistryLogin
                 ? registryCredentialId
@@ -1012,7 +1226,9 @@ function CreateHostForm({
               pullEmbeddingModel,
             })
           }
-          disabled={!name.trim() || !imageRef.trim() || create.isPending}
+          disabled={
+            !name.trim() || !imageRef.trim() || create.isPending || (onEndpoint && !dockerEndpointId)
+          }
         >
           {create.isPending && (
             <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />

@@ -38,7 +38,11 @@ export async function GET(_req: NextRequest, { params }: Params) {
     const res = await execRemote(
       bootstrapLogCommand(),
       isLocal
-        ? { container: sandbox.instanceId!, timeoutMs: 20_000 }
+        ? {
+            container: sandbox.instanceId!,
+            dockerHost: sandbox.dockerHost,
+            timeoutMs: 20_000,
+          }
         : {
             host: sandbox.publicIp!,
             privateKeyPath: sandboxPrivateKeyPath(getConfig().dataDir),

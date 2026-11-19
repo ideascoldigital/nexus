@@ -1,4 +1,4 @@
-// Bot avatars (spec 23): a shape + a color, with a face. The shapes are
+// Bot avatars (spec 31): a shape + a color, with a face. The shapes are
 // plain geometry generated here (polar curves and superformulas), so there are
 // no image assets. Pure and client-safe: the API validates against the ids,
 // the UI draws the paths.

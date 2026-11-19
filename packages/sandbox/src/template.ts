@@ -1,4 +1,13 @@
+import {
+  renderBootProbe,
+  renderBootProbeHelper,
+  renderStepTailHelper,
+} from "./boot-probe";
+import { renderStepHelpers, stepChain } from "./bootstrap-report";
 import { manifestFromSpec, renderNexusCliSection } from "./nexus-cli";
+import { openCodeMcpServers } from "./mcp-config";
+import { renderSeedRestore } from "./template-seed";
+import { renderBrowserInstallSection } from "./template-browser";
 import { safeSlug, shq } from "./slug";
 import type { SandboxProvider, SandboxRepoSpec, SandboxSpec } from "./types";
 import { SANDBOX_ROOT, writeCodeWorkspaceCommand } from "./workspace";
@@ -531,6 +540,17 @@ function asAgent(dir: string, command: string): string {
   return `runuser -u ${AGENT_USER} -- bash -lc ${shq(`cd ${shq(dir)} && ${command}`)}`;
 }
 
+/**
+ * A repo name as the subject half of a step name.
+ *
+ * `safeSlug` is what the checkout directory already uses, so the step name and
+ * the path agree — and it produces exactly the character set
+ * `assertStepName` accepts, which a raw repo name ("My App (v2)") does not.
+ */
+function stepSubject(repoName: string): string {
+  return safeSlug(repoName);
+}
+
 function renderRepoSection(repo: SandboxRepoSpec): string {
   const dir = `/opt/nexus/${safeSlug(repo.name)}`;
   // Mounted repos (local provider, no clone URL) are already bind-mounted at
@@ -551,10 +571,27 @@ function renderRepoSection(repo: SandboxRepoSpec): string {
     ? `nexus_bootstrap_fatal "clone failed for ${repo.name} (the main checkout — every task runs in ${dir})"`
     : `echo "[nexux] WARN: clone failed for ${repo.name}"`;
 
+  // Recorded as one step, not three: the branch fallback is an implementation
+  // detail of "clone this repo", and a report that listed the first attempt as
+  // a failure would say the clone broke on every repo pinned to a branch that
+  // no longer exists upstream — which is a warning in the log, not a failure.
+  // `nexus_step_run` takes the whole chain, so the fatal/warn branch stays
+  // exactly where it was.
   const cloneChain = () =>
-    repo.branch
-      ? `${clone(repo.branch)} || { echo "[nexux] WARN: branch ${repo.branch} not found for ${repo.name} — cloning default branch"; ${clone()}; } || ${onCloneFailure}`
-      : `${clone()} || ${onCloneFailure}`;
+    stepChain(
+      `clone:${stepSubject(repo.name)}`,
+      // Always "warn" here even for the main repo: `onCloneFailure` below is
+      // already the fatal call, and it carries the sentence that explains what
+      // breaks ("every task runs in <dir>"). Passing "fatal" too would append a
+      // second, barer reason to the same marker.
+      "warn",
+      repo.branch
+        ? `{ ${clone(repo.branch)} || { echo "[nexux] WARN: branch ${repo.branch} not found for ${repo.name} — cloning default branch"; ${clone()}; }; }`
+        : clone(),
+      // The severity above already records it; this keeps the human-readable
+      // line (and, for the main repo, the failure marker's reason text).
+      onCloneFailure,
+    );
 
   const lines: string[] = repo.repoUrl
     ? [
@@ -598,7 +635,12 @@ NEXUX_DOTENV_EOF`,
 
   if (repo.installCommand) {
     lines.push(
-      `${asAgent(dir, repo.installCommand)} || echo "[nexux] WARN: install failed for ${repo.name}"`,
+      stepChain(
+        `install:${stepSubject(repo.name)}`,
+        "warn",
+        asAgent(dir, repo.installCommand),
+        `echo "[nexux] WARN: install failed for ${repo.name}"`,
+      ),
     );
   } else {
     // No install command configured — infer one from the lockfile so the agent
@@ -606,25 +648,40 @@ NEXUX_DOTENV_EOF`,
     //
     // `bun`/`corepack` install globally, which the agent user cannot do, so
     // those two steps stay with root; only the install itself drops privileges.
+    // One step name for all four branches: which package manager the lockfile
+    // selected is in the log, and a report that named the branch would make
+    // "did install fail?" depend on knowing which manager ran.
+    const inferred = (command: string) =>
+      stepChain(
+        `install:${stepSubject(repo.name)}`,
+        "warn",
+        asAgent(dir, command),
+        `echo "[nexux] WARN: inferred install failed for ${repo.name}"`,
+      );
     lines.push(`if [ -f ${shq(`${dir}/package.json`)} ]; then
   echo "[nexux] no install command for ${repo.name} — inferring from lockfile"
   if [ -f ${shq(`${dir}/bun.lockb`)} ] || [ -f ${shq(`${dir}/bun.lock`)} ]; then
     command -v bun >/dev/null || npm install -g bun
-    ${asAgent(dir, "bun install")} || echo "[nexux] WARN: inferred install failed for ${repo.name}"
+    ${inferred("bun install")}
   elif [ -f ${shq(`${dir}/pnpm-lock.yaml`)} ]; then
     corepack enable
-    ${asAgent(dir, "pnpm install")} || echo "[nexux] WARN: inferred install failed for ${repo.name}"
+    ${inferred("pnpm install")}
   elif [ -f ${shq(`${dir}/yarn.lock`)} ]; then
     corepack enable
-    ${asAgent(dir, "yarn install")} || echo "[nexux] WARN: inferred install failed for ${repo.name}"
+    ${inferred("yarn install")}
   else
-    ${asAgent(dir, "npm install")} || echo "[nexux] WARN: inferred install failed for ${repo.name}"
+    ${inferred("npm install")}
   fi
 fi`);
   }
   if (repo.buildCommand) {
     lines.push(
-      `${asAgent(dir, repo.buildCommand)} || echo "[nexux] WARN: build failed for ${repo.name}"`,
+      stepChain(
+        `build:${stepSubject(repo.name)}`,
+        "warn",
+        asAgent(dir, repo.buildCommand),
+        `echo "[nexux] WARN: build failed for ${repo.name}"`,
+      ),
     );
   }
   return lines.join("\n");
@@ -659,6 +716,8 @@ nexus_bootstrap_fatal() {
   echo "\$1" >> ${BOOTSTRAP_FAILED_MARKER}
   echo "[nexux] FATAL: \$1"
 }
+
+${renderStepHelpers()}
 
 # apt-get, but not while something else holds the dpkg lock.
 #
@@ -835,7 +894,7 @@ npm install -g bun || echo "[nexux] WARN: bun install failed"`);
       // by hand (docker-in-docker — the sandbox container runs --privileged).
       sections.push(`echo "[nexux] installing Docker (dind)"
 nexus_dpkg_wait
-curl -fsSL https://get.docker.com | sh || echo "[nexux] WARN: docker install failed"
+${stepChain("docker:install", "warn", "curl -fsSL https://get.docker.com | sh", `echo "[nexux] WARN: docker install failed"`)}
 usermod -aG docker ${AGENT_USER} || true
 if [ ! -S /var/run/docker.sock ]; then
   echo "[nexux] starting dockerd"
@@ -846,7 +905,7 @@ fi`);
     } else {
       sections.push(`echo "[nexux] installing Docker"
 nexus_dpkg_wait
-curl -fsSL https://get.docker.com | sh || echo "[nexux] WARN: docker install failed"
+${stepChain("docker:install", "warn", "curl -fsSL https://get.docker.com | sh", `echo "[nexux] WARN: docker install failed"`)}
 usermod -aG docker ${AGENT_USER} || true`);
     }
   }
@@ -867,11 +926,22 @@ cat > /opt/nexus/stack/docker-compose.yml <<'NEXUX_STACK_EOF'
 ${stackYaml}
 NEXUX_STACK_EOF
 if command -v docker >/dev/null 2>&1; then
-  (cd /opt/nexus/stack && docker compose up -d --wait --wait-timeout 180) \\
-    || echo "[nexux] WARN: stack services failed to start (repos may miss their dependencies)"
+  ${stepChain(
+    "stack:up",
+    "warn",
+    "(cd /opt/nexus/stack && docker compose up -d --wait --wait-timeout 180)",
+    `echo "[nexux] WARN: stack services failed to start (repos may miss their dependencies)"`,
+  )}
 else
   echo "[nexux] WARN: docker not available — stack services skipped (enable the Docker toggle)"
 fi`);
+  }
+
+  // Seed data (spec 29): after the services are up, before the setup script
+  // and the repos — their install commands run the migrations, which should
+  // meet the seeded database rather than an empty one.
+  if (stackYaml && spec.seeds?.length) {
+    sections.push(renderSeedRestore(spec.seeds));
   }
 
   if (spec.installClaudeCode) {
@@ -943,11 +1013,15 @@ chown -R ${AGENT_USER}:${AGENT_USER} /home/${AGENT_USER}/.claude /home/${AGENT_U
     // Both accounts, like Claude Code: agent user runs tasks, root is the
     // in-app terminal.
     const model = spec.openCodeModel?.trim();
+    // The project's MCP servers, in OpenCode's shape — see mcp-config.ts.
+    const { mcp, skipped } = openCodeMcpServers(spec.mcpServers);
+    const mcpCount = Object.keys(mcp).length;
     const openCodeConfig = JSON.stringify(
       {
         $schema: "https://opencode.ai/config.json",
         permission: { "*": "allow" },
         ...(model ? { model } : {}),
+        ...(mcpCount ? { mcp } : {}),
       },
       null,
       2,
@@ -957,8 +1031,17 @@ chown -R ${AGENT_USER}:${AGENT_USER} /home/${AGENT_USER}/.claude /home/${AGENT_U
         "opencode config contains the heredoc sentinel NEXUX_OPENCODE_EOF",
       );
     }
+    const mcpLog = [
+      mcpCount ? `echo "[nexux] configuring ${mcpCount} MCP server(s) for OpenCode"` : "",
+      skipped.length
+        ? `echo ${shq(`[nexux] WARN: MCP server(s) with no command or url, not configured: ${skipped.join(", ")}`)}`
+        : "",
+    ]
+      .filter(Boolean)
+      .map((l) => `\n${l}`)
+      .join("");
     sections.push(`echo "[nexux] installing OpenCode"
-npm install -g opencode-ai || echo "[nexux] WARN: opencode install failed"
+npm install -g opencode-ai || echo "[nexux] WARN: opencode install failed"${mcpLog}
 for h in /root /home/${AGENT_USER}; do
   mkdir -p "$h/.config/opencode"
   cat > "$h/.config/opencode/opencode.json" <<'NEXUX_OPENCODE_EOF'
@@ -1221,12 +1304,40 @@ ${spec.setupScript.trim()}`);
           // `docker compose up` still works.
           return `if [ -d "${dir}" ]; then
   echo "[nexux] stack launcher: ${l.name}"
-  ${asAgent(dir, l.startCommand)} || echo "[nexux] WARN: launcher ${l.name} failed"
+  ${stepChain(`launcher:${safeSlug(l.name)}`, "warn", asAgent(dir, l.startCommand), `echo "[nexux] WARN: launcher ${l.name} failed"`)}
 else
   echo "[nexux] WARN: launcher ${l.name} skipped — ${dir} not found"
 fi`;
         })
         .join("\n"),
+    );
+  }
+
+  // Does the app actually boot? (spec 24 piece 2.) After the repos are cloned,
+  // installed and built, and after the launchers and stack services are up, so
+  // the probe runs against the same environment the user's own Start will.
+  //
+  // Each repo that declares both a run command and a port is started, waited
+  // for, and stopped again. A repo without a port is skipped: "the process
+  // survived three seconds" is not evidence that anything works, and a probe
+  // that reported it as a pass would be the same lie this piece removes.
+  const probes = spec.repos.filter(
+    (r) => r.runCommand?.trim() && typeof r.runPort === "number" && r.runPort > 0,
+  );
+  if (probes.length > 0) {
+    sections.push(
+      [
+        renderStepTailHelper(),
+        renderBootProbeHelper(AGENT_USER),
+        ...probes.map((r) =>
+          renderBootProbe({
+            name: safeSlug(r.name),
+            cwd: `/opt/nexus/${safeSlug(r.name)}`,
+            command: r.runCommand!.trim(),
+            port: r.runPort!,
+          }),
+        ),
+      ].join("\n\n"),
     );
   }
 
@@ -1247,6 +1358,13 @@ fi`;
       manifestFromSpec(spec, { generatedAt: opts.generatedAt ?? "" }),
     ),
   );
+
+  // The session itself is started on demand (the user opening the Browser tab),
+  // not here: a browser idling on every sandbox would cost memory on instances
+  // nobody is looking at. Chromium already arrived with installAgentBrowser.
+  if (spec.installBrowserSession) {
+    sections.push(renderBrowserInstallSection(AGENT_USER));
+  }
 
   // The completion marker is what the host polls to call a sandbox ready, so a
   // run that hit a fatal step must not leave it behind — the failure marker
@@ -1292,6 +1410,19 @@ export function renderTfVars(spec: SandboxSpec): string {
  */
 export function renderRepoSetup(repos: SandboxRepoSpec[]): string {
   return `mkdir -p /opt/nexus
+# The step helpers, again: this block is also run on its own by the retry
+# action (sandbox-manager.ts \`retrySandboxSetup\`), where the bootstrap
+# preamble that normally defines them is not in scope — and an undefined
+# \`nexus_step_run\` would make every clone/install/build a "command not
+# found". Re-declaring them in the bootstrap is harmless: bash takes the
+# later definition, and both are generated from the same renderer.
+${renderStepHelpers()}
+# nexus_bootstrap_fatal likewise: the main repo's clone failure calls it.
+# Declared only if absent, so the bootstrap's own version — which writes the
+# failure marker the host polls — is never replaced by this fallback.
+if ! declare -f nexus_bootstrap_fatal >/dev/null 2>&1; then
+  nexus_bootstrap_fatal() { echo "[nexux] FATAL: $1"; }
+fi
 # The trace is off from here: \`set -x\` expands a token into the command line
 # it echoes, which would land the credential verbatim in
 # /var/log/nexus-bootstrap.log (readable by the UI's bootstrap-log route).

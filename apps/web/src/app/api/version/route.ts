@@ -12,12 +12,11 @@
  * first.
  */
 
-import { execFile } from "child_process";
 import fs from "fs/promises";
-import { promisify } from "util";
 
 import { NextResponse } from "next/server";
 
+import { buildGitSha } from "@/lib/build-sha";
 import { buildVersion, releaseOf } from "@/lib/build-version";
 import { REPO_URL } from "@/lib/repo";
 
@@ -36,20 +35,13 @@ export type AppVersion = {
   releaseUrl: string;
   /** True inside the native app (sidecar) — set by its start.js. */
   native: boolean;
+  /**
+   * The image a Nexus host runs (its NEXUX_IMAGE), e.g. …/nexus:edge — how the
+   * install that manages it learns a channel switched from the host's own
+   * Settings. Null anywhere else.
+   */
+  image: string | null;
 };
-
-const execFileP = promisify(execFile);
-
-// Dev-checkout fallback, resolved once per server process. CI builds always
-// have NEXUX_GIT_SHA baked in; only `pnpm dev` reaches the git call.
-let devShaPromise: Promise<string | null> | undefined;
-
-function devGitSha(): Promise<string | null> {
-  devShaPromise ??= execFileP("git", ["rev-parse", "HEAD"])
-    .then(({ stdout }) => stdout.trim() || null)
-    .catch(() => null);
-  return devShaPromise;
-}
 
 export async function GET() {
   // Written by the Dockerfile on every image build, CI or local — the one
@@ -61,7 +53,7 @@ export async function GET() {
       .then((s) => s.trim() || null)
       .catch(() => null));
 
-  const gitSha = process.env.NEXUX_GIT_SHA || (await devGitSha());
+  const gitSha = await buildGitSha();
   const version = await buildVersion();
 
   const body: AppVersion = {
@@ -74,6 +66,7 @@ export async function GET() {
     // whole string linked to a 404 on GitHub.
     releaseUrl: `${REPO_URL}/releases/tag/v${releaseOf(version)}`,
     native: process.env.NEXUX_NATIVE === "1",
+    image: process.env.NEXUX_IMAGE?.trim() || null,
   };
   return NextResponse.json(body);
 }

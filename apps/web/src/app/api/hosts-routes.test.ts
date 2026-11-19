@@ -26,7 +26,11 @@ after(async () => {
 
 beforeEach(async () => {
   await prisma.nexusHost.deleteMany({});
+  await prisma.dockerEndpoint.deleteMany({});
   await prisma.cloudCredential.deleteMany({});
+  delete process.env.NEXUX_TEST_DOCKER_PROBE;
+  // Never provision for real from a test: the endpoint could be a live machine.
+  process.env.NEXUX_TEST_HOST_PROVISION = "skip";
   delete process.env.NEXUX_ROLE;
   // State the environment rather than inheriting it: terraform is installed on
   // a developer machine and absent on CI, so without this the precondition
@@ -95,7 +99,7 @@ const errorOf = async (res: Response) =>
  * asks GitHub who a token belongs to; a suite that really called them would be
  * offline-flaky and would depend on the state of a real package.
  */
-function stubRegistry(status: number, anonymousStatus = status) {
+function stubRegistry(status: number, anonymousStatus = status, manifestBody: unknown = null) {
   const real = globalThis.fetch;
   const issuedTo = new Map<string, "auth" | "anon">();
   let issued = 0;
@@ -124,8 +128,9 @@ function stubRegistry(status: number, anonymousStatus = status) {
           },
         });
       }
-      return new Response(null, {
-        status: issuedTo.get(bearer) === "auth" ? status : anonymousStatus,
+      const answer = issuedTo.get(bearer) === "auth" ? status : anonymousStatus;
+      return new Response(answer === 200 && manifestBody ? JSON.stringify(manifestBody) : null, {
+        status: answer,
       });
     }
     if (url.startsWith("https://api.github.com/user")) {
@@ -432,4 +437,80 @@ test("destroying an unknown host is a 400, not a crash", async () => {
   });
   assert.equal(res.status, 400);
   assert.match(await errorOf(res), /not found/i);
+});
+
+// --- hosts on a Docker endpoint (spec 27) -----------------------------------
+
+async function saveEndpoint() {
+  return prisma.dockerEndpoint.create({
+    data: { name: "devbox", host: "ssh://devbox", arch: "x86_64" },
+  });
+}
+
+const endpointBody = (dockerEndpointId: string, over: Record<string, unknown> = {}) => ({
+  name: "home",
+  provider: "docker-endpoint",
+  dockerEndpointId,
+  imageRef: "ghcr.io/o/r:edge",
+  ...over,
+});
+
+const AMD64_ONLY = { manifests: [{ platform: { os: "linux", architecture: "amd64" } }] };
+const ARM64_ONLY = { manifests: [{ platform: { os: "linux", architecture: "arm64" } }] };
+
+test("an endpoint host needs neither region, size, terraform nor a cloud credential", async () => {
+  // Terraform is absent here on purpose: an endpoint host never runs it. The
+  // stack itself is not started — the endpoint is fake — only the row matters.
+  process.env.NEXUX_TEST_TERRAFORM = "0";
+  process.env.NEXUX_TEST_DOCKER_PROBE = JSON.stringify({
+    ok: true, serverVersion: "29", arch: "x86_64", memTotalMb: 32000, rootless: false,
+  });
+  const ep = await saveEndpoint();
+  await saveTailscale();
+  const restore = stubRegistry(200, 200, AMD64_ONLY);
+  try {
+    const res = await post(endpointBody(ep.id));
+    assert.equal(res.status, 201, await res.clone().text());
+    const host = await res.json();
+    assert.equal(host.provider, "docker-endpoint");
+    assert.equal(host.region, "devbox");
+    assert.equal(host.size, "docker");
+    assert.equal(host.dockerEndpointId, ep.id);
+    assert.equal(host.credentialId, null);
+  } finally {
+    restore();
+  }
+});
+
+test("an image that is not published for the endpoint's architecture is refused before the row", async () => {
+  process.env.NEXUX_TEST_DOCKER_PROBE = JSON.stringify({
+    ok: true, serverVersion: "29", arch: "x86_64", memTotalMb: 32000, rootless: false,
+  });
+  const ep = await saveEndpoint();
+  await saveTailscale();
+  const restore = stubRegistry(200, 200, ARM64_ONLY);
+  try {
+    const res = await post(endpointBody(ep.id));
+    assert.equal(res.status, 400);
+    assert.match(await errorOf(res), /linux\/arm64 — "devbox" is amd64/);
+    assert.equal(await prisma.nexusHost.count(), 0);
+  } finally {
+    restore();
+  }
+});
+
+test("an endpoint host is refused without an endpoint, a keyed tailscale credential, or a daemon", async () => {
+  const ep = await saveEndpoint();
+  assert.match(await errorOf(await post(endpointBody(""))), /Pick a Docker endpoint/);
+  assert.match(await errorOf(await post(endpointBody(ep.id))), /Tailscale credential with an auth key/);
+
+  await saveTailscale();
+  process.env.NEXUX_TEST_DOCKER_PROBE = JSON.stringify({ ok: false, error: "The host didn't answer" });
+  assert.match(await errorOf(await post(endpointBody(ep.id))), /isn't answering: The host didn't answer/);
+  assert.equal(await prisma.nexusHost.count(), 0);
+});
+
+test("a cloud host still needs a region and size", async () => {
+  const res = await post({ name: "x", provider: "civo" });
+  assert.equal(res.status, 400);
 });

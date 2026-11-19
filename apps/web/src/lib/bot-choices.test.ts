@@ -6,7 +6,7 @@ import { renderBotSystemPrompt } from "@nexux/sandbox";
 import { CHOICES_FENCE, parseChoices } from "./bot-choices";
 
 const reply = [
-  "¡Hola Cristhian! Soy QA. Quiero confirmar por dónde arrancamos.",
+  "¡Hola Alex! Soy QA. Quiero confirmar por dónde arrancamos.",
   "",
   "```choices",
   '{"question": "¿Qué quieres que pruebe primero?", "options": ["El registro", "Las respuestas", " ", 4]}',
@@ -18,7 +18,7 @@ test("parseChoices pulls the question and options out of the reply", () => {
   assert.ok(c);
   assert.equal(c.question, "¿Qué quieres que pruebe primero?");
   assert.deepEqual(c.options, ["El registro", "Las respuestas"]); // blanks and non-strings dropped
-  assert.equal(c.body, "¡Hola Cristhian! Soy QA. Quiero confirmar por dónde arrancamos.");
+  assert.equal(c.body, "¡Hola Alex! Soy QA. Quiero confirmar por dónde arrancamos.");
 });
 
 test("parseChoices rejects malformed or too-small blocks", () => {

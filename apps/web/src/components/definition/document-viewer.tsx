@@ -45,17 +45,25 @@ function SectionCard({
 
   return (
     <Card className="border-border/50">
-      <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <CardTitle className="text-sm font-medium truncate">{section.title}</CardTitle>
-          <span className={`text-[10px] px-2 py-0.5 rounded-full ${STATUS_CLASS[section.status]}`}>
+      {/* Wraps at phone width. Unwrapped, the title competed with the status
+          pill, the owner and two buttons in one row and lost: it was truncated
+          to 38px — "Ov…", "Proble…" — which is the one thing in the row you
+          cannot do without. */}
+      <CardHeader className="pb-2 flex flex-row flex-wrap items-center justify-between gap-y-1 space-y-0">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {/* Given the row's slack before the metadata beside it, so a long
+              section name shortens the owner rather than itself. */}
+          <CardTitle className="min-w-0 flex-1 text-sm font-medium truncate">
+            {section.title}
+          </CardTitle>
+          <span className={`shrink-0 text-[10px] px-2 py-0.5 rounded-full ${STATUS_CLASS[section.status]}`}>
             {section.status}
           </span>
-          <span className="text-[10px] text-muted-foreground truncate">
+          <span className="hidden truncate text-[10px] text-muted-foreground sm:inline">
             owner: {section.ownerRole}
           </span>
         </div>
-        <div className="flex gap-1">
+        <div className="flex shrink-0 gap-1">
           <Button
             variant="ghost"
             size="sm"

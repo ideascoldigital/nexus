@@ -11,10 +11,10 @@ import { botMounts, botWorkdir, removeBotProfile, workspaceFolderFor, workspaceR
 
 test("each bot's folder is a stable slug of its name", () => {
   assert.equal(workspaceFolderFor("Creative Designer"), "creative-designer");
-  assert.equal(workspaceFolderFor("Simplifybot customer experience"), "simplifybot-customer-experience");
-  assert.equal(workspaceFolderFor("Gastos ñandú — Ideascol!"), "gastos-nandu-ideascol");
+  assert.equal(workspaceFolderFor("Acme Support customer experience"), "acme-support-customer-experience");
+  assert.equal(workspaceFolderFor("Gastos ñandú — Acme!"), "gastos-nandu-acme");
   assert.equal(workspaceFolderFor("🤖"), "bot");
-  assert.equal(botWorkdir("Isa"), "/workspace/isa");
+  assert.equal(botWorkdir("Maya"), "/workspace/maya");
 });
 
 test("mounts: the shared workspace and the bot's own profile, created on the host", () => {

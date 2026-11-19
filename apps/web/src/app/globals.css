@@ -122,7 +122,7 @@
   --sidebar-ring: oklch(0.74 0.15 300 / 60%);
 }
 
-/* The bots view (spec 23) is its own little app: neutral graphite instead of
+/* The bots view (spec 31) is its own little app: neutral graphite instead of
    the Void blues, the bot's own color as the only accent. Keyed on the page
    having a .bots-ui root, so portalled dialogs and popovers match too. */
 .dark:has(.bots-ui) {
@@ -195,7 +195,7 @@ html[data-titlebar="overlay"] .titlebar-only {
   background: transparent;
 }
 
-/* Bot faces (spec 23): at rest a bot leans and glances up-left; pointed at,
+/* Bot faces (spec 31): at rest a bot leans and glances up-left; pointed at,
    it turns to face you with a little spring. Plain HTML boxes (see
    bot-avatar.tsx): WebKit does not animate transforms on SVG <g>. */
 .bot-face .bot-body,
@@ -242,4 +242,80 @@ html[data-titlebar="overlay"] .titlebar-only {
   html {
     @apply font-sans;
   }
+}
+/* Touch targets.
+ *
+ * The interface is dense on purpose — it is a dashboard, and on a desktop a
+ * 28px icon button beside a 27px pill reads as one tidy row. A thumb is not a
+ * mouse: the usual guidance is ~44px, and several of these controls are barely
+ * half that.
+ *
+ * Rather than grow the controls (which would loosen every desktop layout to
+ * fix a phone), this extends the *hit* area past the painted box with a
+ * pseudo-element. The button looks identical; the region that responds to a
+ * tap is bigger. Above md it does nothing at all, so a pointer keeps the
+ * density it was designed with.
+ *
+ * `@utility` rather than `@layer utilities`: this is Tailwind v4, where a
+ * plain layer block is not registered as a utility and silently never applies.
+ */
+@utility tap-target {
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    /* Grows a 28px control to ~44px, the smallest comfortable thumb target. */
+    inset: -8px;
+    /* Rounded so overlapping targets in a row do not steal each other's taps
+       at the corners. */
+    border-radius: 0.75rem;
+  }
+
+  @media (min-width: 768px) {
+    &::before {
+      content: none;
+    }
+  }
+}
+
+/* iOS zooms into any focused field whose text is under 16px, then leaves the
+ * page scaled — the single most disruptive thing a phone does to a form. The
+ * app's fields are 12px on purpose (it is a dense dashboard), and the ui/
+ * primitives already guard this with `text-base md:text-sm`; call sites that
+ * pass their own `text-xs` quietly undo it.
+ *
+ * So the floor is enforced here, for every field, below the breakpoint where
+ * the density matters. 16px is not a preference — it is the threshold Safari
+ * checks.
+ */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+    /* And a floor on height, for the same reason the buttons have one: several
+     * forms use a bare <input> rather than the ui/ primitive, so fixing the
+     * primitive alone leaves them at 28px. min-height, not height, so a
+     * textarea still grows with its content. */
+    min-height: 2.25rem;
+  }
+}
+
+/*
+ * Page width (Settings → Appearance). Contained is the designed default: a
+ * 72rem column that keeps line lengths and card grids at the proportions they
+ * were drawn for. Full width lets every page use the whole window. Driven by
+ * an attribute on <html> that an inline script sets before first paint, so a
+ * full-width preference never flashes the contained layout on load.
+ */
+:root {
+  --page-max-width: 72rem;
+}
+:root[data-layout="full"] {
+  --page-max-width: none;
+}
+
+@utility max-w-page {
+  max-width: var(--page-max-width);
 }

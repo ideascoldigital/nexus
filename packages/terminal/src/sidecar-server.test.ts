@@ -49,22 +49,40 @@ before(async () => {
     cwd: path.resolve(__dirname, ".."),
     stdio: ["ignore", "pipe", "pipe"],
   });
-  await new Promise<void>((resolve, reject) => {
+  // The probe above is a snapshot, not a reservation: between it and this
+  // spawn, another run of this same file can take 3001 — which is exactly what
+  // `turbo run test test:coverage` does, running the suite twice at once. The
+  // loser's child then dies of EADDRINUSE. That is the case `portBusy` already
+  // covers, so fold the late discovery into it and skip, rather than failing
+  // all three tests over a port the other run legitimately holds.
+  const started = await new Promise<boolean>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error("sidecar did not start in time")),
       10_000,
     );
+    let stderr = "";
+    child!.stderr!.on("data", (d: Buffer) => {
+      stderr += d.toString();
+    });
     child!.stdout!.on("data", (d: Buffer) => {
       if (d.toString().includes("listening")) {
         clearTimeout(timeout);
-        resolve();
+        resolve(true);
       }
     });
     child!.on("exit", (code) => {
       clearTimeout(timeout);
-      reject(new Error(`sidecar exited early with code ${code}`));
+      if (/EADDRINUSE/.test(stderr)) {
+        resolve(false);
+        return;
+      }
+      reject(new Error(`sidecar exited early with code ${code}: ${stderr}`));
     });
   });
+  if (!started) {
+    portBusy = true;
+    child = undefined;
+  }
 });
 
 after(() => {

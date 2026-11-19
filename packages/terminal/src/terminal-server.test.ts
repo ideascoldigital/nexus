@@ -13,7 +13,33 @@ import {
   backpressureAction,
 } from "./terminal-server";
 
-const PORT = 3911;
+// Asked of the OS rather than fixed: `turbo run test test:coverage` runs this
+// file twice at once, and two runs binding one port means whichever loses the
+// race fails on EADDRINUSE — surfacing as a scatter of unrelated-looking
+// failures (a 404 assertion, a websocket close code) rather than as a bind
+// error. Binding :0 and reading back what was granted is the only way to get a
+// port nothing else holds; deriving one from the pid still collides, since
+// nothing stops two pids from mapping to the same number.
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = http.createServer();
+    probe.once("error", reject);
+    probe.listen(0, "localhost", () => {
+      const addr = probe.address();
+      if (typeof addr === "string" || addr === null) {
+        probe.close(() => reject(new Error("no port was assigned")));
+        return;
+      }
+      // Closed before the real server binds it. A third party could take the
+      // port in that window, but nothing else on this machine is asking the
+      // kernel for ephemeral ports in a tight loop, and the alternative —
+      // a fixed number — collides every time rather than almost never.
+      probe.close(() => resolve(addr.port));
+    });
+  });
+}
+
+let PORT: number;
 const ORIGIN = "http://test-origin.local";
 
 // The session tests drive a real pty and assert POSIX shell behaviour â€” `pwd`,
@@ -31,13 +57,19 @@ let handle: TerminalServerHandle;
 let cwd: string;
 
 before(async () => {
+  PORT = await freePort();
   process.env.NEXUX_TERMINAL_PORT = String(PORT);
   process.env.NEXUX_WEB_ORIGIN = ORIGIN;
   process.env.SHELL = "/bin/sh";
   cwd = fs.mkdtempSync(path.join(os.tmpdir(), "nexux-term-"));
   // Server reads config at call time; import after env is set for safety.
   const { startTerminalServer } = await import("./terminal-server");
-  handle = startTerminalServer();
+  // One known endpoint, pointing somewhere that cannot resolve: enough to see
+  // the session handed to docker with -H, without a daemon to reach.
+  handle = startTerminalServer({
+    resolveDockerHost: async (id) =>
+      id === "ep1" ? "ssh://nobody@nexux-test.invalid" : null,
+  });
   await new Promise((r) => setTimeout(r, 100));
 });
 
@@ -292,4 +324,57 @@ test("no queue size ever asks for both actions", () => {
     assert.ok(running !== "resume", `${n} never resumes a running pty`);
     assert.ok(held !== "pause", `${n} never re-pauses a paused pty`);
   }
+});
+
+// --- docker targets on another machine (spec 26) ----------------------------
+
+test("docker targets parse with and without an endpoint", async () => {
+  const { parseDockerTerminalTarget } = await import("./terminal-server");
+  assert.deepEqual(parseDockerTerminalTarget("docker://nexux-app/opt/nexus"), {
+    endpointId: null,
+    container: "nexux-app",
+    path: "/opt/nexus",
+    kind: "sandbox",
+  });
+  assert.deepEqual(parseDockerTerminalTarget("docker://cmfoo123@nexux-app"), {
+    endpointId: "cmfoo123",
+    container: "nexux-app",
+    path: "",
+    kind: "sandbox",
+  });
+  // A Nexus host's app container (spec 27): only ever named with its endpoint.
+  assert.deepEqual(parseDockerTerminalTarget("docker-host://cmfoo123@nexus-host-home-nexux-1"), {
+    endpointId: "cmfoo123",
+    container: "nexus-host-home-nexux-1",
+    path: "",
+    kind: "host",
+  });
+  assert.equal(parseDockerTerminalTarget("docker-host://nexus-host-home-nexux-1"), null);
+  // A host never travels in the URL — only an id the server looks up.
+  for (const bad of [
+    "docker://ssh://devbox@nexux-app",
+    "docker://-H@nexux-app",
+    "docker://a.b@nexux-app",
+    "docker://id@-app",
+    "docker://id@app/it's",
+  ]) {
+    assert.equal(parseDockerTerminalTarget(bad), null, bad);
+  }
+});
+
+test("a container on a known endpoint is exec'd through that daemon", posixShell, async () => {
+  const s = await connect({ cwd: "docker://ep1@nexux-app/opt/nexus", cols: "80", rows: "24" });
+  // The connect banner names the daemon, and docker's own failure to reach it
+  // proves -H went into argv (a local exec would say "No such container").
+  await s.waitFor(/nexux-app on ssh:\/\/nobody@nexux-test\.invalid/);
+  // Not /connect/ — the banner itself says "connecting".
+  await s.waitFor(/Could not resolve hostname|error during connect|docker: (command )?not found|ENOENT/i);
+  s.ws.close();
+});
+
+test("an unknown endpoint closes the session instead of falling back to this machine", posixShell, async () => {
+  const s = await connect({ cwd: "docker://gone@nexux-app", cols: "80", rows: "24" });
+  await s.waitFor(/no Docker endpoint gone/);
+  assert.ok(!/No such container/i.test(s.output()), s.output());
+  s.ws.close();
 });

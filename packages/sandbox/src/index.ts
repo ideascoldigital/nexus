@@ -1,4 +1,55 @@
 export * from "./types";
+// Spec 26 — remote Docker endpoints for local sandboxes.
+export {
+  describeDockerHostError,
+  dockerHostArgs,
+  explainProbeFailure,
+  parseDockerHost,
+  parseDockerInfo,
+  probeDockerEndpoint,
+  sshUrlParts,
+  type DockerEndpointInfo,
+  type DockerHostError,
+  type DockerTarget,
+  type ProbeResult,
+} from "./docker-endpoint";
+// Spec 29 — seed data restored into stack services.
+export {
+  renderSeedDump,
+  renderSeedReset,
+  renderSeedRestore,
+  SEED_DUMP_DIR,
+  seedDumpShape,
+  seedRemoteDir,
+  seedRemoteShaCommand,
+  seedWaitSeconds,
+  SEED_READY_MARKER,
+  SEEDS_DIR,
+  type SandboxSeedSpec,
+  type SeedEngine as SandboxSeedEngine,
+} from "./template-seed";
+// Spec 24 piece 1 — structured per-step bootstrap results.
+export {
+  assertStepName,
+  bootstrapReportCommand,
+  failedSteps,
+  parseBootstrapReport,
+  renderStepHelpers,
+  stepChain,
+  BOOTSTRAP_REPORT_PATH,
+  type BootstrapReport,
+  type BootstrapStep,
+  type StepSeverity,
+} from "./bootstrap-report";
+// Spec 24 piece 2 — does the app actually boot?
+export {
+  renderBootProbe,
+  renderBootProbeHelper,
+  renderStepTailHelper,
+  bootProbeLogPath,
+  BOOT_PROBE_TIMEOUT_SECONDS,
+  type BootProbeSpec,
+} from "./boot-probe";
 export {
   renderMainTf,
   renderCloudInit,
@@ -15,6 +66,9 @@ export {
   TS_UP_LOG,
 } from "./template";
 export {
+  // Shell-quoting, shared by both bootstraps and every caller that builds a
+  // remote command — one implementation, so a fix cannot land on only one.
+  shq,
   sandboxInstanceName,
   customSandboxName,
   normalizeSandboxPrefix,
@@ -39,6 +93,8 @@ export {
 export {
   renderHostCloudInit,
   renderHostCompose,
+  renderEndpointUpdater,
+  endpointHostProject,
   parseHostMarker,
   safeHostName,
   isValidImageRef,
@@ -52,15 +108,41 @@ export {
   HOST_UPDATE_REQUEST,
   type NexusHostSpec,
 } from "./template-host";
+// Spec 23 — the interactive browser session on a sandbox.
+export {
+  renderBrowserInstallSection,
+  renderBrowserStartScript,
+  renderBrowserStopScript,
+  parseBrowserStart,
+  isValidDisplay,
+  isValidPort,
+  isValidDimension,
+  BROWSER_DIR,
+  BROWSER_LOG,
+  BROWSER_READY_MARKER,
+  DEFAULT_DISPLAY,
+  DEFAULT_VNC_PORT,
+  DEFAULT_WS_PORT,
+  DEFAULT_CDP_PORT,
+  DEFAULT_WIDTH,
+  DEFAULT_HEIGHT,
+  VNC_TOKEN_LENGTH,
+  type BrowserSessionSpec,
+} from "./template-browser";
 export { runTerraform, terraformAvailable } from "./terraform";
 export {
+  endpointPrivateKeyPath,
+  ensureEndpointKeypair,
   ensureSandboxKeypair,
   sandboxKeyDir,
   sandboxPrivateKeyPath,
 } from "./keys";
 export {
+  endpointSshHostname,
   ensureUserSshInclude,
+  removeEndpointSshHost,
   removeSandboxSshHost,
+  upsertEndpointSshHost,
   sandboxSshConfigPath,
   sandboxSshHostAlias,
   upsertSandboxSshHost,
@@ -120,7 +202,19 @@ export {
   type MainRepoCandidate,
   type WorkspaceFolder,
 } from "./workspace";
+// Spec 24 piece 3 — the prebuilt base that makes a dry run affordable.
 export {
+  baseImageIsCurrent,
+  dryRunSpec,
+  renderBaseDockerfile,
+  BASE_IMAGE_TAG,
+  BASE_IMAGE_VERSION,
+  DRY_RUN_SKIPS,
+} from "./base-image";
+export {
+  browserWsPort,
+  buildSandboxBaseImage,
+  resolveBaseImage,
   dockerAvailable,
   launchLocalSandbox,
   localBootstrapComplete,

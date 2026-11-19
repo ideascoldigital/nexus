@@ -234,20 +234,103 @@ test("syncing an up-to-date checkout says so rather than claiming a change", asy
   assert.match(out.message, /Already up to date/);
 });
 
-test("syncing refuses to touch a checkout with local changes", async () => {
+const GIT_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@e",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@e",
+};
+const gitIn = (dir: string, args: string[]) => execFileAsync("git", ["-C", dir, ...args], { env: GIT_ENV });
+
+/** Push a commit that edits `file` on origin's main. */
+async function commitFileToOrigin(label: string, file: string, content: string) {
+  const work = path.join(scratch, `push-${label}`);
+  await execFileAsync("git", ["clone", "-q", origin, work]);
+  fs.writeFileSync(path.join(work, file), content);
+  await gitIn(work, ["add", "."]);
+  await gitIn(work, ["commit", "-qm", label]);
+  await gitIn(work, ["push", "-q", "origin", "main"]);
+}
+
+test("local edits the update does not touch are kept, and the update still lands", async () => {
+  // Refusing on any dirty file was stricter than git itself: a fast-forward
+  // that does not touch the edited files is safe, and git knows which is which.
+  const repo = await repoRow();
+  await cloneRepository(repo.id);
+  fs.writeFileSync(path.join(repo.localPath!, "README.md"), "edited locally");
+  await commitToOrigin("untouched-by-me");
+
+  const out = await cloneRepository(repo.id, { sync: true });
+  assert.equal(out.status, "ready", out.message);
+  assert.match(out.message, /Updated to/);
+  assert.ok(fs.existsSync(path.join(repo.localPath!, "untouched-by-me.txt")));
+  assert.equal(fs.readFileSync(path.join(repo.localPath!, "README.md"), "utf8"), "edited locally");
+});
+
+test("local edits the update does touch stop it, and nothing is changed", async () => {
   // This runs unattended from a button. Pulling over uncommitted work is how a
   // sync loses someone's afternoon.
   const repo = await repoRow();
   await cloneRepository(repo.id);
   fs.writeFileSync(path.join(repo.localPath!, "README.md"), "edited locally");
+  await commitFileToOrigin("conflicting", "README.md", "edited upstream");
 
   const out = await cloneRepository(repo.id, { sync: true });
   assert.equal(out.status, "error");
-  assert.match(out.message, /commit or stash/i);
-  assert.equal(
-    fs.readFileSync(path.join(repo.localPath!, "README.md"), "utf8"),
-    "edited locally",
-  );
+  assert.match(out.message, /files the update touches — commit or stash/);
+  assert.equal(fs.readFileSync(path.join(repo.localPath!, "README.md"), "utf8"), "edited locally");
+});
+
+test("a branch with no upstream adopts origin's branch of the same name", async () => {
+  const repo = await repoRow();
+  await cloneRepository(repo.id);
+  // The branch exists on origin, but this checkout was created without tracking.
+  const remoteWork = path.join(scratch, "push-feature");
+  await execFileAsync("git", ["clone", "-q", origin, remoteWork]);
+  await gitIn(remoteWork, ["checkout", "-qb", "feature"]);
+  fs.writeFileSync(path.join(remoteWork, "feature.txt"), "f");
+  await gitIn(remoteWork, ["add", "."]);
+  await gitIn(remoteWork, ["commit", "-qm", "feature"]);
+  await gitIn(remoteWork, ["push", "-q", "origin", "feature"]);
+  await gitIn(repo.localPath!, ["checkout", "-qb", "feature"]);
+
+  const out = await cloneRepository(repo.id, { sync: true });
+  assert.equal(out.status, "ready", out.message);
+  assert.match(out.message, /Updated to .*now tracking origin\/feature/);
+  assert.ok(fs.existsSync(path.join(repo.localPath!, "feature.txt")));
+});
+
+test("a local-only branch is not an error, and main is still brought up to date", async () => {
+  const repo = await repoRow();
+  await cloneRepository(repo.id);
+  await gitIn(repo.localPath!, ["checkout", "-qb", "docs/my-spec"]);
+  await commitToOrigin("main-moved");
+
+  const out = await cloneRepository(repo.id, { sync: true });
+  assert.equal(out.status, "ready", out.message);
+  assert.match(out.message, /docs\/my-spec is only local — nothing to pull/);
+  assert.match(out.message, /main updated to [0-9a-f]{7}/);
+  // main moved; the working tree (still on the feature branch) did not.
+  assert.ok(!fs.existsSync(path.join(repo.localPath!, "main-moved.txt")));
+  const mainHead = (await gitIn(repo.localPath!, ["rev-parse", "main"])).stdout.trim();
+  const originHead = (await gitIn(repo.localPath!, ["rev-parse", "origin/main"])).stdout.trim();
+  assert.equal(mainHead, originHead);
+});
+
+test("diverged history is reported with its counts, and left alone", async () => {
+  const repo = await repoRow();
+  await cloneRepository(repo.id);
+  fs.writeFileSync(path.join(repo.localPath!, "mine.txt"), "mine");
+  await gitIn(repo.localPath!, ["add", "."]);
+  await gitIn(repo.localPath!, ["commit", "-qm", "mine"]);
+  const before = (await gitIn(repo.localPath!, ["rev-parse", "HEAD"])).stdout.trim();
+  await commitToOrigin("theirs");
+
+  const out = await cloneRepository(repo.id, { sync: true });
+  assert.equal(out.status, "error");
+  assert.match(out.message, /diverged .*1 local and 1 remote commit/);
+  assert.equal((await gitIn(repo.localPath!, ["rev-parse", "HEAD"])).stdout.trim(), before);
 });
 
 test("without sync an existing checkout is confirmed, not pulled", async () => {

@@ -14,7 +14,7 @@ import { after, afterEach, test } from "node:test";
 // at module load and needs a database to point at even though nothing here
 // touches a row.
 import { testDbDir } from "../app/api/routes.test-setup";
-import { assertImagePullable } from "./host-manager";
+import { assertImagePullable, manifestPlatforms, ociArch } from "./host-manager";
 
 after(() => {
   fs.rmSync(testDbDir, { recursive: true, force: true });
@@ -47,6 +47,8 @@ function stubRegistry(
   authenticated: number,
   anonymous: number,
   host = "ghcr.io",
+  /** What a 200 manifest answers with — an index, when a test needs one. */
+  manifestBody: unknown = null,
 ) {
   const calls: string[] = [];
   // Which credentials the token being carried was issued to.
@@ -78,8 +80,9 @@ function stubRegistry(
     }
     const kind = issuedTo.get(bearer) ?? "anon";
     calls.push(`manifest:${kind}`);
-    return new Response(null, {
-      status: kind === "auth" ? authenticated : anonymous,
+    const status = kind === "auth" ? authenticated : anonymous;
+    return new Response(status === 200 && manifestBody ? JSON.stringify(manifestBody) : null, {
+      status,
     });
   }) as typeof fetch;
   return calls;
@@ -207,4 +210,33 @@ test("a non-GHCR image is not probed at all", async () => {
   }) as never;
   const out = await assertImagePullable("docker.io/library/nexus:1", null, false);
   assert.equal(out.registry, null);
+});
+
+// --- platforms (spec 27) ------------------------------------------------------
+
+const INDEX = {
+  manifests: [
+    { platform: { os: "linux", architecture: "amd64" } },
+    { platform: { os: "linux", architecture: "arm64", variant: "v8" } },
+    // Build attestations ride in the index too; they are not a platform.
+    { platform: { os: "unknown", architecture: "unknown" } },
+  ],
+};
+
+test("the platforms an image publishes come back with the pull check", async () => {
+  stubRegistry(200, 401, "ghcr.io", INDEX);
+  const out = await assertImagePullable("ghcr.io/o/r:edge", CRED, true);
+  assert.deepEqual(out.platforms, ["linux/amd64", "linux/arm64/v8"]);
+});
+
+test("a single-platform manifest says nothing about platforms, rather than none", () => {
+  assert.equal(manifestPlatforms({ config: {}, layers: [] }), null);
+  assert.equal(manifestPlatforms(null), null);
+  assert.deepEqual(manifestPlatforms(INDEX), ["linux/amd64", "linux/arm64/v8"]);
+});
+
+test("docker info's architecture maps to the names indexes use", () => {
+  assert.equal(ociArch("x86_64"), "amd64");
+  assert.equal(ociArch("aarch64"), "arm64");
+  assert.equal(ociArch("armv7l"), "arm");
 });

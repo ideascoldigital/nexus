@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { dockerTerminalTarget, terminalTargetAuthority } from "@/lib/terminal-target";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
@@ -132,12 +133,13 @@ export function TerminalManager({
         // Local sandboxes are containers with no public IP — reached through
         // `docker exec` on their container name instead of ssh.
         if (s.provider === "local") {
-          return s.instanceId
+          const cwd = dockerTerminalTarget(s, "/opt/nexus");
+          return cwd
             ? {
                 id: `sandbox:${s.id}`,
                 label: s.name,
-                cwd: `docker://${s.instanceId}/opt/nexus`,
-                hint: `docker exec ${s.instanceId} → /opt/nexus`,
+                cwd,
+                hint: `docker exec ${s.instanceId}${s.region !== "local" ? ` on ${s.region}` : ""} → /opt/nexus`,
               }
             : null;
         }
@@ -238,8 +240,8 @@ export function TerminalManager({
     setState((s) => {
       const tabs = s.tabs.filter((t) =>
         collectLeaves(t.root).every((l) => {
-          const m = l.cwd.match(/^(?:ssh:\/\/[^@]+@|docker:\/\/)([^/]+)/);
-          return !m || liveHosts.has(m[1]);
+          const authority = terminalTargetAuthority(l.cwd);
+          return !authority || liveHosts.has(authority);
         })
       );
       if (tabs.length === s.tabs.length) return s;

@@ -63,9 +63,49 @@ test("edges become depends_on; edge to local node warns", () => {
     ],
   });
   const doc = parse(out.yaml);
-  assert.deepEqual(doc.services.api.depends_on, ["postgres"]);
+  // Long form since spec 24 piece 2: postgres has a generated healthcheck, so
+  // the dependent waits for it to be *ready*, not merely started.
+  assert.deepEqual(doc.services.api.depends_on, {
+    postgres: { condition: "service_healthy" },
+  });
   assert.equal(out.warnings.length, 1);
   assert.match(out.warnings[0], /runs locally/);
+});
+
+test("a dependency we cannot probe is waited for as started, not healthy", () => {
+  // Demanding service_healthy from an image with no healthcheck would hang the
+  // `up` forever — compose has nothing to wait on.
+  const out = generateCompose({
+    projectName: "p",
+    nodes: [
+      { id: "a", kind: "repo", name: "api", runMode: "docker", localPath: "/repos/api" },
+      { id: "x", kind: "service", name: "custom", runMode: "docker", image: "acme/thing:1" },
+    ],
+    edges: [{ sourceId: "a", targetId: "x" }],
+  });
+  const doc = parse(out.yaml);
+  assert.deepEqual(doc.services.api.depends_on, {
+    custom: { condition: "service_started" },
+  });
+  assert.equal(doc.services.custom.healthcheck, undefined);
+});
+
+test("recognized services get a healthcheck, so --wait means ready", () => {
+  const out = generateCompose({
+    projectName: "p",
+    nodes: [
+      { id: "db", kind: "service", name: "postgres", runMode: "docker", image: "postgres:17" },
+      { id: "r", kind: "service", name: "redis", runMode: "docker", image: "redis:7" },
+    ],
+    edges: [],
+  });
+  const doc = parse(out.yaml);
+  assert.match(doc.services.postgres.healthcheck.test[1], /pg_isready/);
+  assert.match(doc.services.redis.healthcheck.test[1], /redis-cli ping/);
+  // Bounded well inside the bootstrap's existing --wait-timeout 180, so a
+  // healthcheck can never turn a stack that came up into one that times out.
+  assert.equal(doc.services.postgres.healthcheck.retries, 12);
+  assert.equal(doc.services.postgres.healthcheck.interval, "5s");
 });
 
 test("named volumes collected top-level, path volumes not", () => {

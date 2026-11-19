@@ -4,6 +4,7 @@ import Script from "next/script";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryProvider } from "@/providers/query-provider";
 import { Toaster } from "@/components/ui/toaster";
+import { APPEARANCE_BOOT_SCRIPT } from "@/lib/appearance";
 import "./globals.css";
 
 // Inter for display/UI, JetBrains Mono for labels, code and terminal.
@@ -35,9 +36,13 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${inter.variable} ${jetbrainsMono.variable} dark h-full antialiased`}
-      // data-titlebar is set by the script below, before hydration.
+      // The boot scripts below set data-layout, zoom, the theme class and data-titlebar before hydration;
+      // React would otherwise warn that the attribute differs from what the server sent.
       suppressHydrationWarning
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: APPEARANCE_BOOT_SCRIPT }} />
+      </head>
       <body className="h-full bg-background text-foreground">
         {/* In the macOS desktop app the title bar is an overlay: the traffic
             lights sit inside the page, which leaves room for them and marks

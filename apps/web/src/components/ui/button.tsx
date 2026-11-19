@@ -23,11 +23,24 @@ const buttonVariants = cva(
       },
       size: {
         default:
-          "h-8 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
-        xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
+          // Same rule as `sm` and `icon`: 32px on a phone, the app's own 8
+          // above sm. This is the size a form's Cancel/Submit pair uses, which
+          // is exactly where a missed tap costs the most.
+          "h-9 gap-1.5 px-3 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 sm:h-8 sm:px-2.5",
+        // The smallest variant, used for inline actions like Clear and Edit.
+        // h-8 below sm is a compromise rather than a full 36: these sit inside
+        // dense rows, and growing them further would push the row's own layout
+        // around. With the gap between rows it is comfortably tappable.
+        xs: "h-8 sm:h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2.5 sm:px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
+        // h-9 below sm, h-7 above: 28px is the density this dashboard was
+        // designed at and is half a comfortable thumb target. Fixing it here
+        // rather than per call site means every small button in the app gets a
+        // reachable size on a phone without a single desktop layout moving.
+        sm: "h-9 gap-1 rounded-[min(var(--radius-md),12px)] px-3 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 sm:h-7 sm:px-2.5 [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-9 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-3 has-data-[icon=inline-start]:pl-3",
-        icon: "size-8",
+        // Same reasoning as `sm`: an icon button has no label to widen it, so
+        // 32px is all a thumb gets unless this grows below sm.
+        icon: "size-9 sm:size-8",
         "icon-xs":
           "size-6 rounded-[min(var(--radius-md),10px)] in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",
         "icon-sm":

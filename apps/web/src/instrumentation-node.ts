@@ -9,6 +9,24 @@
 // bundler can leave the whole module out of the edge build, which is the shape
 // Next documents for exactly this reason.
 export async function registerNode() {
+  // One server per database, before anything else runs: the recovery pass
+  // below treats every in-flight task as orphaned, which is only true when no
+  // other server is running against the same file. See instance-lock.ts.
+  // From the client-free entry: importing "@nexux/db" would migrate first.
+  const { acquireInstanceLock, databasePath, describeLockConflict } = await import(
+    "@nexux/db/instance-lock"
+  );
+  const origin =
+    process.env.NEXUX_WEB_ORIGIN ??
+    `http://${process.env.HOSTNAME ?? "localhost"}:${process.env.PORT ?? "3000"}`;
+  const lock = acquireInstanceLock(databasePath(), { origin });
+  if (!lock.ok) {
+    console.error(describeLockConflict(lock));
+    process.exit(1);
+  }
+  process.once("exit", lock.release);
+  console.log(`[instrumentation] holding ${lock.path}`);
+
   // In dev, `pnpm dev` may already run the standalone terminal server; let an
   // explicit opt-out skip the in-process one to avoid a port clash.
   if (process.env.NEXUX_DISABLE_INPROC_TERMINAL !== "1") {
@@ -16,7 +34,18 @@ export async function registerNode() {
       const { startTerminalServer } = await import(
         "@nexux/terminal/terminal-server"
       );
-      const handle = startTerminalServer();
+      // Sessions on another machine's Docker name an endpoint id; the host
+      // comes from the database, never from the browser (spec 26).
+      const handle = startTerminalServer({
+        resolveDockerHost: async (endpointId) => {
+          const { prisma } = await import("@nexux/db");
+          const endpoint = await prisma.dockerEndpoint.findUnique({
+            where: { id: endpointId },
+            select: { host: true },
+          });
+          return endpoint?.host ?? null;
+        },
+      });
       console.log(`[instrumentation] terminal server up on :${handle.port}`);
     } catch (err) {
       console.error("[instrumentation] terminal server failed to start:", err);
@@ -68,6 +97,10 @@ export async function registerNode() {
       // Both drivers live in-process: first settle sandboxes whose
       // provision/destroy died with the previous process, then re-attach
       // supervision to whatever it left queued.
+      // A host's home is rebuilt on every update: put back the ssh config its
+      // endpoints are reached with before anything reaches for one.
+      const { restoreEndpointSsh } = await import("@/lib/docker-endpoints");
+      await restoreEndpointSsh().catch((err) => console.error("[instrumentation] endpoint ssh restore failed:", err));
       const { recoverOrphanSandboxes } = await import("@/lib/sandbox-manager");
       await recoverOrphanSandboxes();
       const { recoverPendingLaunches, recoverOrphanTasks } = await import(
@@ -84,6 +117,11 @@ export async function registerNode() {
       // Plan-mode runs have no queue to resume — just settle the orphans.
       const { recoverPlanRuns } = await import("@/lib/plan-runner");
       void recoverPlanRuns();
+      // Browser sessions are served by an SSH forward that was a child of the
+      // previous process, so every row still saying "running" is backed by
+      // nothing. Left alone the tab offers an iframe that can never connect.
+      const { reapForwards } = await import("@/lib/browser-session");
+      void reapForwards();
       // Bots: a dead process leaves unsupervised desktop containers behind —
       // delete them, settle their rows, then start the idle reaper.
       const { recoverBots } = await import("@/lib/bot-manager");

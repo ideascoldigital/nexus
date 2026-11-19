@@ -16,6 +16,25 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 
 /**
+ * The Dev Containers authority for attaching to a running container.
+ *
+ * On this machine's daemon it is the bare hex of the name, as before. On
+ * another machine's (spec 26) it is the extension's JSON form, whose
+ * `settings.host` it runs every docker command with as DOCKER_HOST — so
+ * `ssh://devbox` reaches the same daemon Nexux launched the sandbox on,
+ * with nothing to set up in VS Code first.
+ */
+export function attachedContainerAuthority(
+  container: string,
+  dockerHost: string | null,
+): string {
+  const config = dockerHost
+    ? JSON.stringify({ containerName: container, settings: { host: dockerHost } })
+    : container;
+  return `attached-container+${Buffer.from(config, "utf8").toString("hex")}`;
+}
+
+/**
  * Launch VS Code on `uri`. False = the caller should fall back to navigating
  * the browser to it.
  *

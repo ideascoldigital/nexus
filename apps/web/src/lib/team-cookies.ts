@@ -1,4 +1,4 @@
-// Shared sign-ins (spec 23), as Grok Bot does it: sign in on a site with one
+// Shared sign-ins (spec 31), as Grok Bot does it: sign in on a site with one
 // bot and every other bot can reach it too. Each bot keeps its own browser
 // (they work in parallel), so sign-ins travel as cookies:
 //

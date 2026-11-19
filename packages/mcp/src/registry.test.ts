@@ -20,11 +20,16 @@ function stubContext(over: Partial<NexuxContext> = {}): {
     listProjects: unexpected("listProjects"),
     getActivity: unexpected("getActivity"),
     listSandboxes: unexpected("listSandboxes"),
+    listDockerEndpoints: unexpected("listDockerEndpoints"),
     getTask: unexpected("getTask"),
     getTaskLogs: unexpected("getTaskLogs"),
     createTask: unexpected("createTask"),
     launchSandbox: unexpected("launchSandbox"),
     powerSandbox: unexpected("powerSandbox"),
+    resetSandboxData: unexpected("resetSandboxData"),
+    validateStack: unexpected("validateStack"),
+    describeStack: unexpected("describeStack"),
+    repairStack: unexpected("repairStack"),
     ...over,
   } as NexuxContext;
   return { ctx, calls };
@@ -248,4 +253,110 @@ test("a power action outside the allowed pair is refused", async () => {
   assert.ok(!res.ok);
   assert.match(res.error, /pause, resume/);
   assert.deepEqual(calls, [], "destroy never reached the host");
+});
+
+
+// --- spec 24 piece 4: validation ---------------------------------------------
+
+test("validating a stack is a read, not a write", async () => {
+  // It provisions nothing: the static checks are pure and the observed half
+  // reads a report off a sandbox that already exists. A write scope here would
+  // mean a read-only token could not ask whether its own project holds
+  // together, which is the question the tool exists for.
+  const tool = toolByName("nexux_validate_stack");
+  assert.equal(tool?.scope, "projects:read");
+  assert.equal(toolByName("nexux_describe_stack")?.scope, "projects:read");
+
+  const { ctx, calls } = stubContext({
+    validateStack: async (projectId: string) => {
+      calls.push(`validateStack:${projectId}`);
+      return { ok: true, findings: [], observed: null };
+    },
+  });
+  const res = await callTool(ctx, ["projects:read"], "nexux_validate_stack", {
+    projectId: "p1",
+  });
+  assert.equal(res.ok, true);
+  assert.ok(calls.includes("validateStack:p1"));
+});
+
+test("validation answers without a projectId are refused", async () => {
+  const { ctx } = stubContext();
+  for (const name of ["nexux_validate_stack", "nexux_describe_stack"]) {
+    const res = await callTool(ctx, ["projects:read"], name, {});
+    assert.equal(res.ok, false, `${name} accepted a missing projectId`);
+  }
+});
+
+test("the validation tools are listed for a read-only token", async () => {
+  // A tool that is refused but advertised invites a client to keep trying it;
+  // one that is usable but hidden is never found.
+  const names = toolsFor(["projects:read"]).map((t) => t.name);
+  assert.ok(names.includes("nexux_validate_stack"));
+  assert.ok(names.includes("nexux_describe_stack"));
+});
+
+
+test("repairing a stack is a write, and an expensive one", async () => {
+  // It edits the definition and runs validations that may provision
+  // containers. A read scope here would let a token issued as "read only"
+  // rewrite how a project runs.
+  assert.equal(toolByName("nexux_repair_stack")?.scope, "sandboxes:write");
+
+  const { ctx, calls } = stubContext({
+    repairStack: async (projectId: string, maxRounds?: number) => {
+      calls.push(`repairStack:${projectId}:${maxRounds ?? "default"}`);
+      return { rounds: [], ok: true };
+    },
+  });
+  const res = await callTool(ctx, ["sandboxes:write"], "nexux_repair_stack", {
+    projectId: "p1",
+    maxRounds: 2,
+  });
+  assert.equal(res.ok, true);
+  assert.ok(calls.includes("repairStack:p1:2"));
+});
+
+test("a read-only token cannot repair", async () => {
+  const { ctx } = stubContext();
+  const res = await callTool(ctx, ["projects:read"], "nexux_repair_stack", {
+    projectId: "p1",
+  });
+  assert.equal(res.ok, false);
+});
+
+test("an absurd round count is refused before it spends anything", async () => {
+  const { ctx } = stubContext();
+  const res = await callTool(ctx, ["sandboxes:write"], "nexux_repair_stack", {
+    projectId: "p1",
+    maxRounds: 50,
+  });
+  assert.equal(res.ok, false);
+});
+
+test("launch passes the chosen Docker endpoint through, and leaves it out when omitted", async () => {
+  const seen: unknown[] = [];
+  const { ctx } = stubContext({
+    launchSandbox: async (input) => {
+      seen.push(input);
+      return {} as never;
+    },
+  });
+  const launch = TOOLS.find((t) => t.name === "nexux_launch_sandbox")!;
+  await launch.run(ctx, launch.parse({ projectId: "p", provider: "local", dockerEndpoint: "devbox" }));
+  await launch.run(ctx, launch.parse({ projectId: "p" }));
+  assert.deepEqual(seen, [
+    { projectId: "p", provider: "local", name: undefined, dockerEndpoint: "devbox" },
+    { projectId: "p", provider: undefined, name: undefined, dockerEndpoint: undefined },
+  ]);
+});
+
+test("endpoints are listed under sandboxes:read, not projects:read", () => {
+  assert.ok(toolsFor(["sandboxes:read"]).some((t) => t.name === "nexux_list_docker_endpoints"));
+  assert.ok(!toolsFor(["projects:read"]).some((t) => t.name === "nexux_list_docker_endpoints"));
+});
+
+test("reset data is a write: listed for sandboxes:write, not for read", () => {
+  assert.ok(toolsFor(["sandboxes:write"]).some((t) => t.name === "nexux_reset_sandbox_data"));
+  assert.ok(!toolsFor(["sandboxes:read"]).some((t) => t.name === "nexux_reset_sandbox_data"));
 });

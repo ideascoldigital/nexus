@@ -1,4 +1,4 @@
-// Bots talking to each other (spec 23). A bot messages a teammate by ending a
+// Bots talking to each other (spec 31). A bot messages a teammate by ending a
 // reply with a block:
 //
 //   ```handoff

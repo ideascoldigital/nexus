@@ -225,7 +225,10 @@ export default function SkillsPage() {
       type="button"
       onClick={() => setSourceFilter(id)}
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+        // Real height below sm rather than a tap-target pseudo: these sit in a
+        // row, and overlapping hit areas would make which filter you tapped
+        // depend on paint order.
+        "flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[11px] transition-colors sm:h-auto sm:px-2.5 sm:py-1",
         sourceFilter === id
           ? id === "all"
             ? "border-primary/40 bg-primary/10 text-foreground"
@@ -244,7 +247,7 @@ export default function SkillsPage() {
     <>
       <AppHeader title="Skills" />
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto w-full max-w-6xl space-y-5 px-4 py-6">
+        <div className="mx-auto w-full max-w-page space-y-5 px-4 py-6">
           {/* ---- Hero ---------------------------------------------------- */}
           <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border/60 pb-5">
             <div className="flex items-start gap-3">

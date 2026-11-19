@@ -14,14 +14,14 @@ test("the hand-back prompt is recognised exactly, and previews as a status", () 
 test("the intro prompt is tagged, greets by name and lists the user's projects", async () => {
   const { INTRO_TAG, isIntro, isSystemPrompt, renderIntroPrompt } = await import("./bot-prompts");
   const p = renderIntroPrompt({
-    userName: "Cristhian",
+    userName: "Alex",
     role: null,
-    projects: [{ name: "Simplifybot", description: "AI assistants  for\nbusinesses" }, { name: "Rack" }],
+    projects: [{ name: "Acme Support", description: "AI assistants  for\nbusinesses" }, { name: "Rack" }],
     languageSample: "abre google",
   });
   assert.ok(p.startsWith(INTRO_TAG) && isIntro(p) && isSystemPrompt(p));
-  assert.match(p, /greet Cristhian by name/);
-  assert.match(p, /- Simplifybot: AI assistants for businesses\n- Rack/);
+  assert.match(p, /greet Alex by name/);
+  assert.match(p, /- Acme Support: AI assistants for businesses\n- Rack/);
   assert.match(p, /same language as this message they sent to another bot: "abre google"\. It is only a sample/);
   assert.match(p, /choices block/);
   const bare = renderIntroPrompt({ projects: [] });

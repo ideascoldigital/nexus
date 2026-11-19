@@ -1,4 +1,4 @@
-// Client fetchers for /api/bots (spec 23).
+// Client fetchers for /api/bots (spec 31).
 
 import type { BotShape } from "@/lib/bot-shapes";
 

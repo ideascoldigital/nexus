@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useResolvedTheme } from "@/hooks/use-resolved-theme";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -20,7 +21,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle, Loader2, SlidersHorizontal, Sparkles } from "lucide-react";
 
 import { useToast } from "@/hooks/use-toast";
 import { getProject } from "@/services/projects";
@@ -45,11 +46,15 @@ import type {
   StackSuggestion,
 } from "@/lib/stack/types";
 import { stackNodeTypes } from "./stack-nodes";
+import { LG_BREAKPOINT, useBelowBreakpoint } from "@/hooks/use-breakpoint";
 import { StackSidebar, STACK_DRAG_MIME, type StackDragPayload } from "./stack-sidebar";
 import { StackInspector } from "./stack-inspector";
 import { StackToolbar } from "./stack-toolbar";
+import { StackNodeList } from "./stack-node-list";
 import { StackLogsPanel } from "./stack-logs-panel";
 import { StackAssistantPanel } from "./stack-assistant-panel";
+import { StackProposalPanel } from "./stack-proposal-panel";
+import { FloatingPanel } from "./floating-panel";
 import {
   ResizableGroup,
   ResizableHandle,
@@ -184,6 +189,7 @@ function CanvasInner({
   projectId: string;
   onOpenSandboxes?: () => void;
 }) {
+  const theme = useResolvedTheme();
   const qc = useQueryClient();
   const { toast } = useToast();
   const { screenToFlowPosition, fitView } = useReactFlow();
@@ -244,12 +250,17 @@ function CanvasInner({
   const status = statusQuery.data;
   const running = status?.running ?? false;
 
+  // A canvas needs width to be a canvas; below lg it becomes a read-only list.
+  const narrow = useBelowBreakpoint(LG_BREAKPOINT);
+
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [dirty, setDirty] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
-  const [rightPanel, setRightPanel] = useState<"inspector" | "assistant" | null>(
+  const [rightPanel, setRightPanel] = useState<
+    "inspector" | "assistant" | "propose" | null
+  >(
     null
   );
 
@@ -542,6 +553,67 @@ function CanvasInner({
         y: 120 + nodes.length * 40,
       });
 
+      /**
+       * Draw the arrows a suggestion asked for.
+       *
+       * Runs inside setEdges so it sees nodes added earlier in this same
+       * apply — "create postgres" and "the api depends on it" usually arrive
+       * as one reply, and the target's id does not exist until the first half
+       * has run.
+       *
+       * A name that matches nothing is skipped silently: the agent naming a
+       * service the user never accepted is a wrong arrow, and drawing it
+       * would put a dependency on the canvas that nobody asked for.
+       */
+      const linkDependencies = (sourceId: string, names?: string[]) => {
+        if (!names?.length) return;
+        setNodes((currentNodes) => {
+          setEdges((eds) => {
+            // Resolve by every name the same node answers to. The agent is
+            // told to use catalog keys ("postgres"), while the node it just
+            // created carries the catalog's display name ("PostgreSQL") — so
+            // matching the visible name alone drops exactly the arrow the
+            // agent was most confident about.
+            const byName = new Map<string, string>();
+            for (const n of currentNodes) {
+              const alias = (v?: string | null) => {
+                if (!v) return;
+                const k = v.toLowerCase();
+                if (!byName.has(k)) byName.set(k, n.id);
+              };
+              alias(n.data.name);
+              const fromCatalog = SERVICE_CATALOG.find(
+                (d) => d.name === n.data.name || d.image === n.data.image,
+              );
+              alias(fromCatalog?.key);
+              // "postgres:17" → "postgres", for a raw image with no catalog
+              // entry.
+              alias(n.data.image?.split(":")[0]?.split("/").pop());
+            }
+            let next = eds;
+            for (const name of names) {
+              const targetId = byName.get(name.trim().toLowerCase());
+              // Never a self-edge: a cycle of one is a validation error the
+              // user would have to undo by hand.
+              if (!targetId || targetId === sourceId) continue;
+              if (
+                next.some((e) => e.source === sourceId && e.target === targetId)
+              ) {
+                continue;
+              }
+              next = next.concat({
+                ...DEFAULT_EDGE_OPTIONS,
+                id: `tmp-edge-${sourceId}-${targetId}`,
+                source: sourceId,
+                target: targetId,
+              });
+            }
+            return next;
+          });
+          return currentNodes;
+        });
+      };
+
       if (s.createService) {
         const def = s.createService.catalogKey
           ? SERVICE_CATALOG.find((d) => d.key === s.createService!.catalogKey)
@@ -582,24 +654,37 @@ function CanvasInner({
         setNodes((nds) =>
           nds.concat({ id: data.id, type: "service", position, data })
         );
+        linkDependencies(data.id, s.dependsOn);
         setDirty(true);
         return true;
       }
 
       // Patch an existing node (by nodeId or repositoryId)...
-      const target = nodes.find(
-        (n) =>
-          (s.nodeId && n.id === s.nodeId) ||
-          (s.repositoryId && n.data.repositoryId === s.repositoryId)
-      );
+      //
+      // `createNode` opts out: a repository can hold several runnable units —
+      // an API and a queue worker in one checkout — and without it a second
+      // suggestion for the same repo silently patches the first instead of
+      // adding the second, so the node you asked for goes missing.
+      const target = s.createNode
+        ? undefined
+        : nodes.find(
+            (n) =>
+              (s.nodeId && n.id === s.nodeId) ||
+              (s.repositoryId && n.data.repositoryId === s.repositoryId)
+          );
       if (target) {
-        if (!s.patch) return true;
-        setNodes((nds) =>
-          nds.map((n) =>
-            n.id === target.id ? { ...n, data: { ...n.data, ...s.patch } } : n
-          )
-        );
-        setDirty(true);
+        // A suggestion may carry only edges: "the api needs the database" is
+        // a complete thought with nothing to patch.
+        if (s.patch) {
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.id === target.id ? { ...n, data: { ...n.data, ...s.patch } } : n
+            )
+          );
+          setDirty(true);
+        }
+        linkDependencies(target.id, s.dependsOn);
+        if (s.dependsOn?.length) setDirty(true);
         return true;
       }
 
@@ -616,7 +701,9 @@ function CanvasInner({
           id: nextTmpId(),
           kind: "repo",
           repositoryId: repo.id,
-          name: repo.name,
+          // The unit's own name when the suggestion names one, so two nodes
+          // from one repo are distinguishable on the canvas.
+          name: s.createNode?.name ?? repo.name,
           runMode:
             s.patch?.runMode ?? (detection?.hasDockerfile ? "docker" : "local"),
           // Derived server-side from the columns on save.
@@ -635,7 +722,7 @@ function CanvasInner({
             s.patch?.localCommand ?? detection?.suggestedCommands.dev ?? null,
           stopCommand: s.patch?.stopCommand ?? null,
           managesServices: s.patch?.managesServices ?? false,
-          workdir: s.patch?.workdir ?? null,
+          workdir: s.patch?.workdir ?? s.createNode?.workdir ?? null,
           ports: s.patch?.ports ?? null,
           env: s.patch?.env ?? null,
           volumes: s.patch?.volumes ?? null,
@@ -647,6 +734,7 @@ function CanvasInner({
         setNodes((nds) =>
           nds.concat({ id: data.id, type: "repo", position, data })
         );
+        linkDependencies(data.id, s.dependsOn);
         setDirty(true);
         return true;
       }
@@ -657,7 +745,7 @@ function CanvasInner({
       });
       return false;
     },
-    [nodes, repositories, detections, setNodes, toast]
+    [nodes, repositories, detections, setNodes, setEdges, toast]
   );
 
   if (stackQuery.isLoading || projectQuery.isLoading) {
@@ -688,10 +776,26 @@ function CanvasInner({
         status={status}
         onStatusChanged={() => statusQuery.refetch()}
         assistantOpen={rightPanel === "assistant"}
+        proposeOpen={rightPanel === "propose"}
+        onTogglePropose={() =>
+          setRightPanel((p) => (p === "propose" ? null : "propose"))
+        }
         onToggleAssistant={() =>
           setRightPanel((p) => (p === "assistant" ? null : "assistant"))
         }
       />
+      {/* Below lg the canvas is 180px of viewport — a node graph nobody can
+          read, for an interaction (dragging) a phone does not offer. The list
+          answers what the canvas is for on a small screen: what is in this
+          stack and what depends on what. */}
+      {narrow ? (
+        <div className="rounded-lg border bg-background p-3">
+          <StackNodeList
+            nodes={stackQuery.data?.nodes ?? []}
+            edges={stackQuery.data?.edges ?? []}
+          />
+        </div>
+      ) : (
       <ResizableGroup
         orientation="vertical"
         persistId="stack-shell"
@@ -722,7 +826,9 @@ function CanvasInner({
               onEdgesChange={handleEdgesChange}
               onConnect={onConnect}
               onSelectionChange={handleSelectionChange}
-              colorMode="dark"
+              // Follows the page: pinned to dark, a light theme got light node text on
+              // white cards (the nodes are bg-card, React Flow colours the text).
+              colorMode={theme}
               fitView
               // Default fitView caps at zoom 1, so a two-node stack sits tiny
               // in the middle of the canvas. Let it scale up and keep a small
@@ -738,7 +844,7 @@ function CanvasInner({
               <MiniMap
                 pannable
                 zoomable
-                maskColor="rgba(0,0,0,0.6)"
+                maskColor={theme === "dark" ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.12)"}
                 nodeColor={(n) => (n.type === "repo" ? "#3b82f6" : "#a855f7")}
                 className="!m-2 !h-20 !w-32 rounded-md border border-border/60 !bg-background/80"
               />
@@ -766,52 +872,6 @@ function CanvasInner({
               )}
             </ReactFlow>
           </ResizablePanel>
-          {/* The right panel mounts and unmounts, so it carries its own id —
-              the group keeps a separate saved layout per configuration. */}
-          {rightPanel === "inspector" && selectedNode ? (
-            <>
-              <ResizableHandle />
-              <ResizablePanel
-                id="right"
-                defaultSize="24rem"
-                minSize="16rem"
-                maxSize="50%"
-              >
-                <StackInspector
-                  node={{ ...selectedNode.data, posX: selectedNode.position.x, posY: selectedNode.position.y }}
-                  onChange={patchSelected}
-                  onDelete={deleteSelected}
-                  onRedetect={() => {
-                    if (selectedNode.data.repositoryId) {
-                      detectMutation.mutate(selectedNode.data.repositoryId);
-                    }
-                  }}
-                  detecting={detectMutation.isPending}
-                  onClose={() => {
-                    selectedIdRef.current = null;
-                    setSelectedId(null);
-                    setRightPanel(null);
-                  }}
-                />
-              </ResizablePanel>
-            </>
-          ) : rightPanel === "assistant" ? (
-            <>
-              <ResizableHandle />
-              <ResizablePanel
-                id="right"
-                defaultSize="28rem"
-                minSize="18rem"
-                maxSize="50%"
-              >
-                <StackAssistantPanel
-                  projectId={projectId}
-                  onApplySuggestion={applySuggestion}
-                  onClose={() => setRightPanel(null)}
-                />
-              </ResizablePanel>
-            </>
-          ) : null}
         </ResizableGroup>
         </ResizablePanel>
         {logsOpen && <ResizableHandle direction="vertical" />}
@@ -834,6 +894,75 @@ function CanvasInner({
           />
         </ResizablePanel>
       </ResizableGroup>
+      )}
+
+      {/* Outside the split: a chat about the canvas should not take width from
+          the canvas you are describing to it. FloatingPanel lets the user dock
+          it beside the board when a conversation gets long enough to want a
+          column of its own. */}
+      {rightPanel === "propose" ? (
+        <FloatingPanel
+          id="stack-propose"
+          title="What do you need?"
+          icon={<Sparkles className="h-4 w-4 shrink-0 text-primary" />}
+          onClose={() => setRightPanel(null)}
+        >
+          <StackProposalPanel
+            projectId={projectId}
+            onApplySuggestion={applySuggestion}
+          />
+        </FloatingPanel>
+      ) : null}
+
+      {/* The inspector floats for a sharper reason than the chat does: as a
+          panel in the split it took its width from the canvas, so *selecting*
+          a node resized the board and slid that node out from under the
+          pointer — which made dragging feel broken, because the thing you had
+          just grabbed had moved. Floating, a click changes nothing but the
+          selection. */}
+      {rightPanel === "inspector" && selectedNode ? (
+        <FloatingPanel
+          id="stack-inspector"
+          title={selectedNode.data.name || "Node"}
+          icon={<SlidersHorizontal className="h-4 w-4 shrink-0 text-primary" />}
+          onClose={() => {
+            selectedIdRef.current = null;
+            setSelectedId(null);
+            setRightPanel(null);
+          }}
+        >
+          <StackInspector
+            projectId={projectId}
+            node={{
+              ...selectedNode.data,
+              posX: selectedNode.position.x,
+              posY: selectedNode.position.y,
+            }}
+            onChange={patchSelected}
+            onDelete={deleteSelected}
+            onRedetect={() => {
+              if (selectedNode.data.repositoryId) {
+                detectMutation.mutate(selectedNode.data.repositoryId);
+              }
+            }}
+            detecting={detectMutation.isPending}
+          />
+        </FloatingPanel>
+      ) : null}
+
+      {rightPanel === "assistant" ? (
+        <FloatingPanel
+          id="stack-assistant"
+          title="Stack assistant"
+          icon={<Sparkles className="h-4 w-4 shrink-0 text-primary" />}
+          onClose={() => setRightPanel(null)}
+        >
+          <StackAssistantPanel
+            projectId={projectId}
+            onApplySuggestion={applySuggestion}
+          />
+        </FloatingPanel>
+      ) : null}
     </div>
   );
 }

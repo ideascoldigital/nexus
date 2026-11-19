@@ -234,3 +234,73 @@ test("an empty suggestions array still strips the block", () => {
   assert.equal(message, "Nothing to change.");
   assert.deepEqual(suggestions, []);
 });
+
+// --- dependency edges ---
+
+test("dependsOn carries the arrows a suggestion asked for", () => {
+  const { suggestions } = parseStackSuggestions(
+    withBlock("The api needs the database.", {
+      suggestions: [
+        { nodeId: "api", dependsOn: ["postgres", "redis"], reason: "it queries both" },
+      ],
+    }),
+  );
+  assert.deepEqual(suggestions[0].dependsOn, ["postgres", "redis"]);
+});
+
+test("names are trimmed and de-duplicated", () => {
+  const { suggestions } = parseStackSuggestions(
+    withBlock("x", {
+      suggestions: [
+        { nodeId: "api", dependsOn: [" postgres ", "postgres", "redis"], reason: "r" },
+      ],
+    }),
+  );
+  assert.deepEqual(suggestions[0].dependsOn, ["postgres", "redis"]);
+});
+
+test("a malformed entry loses that entry, not the suggestion", () => {
+  // A model answering with an object or a null in the list should cost one
+  // arrow, not the whole proposal the user was about to apply.
+  const { suggestions } = parseStackSuggestions(
+    withBlock("x", {
+      suggestions: [
+        { nodeId: "api", dependsOn: ["postgres", null, { name: "redis" }, ""], reason: "r" },
+      ],
+    }),
+  );
+  assert.equal(suggestions.length, 1);
+  assert.deepEqual(suggestions[0].dependsOn, ["postgres"]);
+});
+
+test("dependsOn that is not an array is ignored", () => {
+  const { suggestions } = parseStackSuggestions(
+    withBlock("x", {
+      suggestions: [{ nodeId: "api", dependsOn: "postgres", reason: "r" }],
+    }),
+  );
+  assert.equal(suggestions.length, 1);
+  assert.equal(suggestions[0].dependsOn, undefined);
+});
+
+test("dependsOn alone is not a target — an edge needs a node to hang off", () => {
+  const { suggestions } = parseStackSuggestions(
+    withBlock("x", {
+      suggestions: [{ dependsOn: ["postgres"], reason: "r" }],
+    }),
+  );
+  assert.deepEqual(suggestions, []);
+});
+
+test("a suggestion may carry edges and no patch", () => {
+  // "The api needs the database" is a complete thought with nothing to change
+  // about the node itself.
+  const { suggestions } = parseStackSuggestions(
+    withBlock("x", {
+      suggestions: [{ nodeId: "api", dependsOn: ["postgres"], reason: "r" }],
+    }),
+  );
+  assert.equal(suggestions.length, 1);
+  assert.equal(suggestions[0].patch, undefined);
+  assert.deepEqual(suggestions[0].dependsOn, ["postgres"]);
+});

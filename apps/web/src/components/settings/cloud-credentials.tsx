@@ -30,6 +30,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NO_AUTOFILL } from "@/lib/utils";
+import { useCredentialCheck } from "@/components/settings/credential-check";
 import {
   Select,
   SelectContent,
@@ -434,6 +435,80 @@ export function NewCredentialForm({
 // Shared Settings-page card: saved credentials for a subset of providers,
 // plus creation. The same credentials are offered in each project's sandbox
 // settings drawer.
+/**
+ * One saved credential: its name and non-secret details, the Test controls
+ * where the provider has a check (spec 28), and delete. The test result
+ * expands below the line.
+ */
+function CredentialRow({
+  cred,
+  onDelete,
+  deleting,
+  justSaved = false,
+}: {
+  cred: CloudCredentialSummary;
+  onDelete: () => void;
+  deleting: boolean;
+  justSaved?: boolean;
+}) {
+  const check = useCredentialCheck(cred, justSaved);
+  return (
+    <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+      <div className="flex items-center gap-3">
+        <span className="text-sm font-medium">{cred.name}</span>
+        <Badge variant="secondary" className="text-[10px]">
+          {sandboxProviderLabel(cred.provider)}
+        </Badge>
+        {cred.hint && (
+          <code
+            className="text-[10px] text-muted-foreground"
+            title="Token (masked)"
+          >
+            {cred.hint}
+          </code>
+        )}
+        {/* Labelled, because an unadorned host sitting next to the
+            masked token reads as more of the same secret. For a
+            self-hosted install this is the one field that says which
+            instance the credential belongs to. */}
+        {cred.registryHost && (
+          <span
+            className="flex items-center gap-1 rounded bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+            title="Self-hosted instance saved on this credential — used for its container registry, and as the fallback git host when a project's repos do not say"
+          >
+            <Server className="h-3 w-3" />
+            <code>{cred.registryHost}</code>
+          </span>
+        )}
+        {/* Same reasoning as above: without it, two Tailscale
+            credentials differing only in control plane look identical. */}
+        {cred.loginServer && (
+          <span
+            className="flex items-center gap-1 rounded bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+            title="Self-hosted coordination server this credential joins (--login-server)"
+          >
+            <Network className="h-3 w-3" />
+            <code>{cred.loginServer}</code>
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-1">
+          {check.controls}
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            title="Delete credential"
+            onClick={onDelete}
+            disabled={deleting}
+          >
+            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+          </Button>
+        </div>
+      </div>
+      {check.details}
+    </div>
+  );
+}
+
 function CredentialsCard({
   title,
   description,
@@ -449,6 +524,8 @@ function CredentialsCard({
   const [provider, setProvider] = useState<CredentialProvider>(
     providers[0].value,
   );
+  // The row saved last tests itself once (spec 28 phase 4).
+  const [justSavedId, setJustSavedId] = useState<string | null>(null);
 
   const credentials = useQuery({
     queryKey: ["cloud-credentials"],
@@ -486,57 +563,13 @@ function CredentialsCard({
         ) : (
           <div className="space-y-2">
             {list.map((cred) => (
-              <div
+              <CredentialRow
                 key={cred.id}
-                className="flex items-center gap-3 rounded-md border border-border/50 bg-muted/20 px-3 py-2"
-              >
-                <span className="text-sm font-medium">{cred.name}</span>
-                <Badge variant="secondary" className="text-[10px]">
-                  {sandboxProviderLabel(cred.provider)}
-                </Badge>
-                {cred.hint && (
-                  <code
-                    className="text-[10px] text-muted-foreground"
-                    title="Token (masked)"
-                  >
-                    {cred.hint}
-                  </code>
-                )}
-                {/* Labelled, because an unadorned host sitting next to the
-                    masked token reads as more of the same secret. For a
-                    self-hosted install this is the one field that says which
-                    instance the credential belongs to. */}
-                {cred.registryHost && (
-                  <span
-                    className="flex items-center gap-1 rounded bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                    title="Self-hosted instance saved on this credential — used for its container registry, and as the fallback git host when a project's repos do not say"
-                  >
-                    <Server className="h-3 w-3" />
-                    <code>{cred.registryHost}</code>
-                  </span>
-                )}
-                {/* Same reasoning as above: without it, two Tailscale
-                    credentials differing only in control plane look identical. */}
-                {cred.loginServer && (
-                  <span
-                    className="flex items-center gap-1 rounded bg-muted/60 px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                    title="Self-hosted coordination server this credential joins (--login-server)"
-                  >
-                    <Network className="h-3 w-3" />
-                    <code>{cred.loginServer}</code>
-                  </span>
-                )}
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  className="ml-auto"
-                  title="Delete credential"
-                  onClick={() => deleteMutation.mutate(cred.id)}
-                  disabled={deleteMutation.isPending}
-                >
-                  <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                </Button>
-              </div>
+                cred={cred}
+                onDelete={() => deleteMutation.mutate(cred.id)}
+                deleting={deleteMutation.isPending}
+                justSaved={cred.id === justSavedId}
+              />
             ))}
           </div>
         )}
@@ -567,7 +600,13 @@ function CredentialsCard({
               </SelectContent>
             </Select>
           )}
-          <NewCredentialForm provider={provider} onSaved={invalidate} />
+          <NewCredentialForm
+            provider={provider}
+            onSaved={(created) => {
+              setJustSavedId(created.id);
+              invalidate();
+            }}
+          />
         </div>
       </CardContent>
     </Card>

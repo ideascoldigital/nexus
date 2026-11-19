@@ -39,6 +39,14 @@ import {
   resolveProviderCredentials,
   resolveTailscaleKey,
 } from "@/lib/sandbox-manager";
+import { probe as probeEndpoint } from "@/lib/docker-endpoints";
+import { checkCredential } from "@/lib/credential-checks";
+import {
+  destroyEndpointHost,
+  provisionEndpointHost,
+  updateEndpointHost,
+  type EndpointUpdateResult,
+} from "@/lib/host-endpoint";
 
 // Re-exported for the hosts routes, which historically import it from here.
 // The implementation moved to sandbox-manager so sandbox launches can share it
@@ -300,23 +308,31 @@ export async function assertImagePullable<
   registry: T | null,
   /** Whether the user picked this credential, or it was merely the one saved. */
   chosen: boolean,
-): Promise<{ registry: T | null }> {
+): Promise<{
+  registry: T | null;
+  /**
+   * `os/arch[/variant]` entries the image publishes, read off its index, or
+   * null when that cannot be told from here (a single-platform manifest, an
+   * unreachable registry, Docker Hub). Null is "no opinion", never "none".
+   */
+  platforms: string[] | null;
+}> {
   const host = registryHost(imageRef);
   const [maybeHost, ...rest] = imageRef.split("/");
   // Docker Hub is not something a saved git token authenticates against, and an
   // image with no registry component has no host to ask.
   if (!host || host === "docker.io" || maybeHost?.toLowerCase() !== host) {
-    return { registry };
+    return { registry, platforms: null };
   }
 
   // <host>/<owner>/<name>[:tag] — the tag is not part of the auth scope.
   const path = rest.join("/");
   const repository = path.split("@")[0].split(":")[0];
-  if (!repository) return { registry };
+  if (!repository) return { registry, platforms: null };
   const tag = imageTag(path);
 
   const realm = await tokenEndpoint(host, repository, tag);
-  if (!realm) return { registry }; // Unreachable or not a token registry.
+  if (!realm) return { registry, platforms: null }; // Unreachable or not a token registry.
 
   /**
    * Whether these credentials can actually fetch the manifest — the same
@@ -329,7 +345,9 @@ export async function assertImagePullable<
    * gap. `null` means the probe never got an answer — unreachable from here
    * says nothing about the host, so it passes.
    */
-  const probe = async (auth: typeof registry): Promise<number | null> => {
+  const probe = async (
+    auth: typeof registry,
+  ): Promise<{ status: number; platforms: string[] | null } | null> => {
     try {
       const tokenRes = await fetch(realm, {
         headers: auth
@@ -341,7 +359,7 @@ export async function assertImagePullable<
           : {},
         signal: AbortSignal.timeout(10_000),
       });
-      if (!tokenRes.ok) return tokenRes.status;
+      if (!tokenRes.ok) return { status: tokenRes.status, platforms: null };
 
       const body = (await tokenRes.json()) as {
         token?: unknown;
@@ -355,23 +373,29 @@ export async function assertImagePullable<
             : null;
       if (!bearer) return null;
 
+      // GET rather than HEAD: the index body is a few KB and names the
+      // platforms the image is published for (spec 27 — a host on an arm64
+      // endpoint cannot run an amd64-only image).
       const manifest = await fetch(
         `https://${host}/v2/${repository}/manifests/${tag}`,
         {
-          method: "HEAD",
           headers: { Authorization: `Bearer ${bearer}`, Accept: MANIFEST_ACCEPT },
           signal: AbortSignal.timeout(10_000),
         },
       );
-      return manifest.status;
+      const platforms = manifest.ok
+        ? await manifest.json().then(manifestPlatforms, () => null)
+        : null;
+      return { status: manifest.status, platforms };
     } catch {
       return null;
     }
   };
 
-  const status = await probe(registry);
+  const first = await probe(registry);
+  const status = first?.status ?? null;
   if (status === null || (status !== 401 && status !== 403 && status !== 404)) {
-    return { registry };
+    return { registry, platforms: first?.platforms ?? null };
   }
 
   // A rejected credential does not mean the image is unreachable: a token
@@ -385,9 +409,10 @@ export async function assertImagePullable<
   // on the image and not on the credential, and blaming the token for it sends
   // the user to fix the wrong thing.
   if (registry && !chosen) {
-    const anon = await probe(null);
+    const anonProbe = await probe(null);
+    const anon = anonProbe?.status ?? null;
     if (anon === null || (anon !== 401 && anon !== 403 && anon !== 404)) {
-      return { registry: null };
+      return { registry: null, platforms: anonProbe?.platforms ?? null };
     }
     // Anonymous says the tag is missing rather than forbidden: that is about
     // the image, so report it as such instead of blaming a token.
@@ -425,12 +450,75 @@ export async function assertImagePullable<
   );
 }
 
+/**
+ * Platforms an image index lists, as `os/arch[/variant]`. Null for anything
+ * that is not an index — a single-platform manifest names its platform only in
+ * its config blob, which is not worth a third request here.
+ */
+export function manifestPlatforms(body: unknown): string[] | null {
+  const manifests = (body as { manifests?: unknown })?.manifests;
+  if (!Array.isArray(manifests)) return null;
+  const out = manifests
+    .map((m) => (m as { platform?: { os?: unknown; architecture?: unknown; variant?: unknown } }).platform)
+    .filter((p) => p && typeof p.os === "string" && typeof p.architecture === "string")
+    // Attestation manifests ("unknown/unknown") describe provenance, not a platform.
+    .filter((p) => p!.os !== "unknown")
+    .map((p) => [p!.os, p!.architecture, typeof p!.variant === "string" ? p!.variant : null].filter(Boolean).join("/"));
+  return out.length ? out : null;
+}
+
+/** `docker info`'s Architecture in the names image indexes use. */
+export function ociArch(dockerArch: string): string {
+  const a = dockerArch.toLowerCase();
+  if (a === "x86_64" || a === "amd64") return "amd64";
+  if (a === "aarch64" || a === "arm64") return "arm64";
+  if (a.startsWith("armv7")) return "arm";
+  return a;
+}
+
+/**
+ * `assertImagePullable`, with the failure diagnosed when it was a chosen
+ * credential that failed. The pull check cannot tell "this token lacks
+ * read:packages" from "this token is dead" — both are a refused manifest — and
+ * it used to report expired tokens as a missing scope. Asking the provider
+ * about the token itself (spec 28) names the real cause.
+ */
+async function assertPullableDiagnosed<T extends { username: string; password: string; name: string; credentialId: string }>(
+  imageRef: string,
+  registry: T | null,
+  chosen: boolean,
+): ReturnType<typeof assertImagePullable<T>> {
+  try {
+    return await assertImagePullable(imageRef, registry, chosen);
+  } catch (err) {
+    if (registry) {
+      const cred = await prisma.cloudCredential.findUnique({ where: { id: registry.credentialId } });
+      const verdict = cred ? await checkCredential(cred).catch(() => null) : null;
+      // Only a definite rejection replaces the pull check's message. "Could
+      // not reach the provider" says nothing about the token, and reporting it
+      // as dead would be the same misdiagnosis in the other direction.
+      const rejected = verdict?.checks.find((c) => c.ok === false && /accepts (it|them)$/.test(c.label));
+      if (rejected) {
+        throw new Error(
+          `“${registry.name}” doesn't work at all — ${rejected.detail ?? "the provider rejected it."} Replace it in Settings → Git.`,
+        );
+      }
+    }
+    throw err;
+  }
+}
+
 export type HostReadiness = {
   terraformInstalled: boolean;
   hasCloudCredential: boolean;
   hasTailscaleCredential: boolean;
   /** Whether this install is itself running as a host (panel hides itself). */
   isHost: boolean;
+  /**
+   * When it is a host: a VM (can update itself) or a stack on a Docker
+   * endpoint (spec 27 — updated from the install that created it).
+   */
+  hostKind: "vm" | "endpoint" | null;
 };
 
 /**
@@ -450,12 +538,21 @@ export async function getHostReadiness(): Promise<HostReadiness> {
     hasCloudCredential: cloud > 0,
     hasTailscaleCredential: tailscale > 0,
     isHost: process.env.NEXUX_ROLE === "host",
+    hostKind:
+      process.env.NEXUX_ROLE !== "host"
+        ? null
+        : process.env.NEXUX_HOST_KIND === "endpoint"
+          ? "endpoint"
+          : "vm",
   };
 }
 
 export type CreateHostInput = {
   name: string;
-  provider: "civo" | "aws";
+  /** "docker-endpoint": the stack runs on a machine you already have (spec 27). */
+  provider: "civo" | "aws" | "docker-endpoint";
+  /** Which Docker endpoint, for provider "docker-endpoint". */
+  dockerEndpointId?: string | null;
   credentialId?: string | null;
   tailscaleCredentialId?: string | null;
   /** Git credential the host logs in to the image registry with (GHCR). */
@@ -478,6 +575,7 @@ export async function createHost(input: CreateHostInput) {
       "This install is itself a Nexus host. Create hosts from your local install.",
     );
   }
+  if (input.provider === "docker-endpoint") return createEndpointHost(input);
   if (!(await hasTerraform())) {
     throw new Error(
       "terraform CLI not found. Install it from developer.hashicorp.com/terraform and restart Nexus.",
@@ -534,7 +632,7 @@ export async function createHost(input: CreateHostInput) {
     imageRef,
     input.registryCredentialId,
   );
-  const { registry } = await assertImagePullable(
+  const { registry } = await assertPullableDiagnosed(
     imageRef,
     resolved,
     Boolean(input.registryCredentialId),
@@ -594,6 +692,193 @@ export async function createHost(input: CreateHostInput) {
   void op.finally(() => activeOps.delete(host.id));
 
   return prisma.nexusHost.findUnique({ where: { id: host.id } });
+}
+
+/**
+ * A host whose stack runs on a Docker endpoint (spec 27). Same discipline as a
+ * VM host: every precondition that can be checked is checked before the row
+ * exists — here there is no bill, but a host that can never start is still a
+ * row the user has to understand and clean up.
+ */
+async function createEndpointHost(input: CreateHostInput) {
+  const name = safeHostName(input.name);
+  const imageRef = (input.imageRef || DEFAULT_HOST_IMAGE).trim();
+  if (!isValidImageRef(imageRef)) {
+    throw new Error(
+      `"${imageRef}" is not a valid image reference (expected something like ghcr.io/owner/repo:tag).`,
+    );
+  }
+
+  const endpoint = input.dockerEndpointId
+    ? await prisma.dockerEndpoint.findUnique({ where: { id: input.dockerEndpointId } })
+    : null;
+  if (!endpoint) {
+    throw new Error("Pick a Docker endpoint (Settings → Cloud → Docker endpoints).");
+  }
+
+  // Two stacks with one project name on one daemon would be one stack.
+  const taken = await prisma.nexusHost.findFirst({
+    where: { name, status: { not: "destroyed" } },
+    select: { id: true },
+  });
+  if (taken) throw new Error(`There is already a host called "${name}".`);
+
+  // Same rule as a VM host (D-34), for the same reason: the stack publishes
+  // nothing, so a Tailscale that cannot join unattended is a host nobody can
+  // reach — and there is no other door it should have.
+  const tailscale = await resolveTailscaleKey(input.tailscaleCredentialId);
+  if (!tailscale?.authKey) {
+    throw new Error(
+      "A host needs a Tailscale credential with an auth key (Settings → Cloud) — it starts unattended and cannot complete a browser login.",
+    );
+  }
+
+  // Reachable now, and the architecture the image must match.
+  const probed = await probeEndpoint(endpoint.host);
+  if (!probed.ok) {
+    throw new Error(`Docker on "${endpoint.name}" isn't answering: ${probed.error}`);
+  }
+
+  const resolved = await resolveHostRegistryAuth(imageRef, input.registryCredentialId);
+  const { registry, platforms } = await assertPullableDiagnosed(
+    imageRef,
+    resolved,
+    Boolean(input.registryCredentialId),
+  );
+  const arch = probed.arch ? ociArch(probed.arch) : null;
+  if (arch && platforms && !platforms.some((p) => p.split("/")[1] === arch)) {
+    throw new Error(
+      `${imageRef} is published for ${platforms.join(", ")} — "${endpoint.name}" is ${arch}, so it could never start there.`,
+    );
+  }
+
+  const host = await prisma.nexusHost.create({
+    data: {
+      name,
+      status: "pending",
+      provider: "docker-endpoint",
+      dockerEndpointId: endpoint.id,
+      tailscaleCredentialId: tailscale.credentialId,
+      registryCredentialId: registry?.credentialId ?? null,
+      // What the list shows as "where" and "what": the machine, and Docker.
+      region: endpoint.name,
+      size: "docker",
+      diskImage: "",
+      imageRef,
+      pullEmbeddingModel: input.pullEmbeddingModel ?? true,
+      workDir: "",
+    },
+  });
+  const workDir = hostWorkDir(host.id);
+  await prisma.nexusHost.update({ where: { id: host.id }, data: { workDir } });
+
+  // Route tests stop here: the row is what they check, and the endpoint they
+  // name may well be a real machine on this network. Env-guarded like
+  // NEXUX_TEST_TERRAFORM, so production cannot reach it.
+  if (process.env.NEXUX_TEST_HOST_PROVISION === "skip") {
+    return prisma.nexusHost.findUnique({ where: { id: host.id } });
+  }
+
+  const op = provisionEndpointHost(
+    {
+      name,
+      imageRef,
+      dockerHost: endpoint.host,
+      workDir,
+      tailscaleAuthKey: tailscale.authKey,
+      tailscaleLoginServer: tailscale.loginServer,
+      registry: registry
+        ? { host: registryHost(imageRef), username: registry.username, password: registry.password }
+        : null,
+      pullEmbeddingModel: input.pullEmbeddingModel ?? true,
+    },
+    {
+      log: (chunk) => void appendLog(host.id, chunk),
+      update: async (data) => {
+        await prisma.nexusHost.update({ where: { id: host.id }, data });
+      },
+    },
+  ).catch(async (err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    await appendLog(host.id, `[nexus-host] ERROR: ${message}\n`);
+    await prisma.nexusHost
+      .update({ where: { id: host.id }, data: { status: "error", error: message } })
+      .catch(() => undefined);
+  });
+  activeOps.set(host.id, op);
+  void op.finally(() => activeOps.delete(host.id));
+
+  return prisma.nexusHost.findUnique({ where: { id: host.id } });
+}
+
+/**
+ * Destroy a host whose stack runs on a Docker endpoint (spec 27): its
+ * containers and volumes there, its files here. Awaited like the VM path, so
+ * the route answers with the outcome.
+ */
+async function destroyOnEndpoint(host: { id: string; name: string; workDir: string; dockerEndpointId: string | null }) {
+  const endpoint = host.dockerEndpointId
+    ? await prisma.dockerEndpoint.findUnique({ where: { id: host.dockerEndpointId } })
+    : null;
+  if (!endpoint) {
+    throw new Error("The Docker endpoint this host ran on is gone — nothing left to remove it from.");
+  }
+  await prisma.nexusHost.update({
+    where: { id: host.id },
+    data: { status: "destroying", error: null },
+  });
+  const op = destroyEndpointHost(
+    { name: host.name, dockerHost: endpoint.host, workDir: host.workDir },
+    { log: (chunk) => void appendLog(host.id, chunk) },
+  )
+    .then(() =>
+      prisma.nexusHost.update({
+        where: { id: host.id },
+        data: { status: "destroyed", destroyedAt: new Date() },
+      }),
+    )
+    .catch(async (err: unknown) => {
+      await prisma.nexusHost.update({
+        where: { id: host.id },
+        data: { status: "error", error: err instanceof Error ? err.message : String(err) },
+      });
+      throw err;
+    });
+  activeOps.set(host.id, op);
+  void op.finally(() => activeOps.delete(host.id));
+  await op;
+  return prisma.nexusHost.findUnique({ where: { id: host.id } });
+}
+
+/**
+ * Update a host on a Docker endpoint from this install (spec 27): pull and
+ * `up -d` through `docker -H`. A private image logs in again with the
+ * credential it was created with — resolved now, since a token can have
+ * rotated since.
+ */
+export async function updateHostOnEndpoint(host: {
+  name: string;
+  imageRef: string;
+  workDir: string;
+  dockerEndpointId: string | null;
+  registryCredentialId: string | null;
+}): Promise<EndpointUpdateResult> {
+  const endpoint = host.dockerEndpointId
+    ? await prisma.dockerEndpoint.findUnique({ where: { id: host.dockerEndpointId } })
+    : null;
+  if (!endpoint) throw new Error("The Docker endpoint this host runs on is gone.");
+  const registry = host.registryCredentialId
+    ? await resolveHostRegistryAuth(host.imageRef, host.registryCredentialId)
+    : null;
+  return updateEndpointHost({
+    name: host.name,
+    imageRef: host.imageRef,
+    dockerHost: endpoint.host,
+    workDir: host.workDir,
+    registry: registry
+      ? { host: registryHost(host.imageRef), username: registry.username, password: registry.password }
+      : null,
+  });
 }
 
 async function provisionHost(
@@ -751,6 +1036,8 @@ export async function destroyHost(hostId: string) {
 
   const existing = activeOps.get(hostId);
   if (existing) await existing.catch(() => undefined);
+
+  if (host.provider === "docker-endpoint") return destroyOnEndpoint(host);
 
   const cloud = await resolveProviderCredentials(host.provider, host.credentialId);
   if (!cloud) {

@@ -88,6 +88,12 @@ export type DetectionResult = {
     start?: string;
   };
   envExampleKeys: string[];
+  /**
+   * The example file's values, keyed by name. Read by the seed to tell which
+   * engine a `DATABASE_URL` names (spec 25 piece 1) — the key alone cannot.
+   * Placeholder config from a committed file; a real `.env` is never read.
+   */
+  envExampleValues?: Record<string, string>;
   suggestedPorts: number[];
 };
 
@@ -204,9 +210,34 @@ export type StackSuggestion = {
   nodeId?: string;
   /** ...or a project repository (node created if not on canvas). */
   repositoryId?: string;
+  /**
+   * Force a NEW node for `repositoryId`, even when one already exists.
+   *
+   * A repository can hold several runnable units — an API and a queue worker
+   * in one checkout — and without this a second suggestion for the same repo
+   * silently patches the first instead of adding the second. The node that
+   * went missing is the one you asked for.
+   */
+  createNode?: { name: string; workdir?: string | null };
   /** Create a new infra service node (catalog key or raw image). */
   createService?: { catalogKey?: string; image?: string; name?: string };
   patch?: StackSuggestionPatch;
+  /**
+   * What this node needs in order to boot — the dependency arrows, by name.
+   *
+   * Without this an agent could propose a postgres and an api and had no way
+   * to say the api needs the postgres, leaving the user to draw every edge by
+   * hand on a canvas they did not lay out. The edges are not decoration: the
+   * harness orders startup by them and spec 24 turns them into
+   * `depends_on: service_healthy`, so a missing arrow is a service that boots
+   * before the database it queries.
+   *
+   * Names rather than ids, because the suggestion that creates a node and the
+   * one that depends on it are usually the same reply — the id does not exist
+   * yet. Resolved against the canvas when applied; a name that matches nothing
+   * is dropped rather than guessed at.
+   */
+  dependsOn?: string[];
   reason: string;
 };
 
@@ -219,8 +250,8 @@ export type StackAssistantMessage = {
 };
 
 export type StackAssistantState = {
-  conversationId: string;
-  messages: StackAssistantMessage[];
+  /** The project's Stack thread of the global assistant (spec 30). */
+  threadId: string;
   indexStatus: { indexed: boolean; count: number };
 };
 
@@ -260,9 +291,121 @@ export type StackInheritance = {
     installCommand: string | null;
     buildCommand: string | null;
     runCommand: string | null;
+    /**
+     * The port `runCommand` serves on, when the node declares one or the
+     * command reveals it. Drives the sandbox's boot probe (spec 24 piece 2);
+     * null means the probe is skipped rather than pointed at a guess.
+     */
+    runPort: number | null;
     /** True when the command launches containers rather than the app. */
     managesServices: boolean;
   }>;
   /** Human-readable notes for the sandbox UI. */
   notes: string[];
+};
+
+
+/**
+ * Spec 24 piece 4 — the Validate action's answer.
+ *
+ * Declared here rather than beside the service that builds it: the service
+ * reaches Prisma and SSH, and the toolbar that renders this must not drag
+ * either into the browser bundle. Same reason `api-scopes.ts` exists apart
+ * from `api-token.ts`.
+ */
+export type ValidationSeverity = "error" | "warning" | "info";
+
+export type ValidationFinding = {
+  /** Stable rule id, so the UI can group and the tests can pin. */
+  rule: string;
+  severity: ValidationSeverity;
+  nodeId: string | null;
+  nodeName: string | null;
+  message: string;
+  /** What to do about it. Absent when the message already says. */
+  fix?: string;
+};
+
+/** One step a real bootstrap recorded (spec 24 piece 1). */
+export type ObservedStep = {
+  step: string;
+  severity: "fatal" | "warn";
+  exitCode: number;
+  durationMs: number;
+  at: string;
+  tail?: string;
+};
+
+export type ObservedRun = {
+  sandboxId: string;
+  sandboxName: string;
+  sandboxStatus: string;
+  provisionedAt: string;
+  steps: ObservedStep[];
+  failed: ObservedStep[];
+  /** Null when no app declared a port — not the same as "it failed". */
+  booted: boolean | null;
+  /** Why there is no evidence, when there is none. */
+  unavailable?: string;
+};
+
+/** One thing that changed between two locks (spec 25 piece 3). */
+export type LockChange = {
+  kind: "repo" | "service" | "tooling";
+  name: string;
+  field: string;
+  before: string | null;
+  after: string | null;
+};
+
+export type StackValidation = {
+  /** The static checks passed. Says nothing about whether anything booted. */
+  ok: boolean;
+  findings: ValidationFinding[];
+  observed: ObservedRun | null;
+  /**
+   * The lock this run recorded, when it earned one: the static half passing is
+   * not enough, an actual boot has to have been observed. Null on most runs.
+   */
+  lock: {
+    id: string;
+    createdAt: string;
+    /** What this lock can honestly claim, in one sentence. */
+    summary: string;
+    /** Empty on the first lock — there is nothing to diff against. */
+    changes: LockChange[];
+  } | null;
+};
+
+
+/**
+ * One pass of the repair loop (spec 25 piece 2), as the UI reads it.
+ *
+ * Declared here rather than beside the service that produces it: that module
+ * reaches Prisma and the agent SDK, and the toolbar rendering this must not
+ * drag either into the browser bundle.
+ */
+export type RepairRound = {
+  round: number;
+  /** What validation reported, verbatim — the input the agent was given. */
+  problem: string;
+  applied: Array<{
+    nodeId: string;
+    nodeName: string;
+    /** One line: which fields changed to what. */
+    change: string;
+    /** The agent's own justification. */
+    reason: string;
+  }>;
+  /** Proposals the applier would not carry out, and why. */
+  refused: Array<{ reason: string; suggestion: string }>;
+  /** Did validation pass after this round's patches? */
+  ok: boolean;
+};
+
+export type RepairResult = {
+  rounds: RepairRound[];
+  ok: boolean;
+  /** Why the loop stopped, when it did not end clean. */
+  stoppedBecause?: string;
 };

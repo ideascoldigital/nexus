@@ -347,19 +347,22 @@ function RepoRow({
         <FolderGit2 className="h-3.5 w-3.5 text-muted-foreground" />
       </div>
       <div className="min-w-0 flex-1 space-y-1.5">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{repo.name}</span>
+        {/* Wraps as a unit: in a narrow rail a long name used to break onto
+            two lines while its badges sat vertically centred beside it. Now
+            the badges follow the name, or drop to the next line together. */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="min-w-0 break-words text-sm font-medium">{repo.name}</span>
           {repo.isMain && (
             <Badge
               variant="outline"
-              className="text-[9px] h-4 bg-amber-500/10 text-amber-400 border-amber-500/20"
+              className="shrink-0 text-[9px] h-4 bg-amber-500/10 text-amber-400 border-amber-500/20"
             >
               main
             </Badge>
           )}
           <Badge
             variant="outline"
-            className={cn("text-[9px] h-4", statusConfig.className)}
+            className={cn("shrink-0 text-[9px] h-4", statusConfig.className)}
           >
             {statusConfig.label}
           </Badge>
@@ -533,12 +536,16 @@ export function ProjectRepositories({ projectId }: { projectId: string }) {
 
   return (
     <Card className="border-border/50">
-      <CardHeader className="pb-3 flex flex-row items-center justify-between">
-        <CardTitle className="text-sm font-medium flex items-center gap-2">
-          <FolderGit2 className="h-4 w-4 text-muted-foreground" />
-          Repositories ({repos.length})
+      {/* Wraps rather than overflows: this card lives in a resizable rail
+          that can be dragged down to 18% of the page, where the title and
+          three buttons no longer fit on one line — and a row that cannot
+          shrink pushes "Add Repo" off the card's edge. */}
+      <CardHeader className="pb-3 flex flex-row flex-wrap items-center justify-between gap-2">
+        <CardTitle className="text-sm font-medium flex min-w-0 items-center gap-2">
+          <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="whitespace-nowrap">Repositories ({repos.length})</span>
         </CardTitle>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {missing > 0 && (
             <Button
               variant="outline"

@@ -28,13 +28,13 @@ test("only what changed in that browser counts", () => {
 });
 
 test("a stale browser does not overwrite a fresh login made elsewhere", () => {
-  const team: TeamStore = { cookies: { [cookieKey(ck("SID", ""))]: ck("SID", "fresh-from-isa") } };
+  const team: TeamStore = { cookies: { [cookieKey(ck("SID", ""))]: ck("SID", "fresh-from-maya") } };
   // Gastos still holds an old SID it had all along: unchanged in *its* browser, so no change.
   const gastosBefore = snapshotOf([ck("SID", "stale")]);
   const { set, changed } = applyChanges(team, diffCookies(gastosBefore, [ck("SID", "stale")]));
   assert.equal(changed, false);
   assert.equal(set.length, 0);
-  assert.equal(team.cookies[cookieKey(ck("SID", ""))]?.value, "fresh-from-isa");
+  assert.equal(team.cookies[cookieKey(ck("SID", ""))]?.value, "fresh-from-maya");
 });
 
 test("sign-ins travel; a removal in one browser never signs the others out", () => {
@@ -73,7 +73,7 @@ test("Google refuses copied sessions: its cookies never travel, nor stay in the 
   for (const d of [".google.com", "accounts.google.com", ".google.com.co", "mail.google.com", ".youtube.com", "lh3.googleusercontent.com"]) {
     assert.equal(isShareable({ domain: d }), false, d);
   }
-  for (const d of [".explee.com", "app.canva.com", ".facebook.com", "notgoogle.com", "google-analytics.example"]) {
+  for (const d of [".acme.example", "app.canva.com", ".facebook.com", "notgoogle.com", "google-analytics.example"]) {
     assert.equal(isShareable({ domain: d }), true, d);
   }
   const g = ck("SID", "v", { domain: ".google.com" });

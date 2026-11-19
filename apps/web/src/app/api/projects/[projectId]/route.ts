@@ -1,6 +1,9 @@
+import fs from "fs/promises";
 import { prisma } from "@nexux/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+
+import { seedsRoot } from "@/lib/seed/store";
 
 const updateProjectSchema = z.object({
   name: z.string().min(1).optional(),
@@ -79,5 +82,7 @@ export async function DELETE(
   const { projectId } = await params;
 
   await prisma.project.delete({ where: { id: projectId } });
+  // Seed files (spec 29) live on disk, not in a row the cascade can reach.
+  await fs.rm(seedsRoot(projectId), { recursive: true, force: true }).catch(() => undefined);
   return NextResponse.json({ success: true });
 }

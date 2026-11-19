@@ -44,7 +44,7 @@ const policy = (over: Partial<AgentPolicy> = {}): AgentPolicy => ({
 
 test("local sandbox targets its docker container", () => {
   const t = sandboxTarget(
-    { provider: "local", publicIp: null, instanceId: "ctr-1" },
+    { provider: "local", publicIp: null, instanceId: "ctr-1", dockerHost: null },
     "/opt/nexus/app",
   );
   assert.equal(t.container, "ctr-1");
@@ -52,11 +52,20 @@ test("local sandbox targets its docker container", () => {
   assert.equal(t.cwd, "/opt/nexus/app");
 });
 
+test("a sandbox on another machine's Docker carries its daemon", () => {
+  const t = sandboxTarget(
+    { provider: "local", publicIp: null, instanceId: "ctr-1", dockerHost: "ssh://devbox" },
+    "/opt/nexus/app",
+  );
+  assert.equal(t.container, "ctr-1");
+  assert.equal(t.dockerHost, "ssh://devbox");
+});
+
 test("local sandbox without container throws", () => {
   assert.throws(
     () =>
       sandboxTarget(
-        { provider: "local", publicIp: null, instanceId: null },
+        { provider: "local", publicIp: null, instanceId: null, dockerHost: null },
         "/x",
       ),
     /no container/,
@@ -66,7 +75,10 @@ test("local sandbox without container throws", () => {
 test("cloud sandbox without public IP throws", () => {
   assert.throws(
     () =>
-      sandboxTarget({ provider: "civo", publicIp: null, instanceId: "i" }, "/x"),
+      sandboxTarget(
+        { provider: "civo", publicIp: null, instanceId: "i", dockerHost: null },
+        "/x",
+      ),
     /no public IP/,
   );
 });

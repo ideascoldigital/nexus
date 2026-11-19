@@ -1,4 +1,4 @@
-// Bot routines, server side (spec 23): schedule math and the writes the bot's
+// Bot routines, server side (spec 31): schedule math and the writes the bot's
 // `routine` blocks turn into. Firing lives in bot-manager (it owns the queue).
 
 import { CronExpressionParser } from "cron-parser";

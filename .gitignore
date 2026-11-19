@@ -58,8 +58,13 @@ next-env.d.ts
 **/generated/prisma
 
 # database
-**/data/*.db
-**/data/*.db-journal
+#
+# The whole directory, not a list of extensions: CloudCredential.data and
+# ProjectEnvVar.value are stored as plaintext (ENCRYPTION_KEY is read in
+# @nexux/config and consumed by nothing), so this file holds live cloud keys
+# and git tokens. `*.db` alone missed a `dashboard.db.bak-20260919` sitting
+# next to it, which one `git add -A` would have published.
+**/data/
 
 # claude local — everything except the shared harness (hooks + their config)
 .claude/*

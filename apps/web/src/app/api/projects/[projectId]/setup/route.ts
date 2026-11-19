@@ -93,6 +93,8 @@ export async function GET(_req: NextRequest, { params }: Params) {
     reason: string | null;
     source: "settings" | "credential";
     credentialName: string | null;
+    /** Worth knowing even when applied — e.g. repos naming different tokens. */
+    note?: string | null;
   };
   const settingsEnvVars: GlobalEnvRow[] = globalSecrets
     .filter((row) => row.value?.trim())
@@ -124,7 +126,9 @@ export async function GET(_req: NextRequest, { params }: Params) {
   // was quietly also on the instance.
   const [gitTokens, claudeCred] = await Promise.all([
     resolveGitTokens(
-      project.repositories.map((r) => r.repoUrl),
+      // Main repo first (the query's order), as the launch orders them: it
+      // breaks a tie between repos naming different tokens.
+      project.repositories,
       project.sandboxConfig?.githubCredentialId,
     ),
     resolveClaudeCodeToken(project.sandboxConfig?.claudeCredentialId),
@@ -137,7 +141,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
     // Not everything derived from a credential is a secret: GITLAB_HOST is a
     // hostname, and masking it hides the one detail that says which instance
     // the token was wired to.
-    opts: { secret?: boolean } = {},
+    opts: { secret?: boolean; note?: string | null } = {},
   ) => {
     if (!key) return;
     const overridden = projectKeys.has(key);
@@ -148,10 +152,13 @@ export async function GET(_req: NextRequest, { params }: Params) {
       reason: overridden ? "overridden by a project env var" : null,
       source: "credential",
       credentialName,
+      note: opts.note ?? null,
     });
   };
   for (const git of gitTokens) {
-    pushCredentialVar(git.envKey, git.token, git.credentialName);
+    pushCredentialVar(git.envKey, git.token, git.credentialName, {
+      note: git.conflict,
+    });
     // Derived rather than configured, so without a row here the one value that
     // makes a self-hosted GitLab clone work appears nowhere in the UI.
     if (git.gitlabHost) {
@@ -226,10 +233,16 @@ export async function GET(_req: NextRequest, { params }: Params) {
 }
 
 const configSchema = z.object({
-  provider: z.enum(["civo", "aws"]).default("civo"),
+  // "local" belongs here as much as the cloud providers: launchSandbox reads
+  // `sandboxConfig.provider === "local"` to pick the container path, so a
+  // schema that refuses the value leaves that branch reachable only through a
+  // per-launch override and the drawer's choice never survives a save.
+  provider: z.enum(["civo", "aws", "local"]).default("civo"),
   credentialId: z.string().nullable().optional(),
   githubCredentialId: z.string().nullable().optional(),
   claudeCredentialId: z.string().nullable().optional(),
+  // provider "local": which machine's Docker (spec 26); null = this one.
+  dockerEndpointId: z.string().nullable().optional(),
   region: z.string().min(1),
   size: z.string().min(1),
   diskImage: z.string().min(1),
@@ -239,6 +252,7 @@ const configSchema = z.object({
   installNode: z.boolean(),
   installClaudeCode: z.boolean(),
   installAgentBrowser: z.boolean(),
+  installBrowserSession: z.boolean().optional(),
   installCloudflared: z.boolean(),
   installTailscale: z.boolean().optional(),
   tailscaleCredentialId: z.string().nullable().optional(),
@@ -317,12 +331,26 @@ export async function PUT(req: NextRequest, { params }: Params) {
     const tailscaleCredentialId = await checkCredential(
       config.tailscaleCredentialId,
     );
+    // Same rule: a removed endpoint means this machine, not a failed save.
+    // Saved whatever the provider: the drawer keeps "local" as its destination
+    // rather than in config.provider, and the endpoint only applies when a
+    // sandbox launches locally anyway.
+    const dockerEndpointId =
+      config.dockerEndpointId
+        ? ((
+            await prisma.dockerEndpoint.findUnique({
+              where: { id: config.dockerEndpointId },
+              select: { id: true },
+            })
+          )?.id ?? null)
+        : null;
 
     const data = {
       provider: config.provider,
       credentialId,
       githubCredentialId,
       claudeCredentialId,
+      dockerEndpointId,
       region: config.region,
       size: config.size,
       diskImage: config.diskImage,
@@ -332,6 +360,7 @@ export async function PUT(req: NextRequest, { params }: Params) {
       installNode: config.installNode,
       installClaudeCode: config.installClaudeCode,
       installAgentBrowser: config.installAgentBrowser,
+      installBrowserSession: Boolean(config.installBrowserSession),
       installCloudflared: config.installCloudflared,
       installTailscale: Boolean(config.installTailscale),
       tailscaleCredentialId,

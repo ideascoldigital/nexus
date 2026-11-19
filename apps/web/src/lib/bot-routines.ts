@@ -1,4 +1,4 @@
-// Bot routines (spec 23): recurring work a bot does on its own. Pure and
+// Bot routines (spec 31): recurring work a bot does on its own. Pure and
 // client-safe — the chat, the panel, the manager and the API all share it.
 //
 // The bot creates, changes or removes one by ending a reply with a block:

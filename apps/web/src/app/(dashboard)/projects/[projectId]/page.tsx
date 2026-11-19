@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LG_BREAKPOINT, useBelowBreakpoint } from "@/hooks/use-breakpoint";
 import {
   ResizableGroup,
   ResizableHandle,
@@ -357,6 +358,11 @@ export default function ProjectDetailPage({
     return { tab, section: null };
   };
   const [initial] = useState(readState);
+  // Below lg the overview stacks. That has to be a render decision rather than
+  // a class: react-resizable-panels writes pixel widths inline, so `lg:flex-col`
+  // leaves the rail at ~108px on a phone with its content shredded.
+  const stacked = useBelowBreakpoint(LG_BREAKPOINT);
+
   const [activeProjectTab, setActiveProjectTab] = useState<ProjectTab>(
     initial.tab,
   );
@@ -443,7 +449,7 @@ export default function ProjectDetailPage({
       <>
         <AppHeader title="Loading..." />
         <div className="flex-1 overflow-auto">
-          <div className="mx-auto w-full max-w-6xl px-4 py-6 space-y-4">
+          <div className="mx-auto w-full max-w-page px-4 py-6 space-y-4">
             <Skeleton className="h-8 w-48" />
             <Skeleton className="h-[300px] rounded-xl" />
           </div>
@@ -457,7 +463,7 @@ export default function ProjectDetailPage({
       <>
         <AppHeader title="Project" />
         <div className="flex-1 overflow-auto">
-          <div className="mx-auto w-full max-w-6xl px-4 py-6 space-y-4">
+          <div className="mx-auto w-full max-w-page px-4 py-6 space-y-4">
             <div className="flex flex-col items-center justify-center py-16 text-center">
               <p className="text-sm text-destructive mb-4">
                 Failed to load project.
@@ -484,11 +490,20 @@ export default function ProjectDetailPage({
       {/* Keeps the search index warm: auto-incremental build on open. */}
       <ProjectAutoIndexer projectId={projectId} />
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto w-full max-w-6xl">
+        <div className="mx-auto w-full max-w-page">
           {/* Tab bar attached under the topbar (prototype): tabs left,
               index status + project actions right. */}
           <Tabs value={activeProjectTab} onValueChange={setProjectTab}>
-            <div className="flex items-center gap-1 border-b border-border/60 bg-sidebar/60 px-5 pt-2">
+            {/* Scrolls on its own, so the row's natural width cannot widen the
+                panel. Without this the tabs plus the action buttons measure
+                ~610px, the page's scroller inherits that, and reaching Delete
+                on a phone drags the whole tab's content sideways with it —
+                you gain the buttons and lose the view you came for.
+
+                `min-w-0` is the half that makes it work: a flex child defaults
+                to min-width:auto, so it refuses to shrink below its content
+                and the overflow never becomes this element's to scroll. */}
+            <div className="flex min-w-0 items-center gap-1 overflow-x-auto border-b border-border/60 bg-sidebar/60 px-5 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <TabsList variant="line" className="border-b-0">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
                 <TabsTrigger value="features">
@@ -500,7 +515,7 @@ export default function ProjectDetailPage({
                   Terminal
                 </TabsTrigger>
               </TabsList>
-              <div className="ml-auto flex items-center gap-2 pb-1.5">
+              <div className="ml-auto flex shrink-0 items-center gap-2 pb-1.5">
                 <ProjectIndexStatus projectId={projectId} />
                 <ExportProjectDialog
                   projectId={project.id}
@@ -521,13 +536,22 @@ export default function ProjectDetailPage({
               {/* Resizable on lg+ so the Stack canvas can borrow width from
                   the checklist rail; stacked (and non-resizable) below that. */}
               <ResizableGroup
-                persistId="project-overview"
-                className="mt-4 h-auto flex-col gap-4 lg:flex-row lg:gap-0 lg:items-stretch"
+                // Below lg this is a plain stacked div, not a split: the
+                // library sizes panels inline, so classes cannot stack them,
+                // and a vertical group divides a fixed height — which
+                // collapses growing content to zero.
+                plain={stacked}
+                // Only the horizontal layout is worth remembering. A stacked
+                // one has nothing to drag, and sharing the key would let a
+                // phone visit overwrite the split a desktop user set.
+                persistId={stacked ? undefined : "project-overview"}
+                className="mt-4 h-auto gap-4 lg:gap-0 lg:items-stretch"
               >
                 <ResizablePanel
+                  plain={stacked}
                   id="main"
-                  defaultSize="66%"
-                  minSize="35%"
+                  defaultSize={stacked ? undefined : "66%"}
+                  minSize={stacked ? undefined : "35%"}
                   className="space-y-4 lg:pr-4"
                 >
                   {/* Definition — live multi-agent panel, collapsible hero */}
@@ -568,12 +592,16 @@ export default function ProjectDetailPage({
                   />
                 </ResizablePanel>
 
-                <ResizableHandle className="hidden lg:block" />
+                {/* Not rendered at all when stacked, rather than hidden with
+                    a class: a Separator outside a Group throws, and `hidden`
+                    still mounts it. */}
+                {!stacked && <ResizableHandle />}
 
                 <ResizablePanel
+                  plain={stacked}
                   id="rail"
-                  defaultSize="34%"
-                  minSize="18%"
+                  defaultSize={stacked ? undefined : "34%"}
+                  minSize={stacked ? undefined : "18%"}
                   className="space-y-4 lg:pl-4"
                 >
                   <ProjectSetupChecklist

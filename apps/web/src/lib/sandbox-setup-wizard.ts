@@ -4,10 +4,10 @@
  * The drawer restores itself from the URL (`?sandboxSetup=1&sandboxStep=…`),
  * so what a step *shows* has to survive a reload as faithfully as which step
  * is open. That is the part that was wrong: the step key round-tripped, but
- * the Type step's answer — local vs a cloud provider — did not, because
- * `SandboxConfig.provider` only stores `civo | aws`. A user who picked Local,
- * walked to Code and refreshed came back to Code with the destination quietly
- * flipped to a cloud instance.
+ * the Type step's answer — local vs a cloud provider — did not. A user who
+ * picked Local, walked to Code and refreshed came back to Code with the
+ * destination quietly flipped to a cloud instance. Saving now stores the
+ * destination as the provider, so a fresh open lands on the saved one too.
  *
  * Lives here, outside the component, so these rules can be unit-tested without
  * a DOM (this app's tests run under `tsx --test`).
@@ -105,16 +105,17 @@ export function resolveStep(
  * The destination to open with.
  *
  * The URL wins when it names one, because it records what the user last chose
- * in this drawer — including "local", which the saved config cannot express.
- * Without it, fall back to the saved provider, and to Civo for a config that
- * predates the field.
+ * in this drawer. Without it, fall back to the saved provider — "local"
+ * included: the config stores it now, so coercing it to Civo would reopen the
+ * drawer on a destination the project did not pick. Civo remains the fallback
+ * for a config that predates the field.
  */
 export function resolveDestination(
   fromUrl: string | null | undefined,
   savedProvider: string | null | undefined,
 ): SandboxDestination {
   if (isSandboxDestination(fromUrl)) return fromUrl;
-  return savedProvider === "aws" ? "aws" : "civo";
+  return isSandboxDestination(savedProvider) ? savedProvider : "civo";
 }
 
 /**

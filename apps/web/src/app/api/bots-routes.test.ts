@@ -165,7 +165,7 @@ test("routines: create, pause, validate and delete by hand", async () => {
 test("the bot's routine blocks create, update by name, reject and delete", async () => {
   const bot = await prisma.bot.create({ data: { name: "Gastos" } });
   let changes = await applyRoutineSpecs(bot.id, [
-    { name: "Actualizar gastos", cron: "0 8 * * 1", prompt: "Revisa Explee" },
+    { name: "Actualizar gastos", cron: "0 8 * * 1", prompt: "Revisa Acme Books" },
     { name: "Sin horario", prompt: "p" },
     { name: "Cron malo", cron: "lunes", prompt: "p" },
   ]);
@@ -174,7 +174,7 @@ test("the bot's routine blocks create, update by name, reject and delete", async
   assert.deepEqual(changes, [{ name: "Actualizar gastos", action: "updated" }]);
   const r = await prisma.botRoutine.findFirstOrThrow({ where: { botId: bot.id } });
   assert.equal(r.cron, "0 9 * * 1");
-  assert.equal(r.prompt, "Revisa Explee"); // untouched fields stay
+  assert.equal(r.prompt, "Revisa Acme Books"); // untouched fields stay
   assert.equal(r.nextRunAt, null); // paused
   changes = await applyRoutineSpecs(bot.id, [{ name: "Actualizar gastos", delete: true }]);
   assert.equal(changes[0]?.action, "deleted");

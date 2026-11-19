@@ -1,5 +1,6 @@
 import {
   asObject,
+  optionalInt,
   optionalString,
   requiredEnum,
   requiredString,
@@ -80,6 +81,7 @@ export const launchSandbox: ToolDefinition<{
   projectId: string;
   provider?: string;
   name?: string;
+  dockerEndpoint?: string;
 }> = {
   name: "nexux_launch_sandbox",
   description:
@@ -101,6 +103,13 @@ export const launchSandbox: ToolDefinition<{
         type: "string",
         description: "Optional. Omit to let Nexus generate one.",
       },
+      dockerEndpoint: {
+        type: "string",
+        description:
+          "Optional, local sandboxes only. Which machine's Docker: an id or " +
+          "name from nexux_list_docker_endpoints, or \"this-machine\". Omit " +
+          "to use the project's saved choice.",
+      },
     },
     required: ["projectId"],
     additionalProperties: false,
@@ -113,6 +122,7 @@ export const launchSandbox: ToolDefinition<{
       // its configured credentials, and the host is what knows that.
       provider: optionalString(obj, "provider"),
       name: optionalString(obj, "name"),
+      dockerEndpoint: optionalString(obj, "dockerEndpoint"),
     };
   },
   run: (ctx, args) =>
@@ -120,7 +130,35 @@ export const launchSandbox: ToolDefinition<{
       projectId: args.projectId,
       provider: args.provider,
       name: args.name,
+      dockerEndpoint: args.dockerEndpoint,
     }),
+};
+
+export const resetSandboxData: ToolDefinition<{ sandboxId: string; service?: string }> = {
+  name: "nexux_reset_sandbox_data",
+  description:
+    "Put a running sandbox's databases back to the project's seed data: each " +
+    "seeded database is emptied and restored, then the repos' install step " +
+    "(migrations) re-runs. Use it to start a test or a run from known data. " +
+    "Everything written to those databases in the sandbox is lost.",
+  scope: "sandboxes:write",
+  inputSchema: {
+    type: "object",
+    properties: {
+      sandboxId: { type: "string", description: "From nexux_list_sandboxes." },
+      service: {
+        type: "string",
+        description: "Optional. One compose service; omit to reset every seeded one.",
+      },
+    },
+    required: ["sandboxId"],
+    additionalProperties: false,
+  },
+  parse: (raw) => {
+    const obj = asObject(raw);
+    return { sandboxId: requiredString(obj, "sandboxId"), service: optionalString(obj, "service") };
+  },
+  run: (ctx, args) => ctx.resetSandboxData(args.sandboxId, args.service),
 };
 
 const POWER_ACTIONS = ["pause", "resume"] as const;
@@ -153,4 +191,60 @@ export const powerSandbox: ToolDefinition<{
   run: (ctx, args) => ctx.powerSandbox(args.sandboxId, args.action),
 };
 
-export const WRITE_TOOLS = [createTask, launchSandbox, powerSandbox] as const;
+
+
+/**
+ * Spec 25 piece 2. A write, and an expensive one: each round runs a validation
+ * that may provision a container, and it edits the stack definition in place.
+ *
+ * `sandboxes:write` rather than a new scope: what this ultimately spends is
+ * sandbox time, and a token trusted to launch one is trusted to run a few.
+ */
+export const repairStack: ToolDefinition<{
+  projectId: string;
+  maxRounds?: number;
+}> = {
+  name: "nexux_repair_stack",
+  description:
+    "Try to make a project's stack definition boot: validate it, read what " +
+    "failed, patch the definition, and validate again — up to three rounds. " +
+    "Returns the diff of what changed and why, plus anything it refused to " +
+    "do. It never deletes a node, never touches one the user wrote by hand, " +
+    "and never removes a run command or a port, because making the check not " +
+    "run is not making it pass. Call nexux_validate_stack first if you only " +
+    "want to know what is wrong.",
+  scope: "sandboxes:write",
+  inputSchema: {
+    type: "object",
+    properties: {
+      projectId: { type: "string", description: "From nexux_list_projects." },
+      maxRounds: {
+        type: "number",
+        description:
+          "Optional, 1-3. Fewer rounds cost less; each one runs a validation.",
+      },
+    },
+    required: ["projectId"],
+    additionalProperties: false,
+  },
+  parse: (raw) => {
+    const obj = asObject(raw);
+    // Bounded here rather than only described: a client asking for 50 rounds
+    // would otherwise spend 50 containers before anything refused it.
+    const rounds = optionalInt(obj, "maxRounds", { min: 1, max: 3 });
+    return {
+      projectId: requiredString(obj, "projectId"),
+      ...(rounds === undefined ? {} : { maxRounds: rounds }),
+    };
+  },
+  run: (ctx, args) => ctx.repairStack(args.projectId, args.maxRounds),
+};
+
+
+export const WRITE_TOOLS = [
+  createTask,
+  launchSandbox,
+  powerSandbox,
+  resetSandboxData,
+  repairStack,
+] as const;

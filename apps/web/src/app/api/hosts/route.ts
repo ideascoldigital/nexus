@@ -16,16 +16,22 @@ export const dynamic = "force-dynamic";
 
 const createSchema = z.object({
   name: z.string().min(1, "A name is required"),
-  provider: z.enum(["civo", "aws"]).default("civo"),
+  provider: z.enum(["civo", "aws", "docker-endpoint"]).default("civo"),
+  // provider "docker-endpoint" (spec 27): the machine the stack runs on.
+  dockerEndpointId: z.string().optional().nullable(),
   credentialId: z.string().optional().nullable(),
   tailscaleCredentialId: z.string().optional().nullable(),
   registryCredentialId: z.string().optional().nullable(),
-  region: z.string().min(1),
-  size: z.string().min(1),
+  // Required for a VM; an endpoint host has neither (see the refine below).
+  region: z.string().default(""),
+  size: z.string().default(""),
   diskImage: z.string().optional(),
   imageRef: z.string().optional(),
   pullEmbeddingModel: z.boolean().default(true),
   setupScript: z.string().optional().nullable(),
+}).refine((b) => b.provider === "docker-endpoint" || (b.region && b.size), {
+  message: "Region and size are required for a cloud host",
+  path: ["region"],
 });
 
 export async function GET() {
@@ -41,6 +47,7 @@ export async function GET() {
       region: true,
       size: true,
       instanceId: true,
+      dockerEndpointId: true,
       publicIp: true,
       tailscaleIp: true,
       tailscaleName: true,

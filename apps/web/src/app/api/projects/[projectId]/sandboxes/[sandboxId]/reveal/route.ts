@@ -23,7 +23,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
 
   const sandbox = await prisma.sandbox.findFirst({
     where: { id: sandboxId, projectId },
-    select: { provider: true },
+    select: { provider: true, dockerEndpointId: true },
   });
   if (!sandbox) {
     return NextResponse.json({ error: "Sandbox not found" }, { status: 404 });
@@ -31,6 +31,13 @@ export async function POST(_req: NextRequest, { params }: Params) {
   if (sandbox.provider !== "local") {
     return NextResponse.json(
       { error: "Only local sandboxes have files on this machine" },
+      { status: 400 },
+    );
+  }
+
+  if (sandbox.dockerEndpointId) {
+    return NextResponse.json(
+      { error: "This sandbox runs on a Docker endpoint — its files are on that machine, not this one" },
       { status: 400 },
     );
   }

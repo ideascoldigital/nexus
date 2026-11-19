@@ -17,6 +17,8 @@ function toSummary(cred: {
   provider: string;
   data: unknown;
   createdAt: Date;
+  lastCheck?: unknown;
+  lastCheckedAt?: Date | null;
 }) {
   const data = (cred.data ?? {}) as {
     token?: string;
@@ -49,6 +51,9 @@ function toSummary(cred: {
     // Not a secret, and the host form needs it to tell which credential can log
     // in to the registry an image lives on.
     registryHost: data.registryHost ?? null,
+    // The last Test result (spec 28) — built never to contain the secret.
+    lastCheck: cred.lastCheck ?? null,
+    lastCheckedAt: cred.lastCheckedAt ?? null,
     createdAt: cred.createdAt,
   };
 }

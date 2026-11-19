@@ -27,6 +27,15 @@ export type SandboxRepoSpec = {
   installCommand?: string | null;
   buildCommand?: string | null;
   runCommand?: string | null;
+  /**
+   * The port `runCommand` serves on, when the stack declares one.
+   *
+   * Only used to *verify* the app boots (spec 24 piece 2): the bootstrap
+   * starts it, waits for this port, and stops it again. Without a port there
+   * is nothing to wait for, so a repo that declares none is not probed —
+   * "the process stayed alive for three seconds" is not evidence the app works.
+   */
+  runPort?: number | null;
   /** Written to <repo>/.env after clone. */
   envVars?: Record<string, string>;
 };
@@ -49,6 +58,13 @@ export type SandboxSpec = {
   installOpenCode?: boolean;
   installAgentBrowser: boolean;
   installCloudflared: boolean;
+  /**
+   * Install the pieces an interactive browser session needs (spec 23): a
+   * virtual display, a VNC server and a WebSocket bridge. The browser itself
+   * is Chromium from `installAgentBrowser`, so this implies that install
+   * rather than adding a second one.
+   */
+  installBrowserSession?: boolean;
   /** Install tailscale and (with an auth key) join the tailnet at bootstrap. */
   installTailscale?: boolean;
   /**
@@ -81,13 +97,19 @@ export type SandboxSpec = {
   /**
    * Claude Code MCP servers (native `mcpServers` shape) — merged into
    * ~/.claude.json for the agent user and root at bootstrap, so headless
-   * runs, the dev console and the in-app terminal all load them.
+   * runs, the dev console and the in-app terminal all load them. With
+   * OpenCode installed, also translated into its opencode.json (mcp-config.ts).
    */
   mcpServers?: Record<string, unknown> | null;
   /** docker-compose YAML for stack services; started before repos are cloned. */
   stackComposeYaml?: string | null;
   /** Compose service names, for log lines only. */
   stackServiceNames?: string[];
+  /**
+   * Database backups to restore into stack services right after they start
+   * (spec 29). The files are pushed separately; the bootstrap waits for them.
+   */
+  seeds?: import("./template-seed").SandboxSeedSpec[];
   /**
    * Local stack nodes whose command launches their own containers
    * (`make docker-up`). Unlike stackComposeYaml these are the repo's own

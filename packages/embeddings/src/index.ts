@@ -40,6 +40,8 @@ export type IndexReport = {
 export type IndexOptions = {
   mode?: IndexMode;
   provider?: EmbeddingProvider;
+  /** Ollama address, already resolved by the caller (see resolveOllamaHost). */
+  ollamaHost?: string;
 };
 
 export async function indexProject(
@@ -112,7 +114,7 @@ async function indexProjectCore(
   const project = (await deps.db.findProject(projectId)) as IndexableProject | null;
   if (!project) throw new Error(`Project ${projectId} not found`);
 
-  const embedder = deps.getEmbedder(provider);
+  const embedder = deps.getEmbedder(provider, opts.ollamaHost);
   await embedder.ensureReady();
 
   let scanned = 0;
@@ -361,6 +363,8 @@ export type SearchOptions = {
   sourceTypes?: SourceType[];
   repoIds?: string[];
   provider?: EmbeddingProvider;
+  /** Ollama address, already resolved by the caller (see resolveOllamaHost). */
+  ollamaHost?: string;
 };
 
 export async function searchProject(
@@ -374,7 +378,7 @@ export async function searchProject(
   const dims = dimensionsFor(provider);
   const slug = projectSlug(projectId);
 
-  const embedder = deps.getEmbedder(provider);
+  const embedder = deps.getEmbedder(provider, opts.ollamaHost);
   await embedder.ensureReady();
   const { vector } = await embedder.embed(query);
 

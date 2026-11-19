@@ -1,4 +1,4 @@
-// The context a new bot's first message is built from (spec 23): the user's
+// The context a new bot's first message is built from (spec 31): the user's
 // first name (git's user.name — Nexux has no profile), their projects, and a
 // recent message of theirs for language.
 

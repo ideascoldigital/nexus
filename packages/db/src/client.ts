@@ -1,16 +1,9 @@
-import path from "path";
 import fs from "fs";
-import { getConfig } from "@nexux/config";
+import path from "path";
 import { PrismaClient } from "./generated/prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { ensureMigrated } from "./migrate";
-
-function resolveSqlitePath(url: string): string {
-  const filePath = url.slice("file:".length);
-  return path.isAbsolute(filePath)
-    ? filePath
-    : path.resolve(process.cwd(), filePath);
-}
+import { databasePath } from "./db-path";
 
 function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
@@ -33,11 +26,7 @@ const globalForPrisma = globalThis as unknown as {
 };
 
 function createPrismaClient(): PrismaClient {
-  const url = getConfig().databaseUrl;
-  if (!url.startsWith("file:")) {
-    throw new Error(`Unsupported DATABASE_URL scheme: ${url}`);
-  }
-  const dbPath = resolveSqlitePath(url);
+  const dbPath = databasePath();
   ensureDir(dbPath);
   maybeMigrate(dbPath);
   const adapter = new PrismaBetterSqlite3({ url: dbPath });

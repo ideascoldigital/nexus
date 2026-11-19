@@ -8,6 +8,8 @@ import type {
   StackLogLine,
   StackSaveInput,
   StackStatus,
+  StackValidation,
+  RepairResult,
 } from "@/lib/stack/types";
 
 export async function getStack(projectId: string): Promise<StackGraph> {
@@ -216,5 +218,48 @@ export async function getStackInheritance(
 ): Promise<StackInheritance> {
   const res = await fetch(`/api/projects/${projectId}/stack/inheritance`);
   if (!res.ok) throw new Error("Failed to load stack inheritance");
+  return res.json();
+}
+
+/**
+ * Spec 24 piece 4 — would this stack come up?
+ *
+ * POST because reading the observed half opens an SSH connection to the
+ * project's sandbox: too expensive to sit behind something a browser may
+ * prefetch.
+ */
+export async function validateStack(
+  projectId: string
+): Promise<StackValidation> {
+  const res = await fetch(`/api/projects/${projectId}/stack/validate`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Validation failed");
+  }
+  return res.json();
+}
+
+
+/**
+ * Spec 25 piece 2 — validate, patch, re-validate.
+ *
+ * Unlike `validateStack` this *writes*: it edits the stack definition and may
+ * provision a container per round. The caller shows the diff it returns.
+ */
+export async function repairStack(
+  projectId: string,
+  maxRounds?: number
+): Promise<RepairResult> {
+  const res = await fetch(`/api/projects/${projectId}/stack/repair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(maxRounds ? { maxRounds } : {}),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? "Repair failed");
+  }
   return res.json();
 }

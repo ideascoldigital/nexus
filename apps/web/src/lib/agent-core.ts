@@ -10,6 +10,8 @@ import { AGENT_USER, safeSlug, sandboxPrivateKeyPath } from "@nexux/sandbox";
 export type SandboxTarget = {
   host?: string;
   container?: string;
+  /** The daemon `container` lives on (spec 26); null = this machine. */
+  dockerHost?: string | null;
   user: string;
   privateKeyPath?: string;
   cwd: string;
@@ -20,6 +22,9 @@ export function sandboxTarget(
     provider: string;
     publicIp: string | null;
     instanceId: string | null;
+    // Required, not optional: a caller that selected a subset of the row
+    // and forgot this would silently exec on this machine's daemon instead.
+    dockerHost: string | null;
   },
   cwd: string,
   user: string = AGENT_USER,
@@ -28,7 +33,7 @@ export function sandboxTarget(
     if (!sandbox.instanceId) {
       throw new Error("Local sandbox has no container yet");
     }
-    return { container: sandbox.instanceId, user, cwd };
+    return { container: sandbox.instanceId, dockerHost: sandbox.dockerHost, user, cwd };
   }
   if (!sandbox.publicIp) throw new Error("Sandbox has no public IP");
   return {

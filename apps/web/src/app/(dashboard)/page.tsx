@@ -245,7 +245,7 @@ export default async function DashboardPage() {
       <div className="flex flex-1 min-h-0">
 
         <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-6xl px-4 py-6 space-y-5">
+        <div className="mx-auto w-full max-w-page px-4 py-6 space-y-5">
           {/* Pulse: spend, runs, delivery, machines, review queue. */}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             <StatTile
@@ -296,7 +296,11 @@ export default async function DashboardPage() {
           </div>
 
           {/* Title + summary */}
-          <div className="flex items-baseline justify-between">
+          {/* Wraps with a gap: at 375px the summary was pushed hard against the
+              heading — title ending at x=103, summary starting at x=103 — and
+              then wrapped to two lines, which reads as a collision rather than
+              as two pieces of information. */}
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
             <h1 className="text-[22px] font-semibold">Projects</h1>
             <p className="font-mono text-[11px] text-muted-foreground">
               {data.projects.length} project
@@ -422,7 +426,12 @@ export default async function DashboardPage() {
                               className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${meta.className} ${a.kind === "task-running" ? "animate-spin" : ""}`}
                             />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-xs">{a.text}</p>
+                              {/* Wraps on a phone instead of truncating: the
+                                  activity line is the sentence you came to
+                                  read, and "Sandbox nexux-browser-demo-43a952
+                                  paus…" loses the verb. Stays one line at md+,
+                                  where the row has the width for it. */}
+                              <p className="text-xs md:truncate">{a.text}</p>
                               <p className="font-mono text-[10px] text-muted-foreground">
                                 {formatDistanceToNow(a.time, {
                                   addSuffix: true,

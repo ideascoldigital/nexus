@@ -47,9 +47,27 @@ afterEach(() => {
   global.fetch = realFetch;
 });
 
-function mockLatestRelease(response: () => Response) {
+/**
+ * `releases/latest`, plus the tag-ref lookup the route makes to find which
+ * commit the release points at. `tagSha` of null answers 404 for the ref, the
+ * case where the commit check is unavailable and the version comparison has
+ * to carry the decision on its own.
+ */
+function mockLatestRelease(
+  response: () => Response,
+  tagSha: string | null = null,
+) {
   global.fetch = (async (input: RequestInfo | URL) => {
-    assert.match(String(input), /releases\/latest/);
+    const url = String(input);
+    if (/git\/ref\/tags/.test(url)) {
+      return tagSha
+        ? new Response(
+            JSON.stringify({ object: { type: "commit", sha: tagSha } }),
+            { status: 200 },
+          )
+        : new Response("not found", { status: 404 });
+    }
+    assert.match(url, /releases\/latest/);
     return response();
   }) as typeof fetch;
 }
@@ -152,4 +170,90 @@ test("GET serves stale cache when GitHub goes down later", async () => {
   }) as typeof fetch;
   const res = await getUpdates(req());
   assert.equal(res.status, 200, "stale beats error once something is cached");
+});
+
+// --- the commit check --------------------------------------------------------
+// `buildVersion()` memoizes per process ("resolved once per server process"),
+// so these cannot steer `current` by setting NEXUX_VERSION mid-suite — they
+// assert what the route *decides*, which is the part the commit changes.
+
+test("a release that tags this very build is not an update", async () => {
+  // The bug this exists for: PR #8 merged, the main build described itself
+  // against the tags that existed at that instant (0.1.9-1-g3839a18), and
+  // v0.2.0 was cut minutes later pointing at the same commit. Comparing
+  // versions said "0.2.0 > 0.1.9" and offered a host an update to the code it
+  // was already running — a byte-identical pull.
+  const sha = "3839a18e762a4231937af6dc3b38a44bebe99397";
+  process.env.NEXUX_GIT_SHA = sha;
+  mockLatestRelease(
+    () =>
+      new Response(
+        JSON.stringify({
+          tag_name: "v99.0.0",
+          published_at: "2026-09-20T03:33:45Z",
+          html_url: "https://github.com/ideascoldigital/nexus/releases/tag/v99.0.0",
+        }),
+        { status: 200 },
+      ),
+    sha,
+  );
+  try {
+    const body = await (await getUpdates(req(true))).json();
+    assert.equal(body.sameCommit, true, "the release tags this commit");
+    // v99.0.0 is newer than any version this build could report, so the
+    // version comparison alone would certainly have offered the update.
+    assert.equal(body.newer, false, "and there is nothing to update to");
+  } finally {
+    delete process.env.NEXUX_GIT_SHA;
+  }
+});
+
+test("a release tagging a different commit is still an update", async () => {
+  // The commit check must not swallow real updates.
+  process.env.NEXUX_GIT_SHA = "3839a18e762a4231937af6dc3b38a44bebe99397";
+  mockLatestRelease(
+    () =>
+      new Response(
+        JSON.stringify({
+          tag_name: "v99.0.0",
+          published_at: "2026-10-01T00:00:00Z",
+          html_url: "https://github.com/ideascoldigital/nexus/releases/tag/v99.0.0",
+        }),
+        { status: 200 },
+      ),
+    "c0ffee1234567890abcdef1234567890abcdef12",
+  );
+  try {
+    const body = await (await getUpdates(req(true))).json();
+    assert.equal(body.sameCommit, false);
+    assert.equal(body.newer, true);
+  } finally {
+    delete process.env.NEXUX_GIT_SHA;
+  }
+});
+
+test("an unresolvable tag falls back to comparing versions", async () => {
+  // GitHub down, a rate limit, a private repo without a token: the commit
+  // check is an extra signal, and losing it must leave the old behaviour
+  // intact rather than silence the badge.
+  process.env.NEXUX_GIT_SHA = "3839a18e762a4231937af6dc3b38a44bebe99397";
+  mockLatestRelease(
+    () =>
+      new Response(
+        JSON.stringify({
+          tag_name: "v99.0.0",
+          published_at: "2026-09-20T03:33:45Z",
+          html_url: "https://github.com/ideascoldigital/nexus/releases/tag/v99.0.0",
+        }),
+        { status: 200 },
+      ),
+    null,
+  );
+  try {
+    const body = await (await getUpdates(req(true))).json();
+    assert.equal(body.sameCommit, false, "unknown is not 'same'");
+    assert.equal(body.newer, true, "the version comparison still decides");
+  } finally {
+    delete process.env.NEXUX_GIT_SHA;
+  }
 });

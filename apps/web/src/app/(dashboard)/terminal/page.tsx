@@ -9,7 +9,7 @@ export default function TerminalPage() {
       <AppHeader title="Terminal" />
 
       <div className="flex-1 min-h-0 p-4">
-        <div className="mx-auto h-full w-full max-w-6xl rounded-lg overflow-hidden border shadow-sm">
+        <div className="mx-auto h-full w-full max-w-page rounded-lg overflow-hidden border shadow-sm">
           <RealTerminal />
         </div>
       </div>

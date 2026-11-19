@@ -21,7 +21,7 @@ const block = (o: unknown) => "```routine\n" + JSON.stringify(o) + "\n```";
 test("routine blocks are parsed out of a reply, malformed ones dropped", () => {
   const text = [
     "Listo, la dejé programada.",
-    block({ name: "Actualizar gastos", cron: "0 8 * * 1", prompt: "Revisa Explee", enabled: true }),
+    block({ name: "Actualizar gastos", cron: "0 8 * * 1", prompt: "Revisa Acme Books", enabled: true }),
     block({ name: "Vieja", delete: true }),
     "```routine\nnot json\n```",
     block({ cron: "0 8 * * 1" }),
@@ -29,7 +29,7 @@ test("routine blocks are parsed out of a reply, malformed ones dropped", () => {
   const { body, routines } = parseRoutineBlocks(text);
   assert.equal(body, "Listo, la dejé programada.");
   assert.deepEqual(routines, [
-    { name: "Actualizar gastos", cron: "0 8 * * 1", prompt: "Revisa Explee", enabled: true, delete: false },
+    { name: "Actualizar gastos", cron: "0 8 * * 1", prompt: "Revisa Acme Books", enabled: true, delete: false },
     { name: "Vieja", cron: undefined, prompt: undefined, enabled: undefined, delete: true },
   ]);
 });
@@ -70,9 +70,9 @@ test("the schedule picker round-trips the shapes it can show", () => {
 });
 
 test("a routine's run is tagged with its id and name, and labelled in words", () => {
-  const p = renderRoutinePrompt({ id: "r1", name: "Gastos", prompt: "Revisa Explee", label: "Every Monday around 8:00 AM" });
+  const p = renderRoutinePrompt({ id: "r1", name: "Gastos", prompt: "Revisa Acme Books", label: "Every Monday around 8:00 AM" });
   assert.deepEqual(routineRun(p), { id: "r1", name: "Gastos" });
-  assert.match(p, /Revisa Explee/);
+  assert.match(p, /Revisa Acme Books/);
   assert.equal(routineRun("hola"), null);
   assert.equal(promptLabel(p), "Routine · Gastos");
   assert.equal(promptLabel(HANDBACK_PROMPT), "Checking what you did on the computer");

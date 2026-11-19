@@ -74,10 +74,40 @@ type RecentTask = {
   projectName: string;
 };
 
-async function getMetrics(): Promise<WorkspaceMetrics> {
+async function getMetrics(): Promise<WorkspaceMetrics | null> {
   const res = await fetch("/api/metrics");
   if (!res.ok) throw new Error("Failed to load metrics");
-  return res.json();
+  return asWorkspaceMetrics(await res.json());
+}
+
+/**
+ * The workspace pulse, or null when the response is not it.
+ *
+ * `/api/metrics` used to serve these numbers and now serves the machine's own
+ * (memory, CPU, disk — D-?, PR #8); this page was never moved off it. The
+ * mismatch did not show up as a blank tile: `spend7d` came back undefined,
+ * `.toFixed(2)` threw *during render*, and React unmounted the whole route —
+ * so the entire projects page read "This page couldn't load" because four
+ * decorative tiles could not find their numbers.
+ *
+ * Hence a shape check rather than a `?? 0` per field: a missing number renders
+ * nothing, and the tiles can never again take the page down with them. The
+ * real fix is a route that serves this shape again, which nothing does today —
+ * `getWorkspaceMetrics()` in lib/metrics.ts is orphaned.
+ */
+function asWorkspaceMetrics(raw: unknown): WorkspaceMetrics | null {
+  const m = raw as Partial<WorkspaceMetrics> | null;
+  if (!m || typeof m !== "object") return null;
+  const complete =
+    typeof m.spend7d === "number" &&
+    typeof m.spendToday === "number" &&
+    Array.isArray(m.spendSeries14d) &&
+    typeof m.prs7d === "number" &&
+    typeof m.runs7d?.completed === "number" &&
+    typeof m.runs7d?.failed === "number" &&
+    typeof m.sandboxes?.cloud === "number" &&
+    typeof m.sandboxes?.local === "number";
+  return complete ? (m as WorkspaceMetrics) : null;
 }
 
 async function getRecentTasks(): Promise<RecentTask[]> {
@@ -334,7 +364,10 @@ export default function ProjectsPage() {
       type="button"
       onClick={() => setState(id)}
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+        // Real height on a phone rather than a `tap-target` pseudo: these sit
+        // in a row, and overlapping hit areas would make the pill you meant to
+        // tap depend on which one React painted last.
+        "flex h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[11px] transition-colors sm:h-auto sm:px-2.5 sm:py-1",
         state === id
           ? id === "up"
             ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
@@ -353,7 +386,7 @@ export default function ProjectsPage() {
     <>
       <AppHeader title="Projects" />
       <div className="flex-1 overflow-auto">
-        <div className="mx-auto w-full max-w-6xl space-y-5 px-4 py-6">
+        <div className="mx-auto w-full max-w-page space-y-5 px-4 py-6">
           {/* ---- Hero ---------------------------------------------------- */}
           <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border/60 pb-5">
             <div className="flex items-start gap-3">

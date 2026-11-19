@@ -160,6 +160,13 @@ import {
   type StackEnvSource,
   type StackServiceSummary,
 } from "@/services/sandbox";
+import { dockerTerminalTarget } from "@/lib/terminal-target";
+import { getDockerEndpoints } from "@/services/docker-endpoints";
+import { ContextCheck } from "@/components/settings/credential-check";
+import { DockerEndpointPicker } from "@/components/projects/docker-endpoint-picker";
+import { SandboxSeedResetDialog } from "@/components/projects/sandbox-seed-reset";
+import { SandboxSeedSaveDialog } from "@/components/projects/sandbox-seed-save";
+import { getSeeds } from "@/services/seeds";
 import { parseDotenvWithDiagnostics } from "@/lib/stack/dotenv";
 import {
   applyWizardParams,
@@ -180,6 +187,7 @@ import { ScheduledTasksCard } from "@/components/projects/scheduled-tasks-card";
 import { DevConsoleSheet } from "@/components/projects/dev-console";
 import { SandboxPrefixField } from "@/components/settings/sandbox-prefix-field";
 import { SandboxProcessPanel } from "@/components/projects/sandbox-processes";
+import { SandboxBrowserPanel } from "@/components/projects/sandbox-browser";
 import {
   detectAllRepositories,
   getStackInheritance,
@@ -554,9 +562,15 @@ export function ProjectSandboxes({
 
   const { readiness } = setup.data;
   const list = sandboxes.data ?? [];
-  const ready =
+  // Two independent paths to a sandbox, and the drawer already knows both:
+  // a cloud instance (terraform + a provider token) or a local container
+  // (Docker alone — `launchSandbox` asks for nothing else when the provider is
+  // "local"). Gating the button on the cloud path hid the one that needs no
+  // account at all.
+  const cloudReady =
     readiness.terraformInstalled &&
     (readiness.hasCivoToken || readiness.hasAwsCredentials);
+  const ready = cloudReady || readiness.dockerInstalled;
 
   // The in-app terminal lands in the main repo's checkout on the instance
   // (cloned or mounted — both live under /opt/nexus/<slug>).
@@ -599,7 +613,7 @@ export function ProjectSandboxes({
                 title={
                   ready
                     ? "Configure and launch an ephemeral instance"
-                    : "Install terraform and add Civo or AWS credentials first"
+                    : "Start Docker for a local sandbox, or install terraform and add Civo or AWS credentials for a cloud one"
                 }
               >
                 New sandbox
@@ -891,6 +905,11 @@ function SetupEditor({
   };
 
   const [config, setConfig] = useState<SandboxConfigInput>(() => ({
+    // `config.provider` names the *cloud* provider whose regions and sizes the
+    // form edits; where the sandbox runs is `destination`. A saved "local" is
+    // therefore not a provider this form can show — it resolves to the
+    // destination instead, and the cloud fields keep their Civo defaults until
+    // the user picks a cloud.
     provider: initialConfig.provider === "aws" ? "aws" : "civo",
     credentialId:
       initialConfig.credentialId ??
@@ -922,6 +941,7 @@ function SetupEditor({
     installClaudeCode: initialConfig.installClaudeCode,
     installOpenCode: initialConfig.installOpenCode ?? false,
     installAgentBrowser: initialConfig.installAgentBrowser,
+    installBrowserSession: initialConfig.installBrowserSession ?? false,
     installCloudflared: initialConfig.installCloudflared,
     installTailscale: initialConfig.installTailscale ?? false,
     tailscaleCredentialId:
@@ -939,6 +959,7 @@ function SetupEditor({
     captureScreenshots: initialConfig.captureScreenshots,
     livePreview: initialConfig.livePreview,
     previewPort: initialConfig.previewPort,
+    dockerEndpointId: initialConfig.dockerEndpointId ?? null,
     claudeModel: initialConfig.claudeModel ?? null,
     brain: initialConfig.brain === "opencode" ? "opencode" : "claude",
     openCodeModel: initialConfig.openCodeModel ?? null,
@@ -1014,7 +1035,14 @@ function SetupEditor({
       mcpServers = parsed as Record<string, Record<string, unknown>>;
     }
     return saveProjectSetup(projectId, {
-      config: { ...config, mcpServers },
+      // The destination is saved as the provider, "local" included, so the
+      // drawer reopens where it was left and a scheduled launch goes there too.
+      // `config.provider` stays the cloud the form edits (see its initializer).
+      config: {
+        ...config,
+        provider: destination === "local" ? "local" : config.provider,
+        mcpServers,
+      },
       repoSetups: Object.entries(repoSetups).map(([repositoryId, s]) => ({
         repositoryId,
         ...s,
@@ -1107,7 +1135,15 @@ function SetupEditor({
       await save();
       setSavedSnapshot(persisted);
       if (launchOverride) await launchOverride.action();
-      else await launchSandbox(projectId, provider, sandboxName);
+      else
+        await launchSandbox(
+          projectId,
+          provider,
+          sandboxName,
+          // The choice is saved with the config (save() above ran first); sent
+          // explicitly too, so this launch cannot race a stale saved value.
+          provider === "local" ? (config.dockerEndpointId ?? null) : null,
+        );
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["project-setup", projectId] });
@@ -1198,8 +1234,9 @@ function SetupEditor({
   // Launch step surfaces whatever is still missing.
   // Both the step and the Type step's answer are restored from the URL. The
   // destination has to come from there rather than from the saved config:
-  // SandboxConfig.provider is civo | aws, so "local" has nowhere else to live
-  // and a reload used to flip a local wizard back to a cloud instance.
+  // the saved provider is only what was last *saved*, and a reload mid-edit
+  // must keep the unsaved pick. Without one in the URL, the saved provider
+  // ("local" included — save() stores the destination) decides.
   // Read once on mount — afterwards this state is the truth and the URL mirrors it.
   const restored = useState(() =>
     restoreWizardState(
@@ -1213,6 +1250,24 @@ function SetupEditor({
     restored.destination,
   );
   const isLocal = destination === "local";
+  // Shared cache with the Which Docker picker — names the endpoint in the review.
+  const dockerEndpoints = useQuery({
+    queryKey: ["docker-endpoints"],
+    queryFn: getDockerEndpoints,
+    enabled: isLocal && Boolean(config.dockerEndpointId),
+  });
+  const endpointName = dockerEndpoints.data?.find((e) => e.id === config.dockerEndpointId)?.name;
+  // Spec 29 — a cloud launch that would carry seed data marked as holding
+  // real people's data says so, and waits for an explicit yes.
+  const projectSeeds = useQuery({
+    queryKey: ["project-seeds", projectId],
+    queryFn: () => getSeeds(projectId),
+    enabled: !isLocal && config.includeStackServices,
+  });
+  const sensitiveSeeds = !isLocal && config.includeStackServices
+    ? (projectSeeds.data?.seeds ?? []).filter((s) => s.enabled && s.sensitive)
+    : [];
+  const [seedCloudAck, setSeedCloudAck] = useState(false);
   const steps = stepsFor(destination);
   const [stepKey, setStepKeyState] = useState<WizardStepKey>(restored.step);
   const setStepKey = (key: WizardStepKey) => setStepKeyState(key);
@@ -1253,6 +1308,7 @@ function SetupEditor({
     config.installClaudeCode && "Claude Code",
     (config.installOpenCode || config.brain === "opencode") && "OpenCode",
     config.installAgentBrowser && "agent-browser",
+    config.installBrowserSession && "Browser session",
     config.installCloudflared && "cloudflared",
     config.installTailscale && "Tailscale",
   ].filter(Boolean) as string[];
@@ -1365,6 +1421,15 @@ function SetupEditor({
               );
             })}
           </div>
+          {isLocal && (
+            <DockerEndpointPicker
+              value={config.dockerEndpointId ?? null}
+              onChange={(dockerEndpointId) => setConfig({ ...config, dockerEndpointId })}
+              mountOnlyRepos={repositories
+                .filter((r) => !r.repoUrl && r.localPath)
+                .map((r) => r.name)}
+            />
+          )}
           {!isLocal && (
             <div className="grid gap-3">
               <CredentialPicker
@@ -1673,6 +1738,11 @@ function SetupEditor({
                     >
                       {g.applied ? "passed to every sandbox" : g.reason}
                     </span>
+                    {g.note && (
+                      <p className="basis-full text-[10px] text-amber-400">
+                        {g.note}
+                      </p>
+                    )}
                   </div>
                 ))}
                 <p className="text-[10px] text-muted-foreground">
@@ -1732,7 +1802,23 @@ function SetupEditor({
             <ToolToggle
               label="agent-browser"
               checked={config.installAgentBrowser}
-              onChange={(v) => setConfig({ ...config, installAgentBrowser: v })}
+              onChange={(v) =>
+                setConfig({
+                  ...config,
+                  installAgentBrowser: v,
+                  // The session is a display around *that* browser; without it
+                  // there is nothing to show, and `launchSandbox` forces the
+                  // flag off anyway. Clearing it here keeps the panel honest
+                  // instead of offering a toggle the bootstrap ignores.
+                  installBrowserSession: v ? config.installBrowserSession : false,
+                })
+              }
+            />
+            <ToolToggle
+              label="Browser session"
+              checked={config.installBrowserSession ?? false}
+              disabled={!config.installAgentBrowser}
+              onChange={(v) => setConfig({ ...config, installBrowserSession: v })}
             />
             <ToolToggle
               label="cloudflared"
@@ -1862,10 +1948,12 @@ function SetupEditor({
               Claude Code&apos;s native <code>mcpServers</code> JSON — written
               to <code>~/.claude.json</code> (agent user and root) at
               bootstrap, so headless runs, the dev console and the terminal
-              all load them. Applies to sandboxes launched after saving.
+              all load them. With OpenCode it is translated into its{" "}
+              <code>opencode.json</code> too. Applies to sandboxes launched
+              after saving.
               Auth: save the secret as a project env var and reference it as{" "}
               <code>{"${MY_KEY}"}</code> in <code>env</code>/<code>headers</code>{" "}
-              — Claude Code expands it; stdio servers also inherit the sandbox
+              — both brains expand it; stdio servers also inherit the sandbox
               env. OAuth-only MCPs don&apos;t work headless — prefer the API-key
               variant.
             </p>
@@ -1929,7 +2017,7 @@ function SetupEditor({
           <div className="grid gap-3">
             <CredentialPicker
               providers={["github", "gitlab", "bitbucket"]}
-              label="Git token"
+              label="Git token (fallback)"
               credentials={gitCredentials}
               value={config.githubCredentialId ?? null}
               legacyAvailable={envVars.some(
@@ -1938,6 +2026,16 @@ function SetupEditor({
               onChange={(githubCredentialId) =>
                 setConfig({ ...config, githubCredentialId })
               }
+            />
+            <p className="-mt-2 text-[10px] text-muted-foreground">
+              Each repo clones with the credential on its card; this one is
+              for repos that name none.
+            </p>
+            {/* Valid is half the answer; this is the other half (spec 28). */}
+            <ContextCheck
+              credentialId={config.githubCredentialId ?? null}
+              projectId={projectId}
+              label="Check access to this project's repos"
             />
             {config.brain === "claude" && (
               <CredentialPicker
@@ -2225,6 +2323,22 @@ function SetupEditor({
               Everything is saved with the project — launch now or just save.
             </p>
           </div>
+          {sensitiveSeeds.length > 0 && (
+            <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs">
+              <p className="flex items-center gap-1.5 font-medium text-amber-500">
+                <AlertTriangle className="h-3.5 w-3.5" /> Seed data with real people&apos;s data leaves this machine
+              </p>
+              <p className="text-muted-foreground">
+                {sensitiveSeeds.map((s) => s.fileName).join(", ")} will be copied to a{" "}
+                {destination === "aws" ? "AWS" : "Civo"} VM and restored there. Launch it locally instead, or switch
+                off &ldquo;Restore into new sandboxes&rdquo; on the service in the Stack canvas.
+              </p>
+              <label className="flex items-center gap-2">
+                <Switch checked={seedCloudAck} onCheckedChange={setSeedCloudAck} disabled={busy} />
+                <span>Send it to the cloud anyway</span>
+              </label>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label className="text-sm">Name</Label>
             <Input
@@ -2260,7 +2374,9 @@ function SetupEditor({
               label="Runs on"
               value={
                 isLocal
-                  ? "Local Docker container — free"
+                  ? config.dockerEndpointId
+                    ? `Docker container on ${endpointName ?? "a Docker endpoint"} — free`
+                    : "Local Docker container — free"
                   : `${providerLabel(config.provider)} · ${config.region} · ${config.size}${sizeInfo ? ` (~$${sizeInfo.hourly.toFixed(3)}/h)` : ""}`
               }
               onEdit={() => setStepKey(isLocal ? "type" : "machine")}
@@ -2375,7 +2491,7 @@ function SetupEditor({
               // — a local sandbox keeps the user's cloud provider on its saved
               // config, and launching that would ignore the Type step.
               onClick={() => launchMutation.mutate(destination)}
-              disabled={busy || !canLaunch}
+              disabled={busy || !canLaunch || (sensitiveSeeds.length > 0 && !seedCloudAck)}
               className="gap-1.5"
               title={
                 missingTokens.length > 0
@@ -2659,15 +2775,27 @@ function ToolToggle({
   label,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  /** For a tool that only means something alongside another one. */
+  disabled?: boolean;
 }) {
   return (
-    <label className="flex items-center justify-between gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2 cursor-pointer">
+    <label
+      className={`flex items-center justify-between gap-2 rounded-md border border-border/50 bg-muted/20 px-3 py-2 ${
+        disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+      }`}
+    >
       <span className="text-xs">{label}</span>
-      <Switch size="sm" checked={checked} onCheckedChange={onChange} />
+      <Switch
+        size="sm"
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onChange}
+      />
     </label>
   );
 }
@@ -2679,11 +2807,15 @@ function ReadinessBanner({
   readiness: SandboxReadiness;
   onCredentialsSaved: () => void;
 }) {
-  const { terraformInstalled, hasCivoToken, hasAwsCredentials } = readiness;
+  const { terraformInstalled, dockerInstalled, hasCivoToken, hasAwsCredentials } =
+    readiness;
 
   // Hidden once terraform is present and at least one provider is usable;
   // per-provider gaps are surfaced in the setup drawer next to the selector.
   if (terraformInstalled && (hasCivoToken || hasAwsCredentials)) return null;
+  // Docker on its own is a complete path — a local sandbox needs no cloud
+  // account, so a banner demanding one is telling the user to fix nothing.
+  if (dockerInstalled) return null;
 
   return (
     <div className="rounded-md border border-amber-500/20 bg-amber-500/5 p-3 space-y-3">
@@ -3796,11 +3928,13 @@ function SandboxRow({
   // from this session (node_modules, .next) would otherwise land root-owned and
   // break the dev servers and the agent, which both run as nexux. Passwordless
   // sudo is configured for the rare step that genuinely needs root.
+  // A container on another machine's Docker (spec 26). The terminal reaches
+  // it through its endpoint, and VS Code attaches with that daemon as its
+  // DOCKER_HOST.
+  const onRemoteDocker = Boolean(sandbox.dockerHost);
   const terminalTarget =
     sandbox.provider === "local"
-      ? sandbox.instanceId
-        ? `docker://${sandbox.instanceId}${terminalPath}`
-        : null
+      ? dockerTerminalTarget(sandbox, terminalPath)
       : sandbox.publicIp
         ? `ssh://nexus@${sandbox.publicIp}${terminalPath}`
         : null;
@@ -3978,6 +4112,12 @@ function SandboxRow({
       }),
   });
 
+  // Spec 29 phase 3 — only offered where there are stack services to reset.
+  const [seedResetOpen, setSeedResetOpen] = useState(false);
+  const [seedSaveOpen, setSeedSaveOpen] = useState(false);
+  const hasStackServices =
+    Array.isArray(sandbox.stackServices) && (sandbox.stackServices as unknown[]).length > 0;
+
   const copyPassword = async () => {
     try {
       const password = await getSandboxPassword(projectId, sandbox.id);
@@ -3999,6 +4139,20 @@ function SandboxRow({
         focus ? "border-primary/60 ring-1 ring-primary/30" : "border-border/50"
       }`}
     >
+      <SandboxSeedResetDialog
+        projectId={projectId}
+        sandboxId={sandbox.id}
+        sandboxName={sandbox.name}
+        open={seedResetOpen}
+        onOpenChange={setSeedResetOpen}
+      />
+      <SandboxSeedSaveDialog
+        projectId={projectId}
+        sandboxId={sandbox.id}
+        sandboxName={sandbox.name}
+        open={seedSaveOpen}
+        onOpenChange={setSeedSaveOpen}
+      />
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <button
           type="button"
@@ -4019,7 +4173,7 @@ function SandboxRow({
         <button
           type="button"
           onClick={copyName}
-          className="cursor-pointer rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="tap-target cursor-pointer rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           aria-label="Copy sandbox name"
           title="Copy sandbox name"
         >
@@ -4140,7 +4294,7 @@ function SandboxRow({
         {sandbox.status !== "destroyed" && (
           <DropdownMenu>
             <DropdownMenuTrigger
-              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="tap-target rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               aria-label="Sandbox actions"
             >
               <MoreHorizontal className="h-4 w-4" />
@@ -4182,7 +4336,19 @@ function SandboxRow({
                     : "Retry setup"}
                 </DropdownMenuItem>
               )}
-              {sandbox.provider === "local" && (
+              {sandbox.status === "running" && hasStackServices && (
+                <DropdownMenuItem onClick={() => setSeedResetOpen(true)}>
+                  Reset data…
+                </DropdownMenuItem>
+              )}
+              {sandbox.status === "running" && hasStackServices && (
+                <DropdownMenuItem onClick={() => setSeedSaveOpen(true)}>
+                  Save data as seed…
+                </DropdownMenuItem>
+              )}
+              {/* An endpoint's sandbox (every one, on a host) has no folder
+                  here: mount-only repos are refused there (spec 26). */}
+              {sandbox.provider === "local" && !sandbox.dockerEndpointId && (
                 <DropdownMenuItem
                   onClick={() => reveal.mutate()}
                   disabled={reveal.isPending}
@@ -4318,6 +4484,14 @@ function SandboxRow({
       )}
       {sandbox.status === "running" && (
         <SandboxProcessPanel projectId={projectId} sandboxId={sandbox.id} />
+      )}
+      {sandbox.status === "running" && (
+        <SandboxBrowserPanel
+          projectId={projectId}
+          sandboxId={sandbox.id}
+          provider={sandbox.provider}
+          remoteDocker={onRemoteDocker}
+        />
       )}
       {showLog && (
         <>

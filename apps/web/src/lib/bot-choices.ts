@@ -1,4 +1,4 @@
-// Multiple-choice questions from a bot (spec 23). The bot ends a reply with a
+// Multiple-choice questions from a bot (spec 31). The bot ends a reply with a
 // fenced block the chat renders as buttons (A, B, C… plus "Something else"):
 //
 //   ```choices

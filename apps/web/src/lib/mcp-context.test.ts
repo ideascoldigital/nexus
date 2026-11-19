@@ -6,7 +6,7 @@ import { before, beforeEach, test } from "node:test";
 import "../app/api/routes.test-setup";
 import { prisma } from "@nexux/db";
 
-import { createMcpContext } from "./mcp-context";
+import { createMcpContext, resolveEndpointArg, sandboxRunsOn } from "./mcp-context";
 
 /**
  * The host half of the control surface: real rows in, the package's shapes
@@ -255,4 +255,40 @@ test("powering another workspace's sandbox is refused", async () => {
     () => ctx.powerSandbox(otherSandbox.id, "pause"),
     /Sandbox not found/,
   );
+});
+
+// --- where a sandbox runs (spec 26) -----------------------------------------
+
+test("a sandbox says where it runs", () => {
+  assert.equal(sandboxRunsOn({ provider: "local", region: "local", dockerHost: null }), "this machine");
+  assert.equal(sandboxRunsOn({ provider: "local", region: "devbox", dockerHost: "ssh://devbox" }), "devbox");
+  assert.equal(sandboxRunsOn({ provider: "civo", region: "lon1", dockerHost: null }), "civo lon1");
+});
+
+test("Docker endpoints are listed with whether a sandbox would work there", async () => {
+  const ready = await prisma.dockerEndpoint.create({
+    data: { name: "mcp-ep-ready", host: "ssh://mcp-ready", sandboxCheck: { status: "ok" } },
+  });
+  const unchecked = await prisma.dockerEndpoint.create({
+    data: { name: "mcp-ep-new", host: "ssh://mcp-new" },
+  });
+  try {
+    const list = await ctx.listDockerEndpoints();
+    assert.equal(list.find((e) => e.id === ready.id)?.sandboxReady, true);
+    assert.equal(list.find((e) => e.id === unchecked.id)?.sandboxReady, null);
+    // By name or id, "this-machine" is explicit, omitted is the saved choice.
+    assert.equal(await resolveEndpointArg("mcp-ep-ready"), ready.id);
+    assert.equal(await resolveEndpointArg(ready.id), ready.id);
+    assert.equal(await resolveEndpointArg("this-machine"), null);
+    assert.equal(await resolveEndpointArg(undefined), undefined);
+    await assert.rejects(() => resolveEndpointArg("nope"), /No Docker endpoint "nope"/);
+  } finally {
+    await prisma.dockerEndpoint.deleteMany({ where: { id: { in: [ready.id, unchecked.id] } } });
+  }
+});
+
+test("listed sandboxes carry runsOn", async () => {
+  const [s] = await ctx.listSandboxes(projectId);
+  assert.equal(typeof s.runsOn, "string");
+  assert.ok("dockerEndpointId" in s);
 });

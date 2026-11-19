@@ -1,4 +1,4 @@
-// Bots (spec 23): AI teammates, each with its own ephemeral computer.
+// Bots (spec 31): AI teammates, each with its own ephemeral computer.
 //
 // A session is one container: started on the first prompt (or by hand),
 // deleted when the user ends it or after `idleMinutes` without a prompt.

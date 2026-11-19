@@ -11,6 +11,7 @@
 
 import { NextResponse } from "next/server";
 
+import { buildGitSha, sameCommit } from "@/lib/build-sha";
 import { buildVersion } from "@/lib/build-version";
 import { githubToken } from "@/lib/github-token";
 import { REPO } from "@/lib/repo";
@@ -26,6 +27,16 @@ export type UpdateStatus = {
   tag: string;
   /** True when latest is strictly newer than current. */
   newer: boolean;
+  /**
+   * The release tags the very commit this build was made from.
+   *
+   * The version string cannot always tell: an `:edge` image built when a merge
+   * landed carries a `git describe` against the tags that existed *at that
+   * moment*, so tagging the same commit minutes later leaves the image
+   * labelled `0.1.9-1-g3839a18` while the release calls it `0.2.0`. Comparing
+   * versions then offers an update to code the host is already running.
+   */
+  sameCommit?: boolean;
   publishedAt: string | null;
   /** Release page — where the click on the badge lands. */
   url: string;
@@ -51,6 +62,8 @@ type CachedRelease = {
   tag: string;
   publishedAt: string | null;
   url: string;
+  /** The commit the tag points at, or null when it could not be resolved. */
+  commit: string | null;
   fetchedAt: number;
 };
 
@@ -60,14 +73,58 @@ let cache: CachedRelease | null = null;
 /** Thrown when the repo simply has no published release yet — not an error. */
 class NoReleaseYet extends Error {}
 
+function ghHeaders(token: string | null): Record<string, string> {
+  return {
+    Accept: "application/vnd.github+json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 async function fetchLatest(token: string | null): Promise<Response> {
   return fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers: ghHeaders(token),
     cache: "no-store",
   });
+}
+
+/**
+ * The commit a tag points at.
+ *
+ * `releases/latest` does not answer this: its `target_commitish` is the branch
+ * the release was cut from ("main"), not the commit — so it says nothing about
+ * which code the release contains. The git ref does.
+ *
+ * An annotated tag points at a tag object rather than a commit, so that case
+ * dereferences once more. Any failure here is null: the commit check is an
+ * extra signal, and losing it must leave the version comparison working rather
+ * than break the update check entirely.
+ */
+async function tagCommit(
+  tag: string,
+  token: string | null,
+): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${REPO}/git/ref/tags/${encodeURIComponent(tag)}`,
+      { headers: ghHeaders(token), cache: "no-store" },
+    );
+    if (!res.ok) return null;
+    const ref = (await res.json()) as {
+      object?: { type?: string; sha?: string; url?: string };
+    };
+    if (!ref.object?.sha) return null;
+    if (ref.object.type !== "tag") return ref.object.sha;
+    // Annotated: one more hop to the commit it wraps.
+    const tagRes = await fetch(ref.object.url ?? "", {
+      headers: ghHeaders(token),
+      cache: "no-store",
+    });
+    if (!tagRes.ok) return null;
+    const obj = (await tagRes.json()) as { object?: { sha?: string } };
+    return obj.object?.sha ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function latestRelease(fresh = false): Promise<CachedRelease> {
@@ -97,6 +154,7 @@ async function latestRelease(fresh = false): Promise<CachedRelease> {
     tag: release.tag_name,
     publishedAt: release.published_at,
     url: release.html_url,
+    commit: await tagCommit(release.tag_name, token),
     fetchedAt: Date.now(),
   };
   return cache;
@@ -121,11 +179,20 @@ export async function GET(req: Request) {
     );
   }
   const latest = release.tag.replace(/^v/, "");
+  // The commit decides when it can, and the version decides otherwise.
+  //
+  // A release that tags the commit this build was made from *is* this build,
+  // whatever the two version strings say — and they disagree routinely, since
+  // an `:edge` image describes itself against the tags that existed when its
+  // merge landed and the release tag usually arrives minutes later.
+  const running = await buildGitSha();
+  const isSame = sameCommit(running, release.commit);
   const body: UpdateStatus = {
     current,
     latest,
     tag: release.tag,
-    newer: isNewer(current, latest),
+    newer: isSame ? false : isNewer(current, latest),
+    sameCommit: isSame,
     publishedAt: release.publishedAt,
     url: release.url,
   };

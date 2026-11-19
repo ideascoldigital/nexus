@@ -13,7 +13,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import {
+  AppWindow,
   Bot,
+  Columns3,
   Cloud,
   DatabaseBackup,
   Terminal as TerminalIcon,
@@ -36,6 +38,11 @@ import { ClickUpAccountsSection } from "@/components/clickup/clickup-accounts-se
 import { GitLabServersSection } from "@/components/gitlab/gitlab-servers-section";
 import { ApiTokensSection } from "@/components/settings/api-tokens";
 import { BackupMigrationSection } from "@/components/settings/backup-migration";
+import { HostModelSection } from "@/components/settings/host-model";
+import { AppearanceSection } from "@/components/settings/appearance";
+import { DesktopAppSection } from "@/components/settings/desktop-app";
+import { EmbeddingsSection } from "@/components/settings/embeddings";
+import { DockerEndpointsSection } from "@/components/settings/docker-endpoints";
 import { NexusHostsSection } from "@/components/settings/nexus-hosts";
 import { SandboxNamingSection } from "@/components/settings/sandbox-naming";
 import { TerminalShellSection } from "@/components/settings/terminal-shell";
@@ -206,6 +213,8 @@ const SETTINGS_TABS = [
   "communications",
   "integrations",
   "terminal",
+  "appearance",
+  "desktop",
   "backup",
 ] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
@@ -241,7 +250,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
         label: "Cloud",
         icon: Cloud,
         description:
-          "Compute credentials for sandboxes, the tailnet key that reaches your hosts, and how new machines get their names.",
+          "Compute credentials for sandboxes, the tailnet key that reaches your hosts, other machines' Docker for local sandboxes, and how new machines get their names.",
       },
       {
         id: "git",
@@ -280,6 +289,19 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
         label: "Terminal",
         icon: TerminalIcon,
         description: "The shell the in-app terminal opens with.",
+      },
+      {
+        id: "appearance",
+        label: "Appearance",
+        icon: Columns3,
+        description: "Theme, zoom, and how pages use the window.",
+      },
+      {
+        id: "desktop",
+        label: "Desktop app",
+        icon: AppWindow,
+        description:
+          "Which database and data folder the desktop app opens — point it at your dev database to test the packaged app on real data.",
       },
       {
         id: "backup",
@@ -391,6 +413,8 @@ function SettingsPageContent() {
       // A new token changes who the app cards say they're connected as.
       queryClient.invalidateQueries({ queryKey: ["telegram-bot"] });
       queryClient.invalidateQueries({ queryKey: ["slack-status"] });
+      // A new Ollama URL moves the embedder the Embeddings card checks.
+      queryClient.invalidateQueries({ queryKey: ["embedder-health"] });
       setEditingKey(null);
       setFormData({});
     },
@@ -408,6 +432,7 @@ function SettingsPageContent() {
       queryClient.invalidateQueries({ queryKey: ["settings"] });
       queryClient.invalidateQueries({ queryKey: ["telegram-bot"] });
       queryClient.invalidateQueries({ queryKey: ["slack-status"] });
+      queryClient.invalidateQueries({ queryKey: ["embedder-health"] });
     },
   });
 
@@ -681,7 +706,7 @@ function SettingsPageContent() {
       <AppHeader title="Settings" />
 
       <main className="flex-1 overflow-auto">
-        <div className="mx-auto flex w-full max-w-6xl gap-8 px-4 py-6">
+        <div className="mx-auto flex w-full max-w-page gap-8 px-4 py-6">
           {/* ---- Rail (md+) -------------------------------------------- */}
           <nav
             aria-label="Settings sections"
@@ -779,6 +804,13 @@ function SettingsPageContent() {
                   )}
                   <ClaudeCredentialsSection />
                   <LlmCredentialsSection />
+                  {/* Which of the credentials above drives the agents that run
+                      on this machine. Right below them, because the choice is
+                      meaningless until at least one exists. */}
+                  <HostModelSection />
+                  {/* The local model behind search and ⌘K — its status, and a
+                      way to try it rather than trust it. */}
+                  <EmbeddingsSection />
                   <p className="flex items-start gap-2 px-1 text-xs text-muted-foreground">
                     <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     Keys live in your local database and never leave this
@@ -795,6 +827,9 @@ function SettingsPageContent() {
                   {/* Needed to reach a Nexus host — the readiness checklist in
                       Backup & migration links the user here. */}
                   <TailscaleCredentialsSection />
+                  {/* Compute you already own: another machine's Docker for
+                      local sandboxes (spec 26). */}
+                  <DockerEndpointsSection />
                   {/* Names the machines the credentials above provision, and
                       the local docker ones too. */}
                   <SandboxNamingSection />
@@ -908,6 +943,10 @@ function SettingsPageContent() {
               )}
 
               {activeTab === "terminal" && <TerminalShellSection />}
+
+              {activeTab === "appearance" && <AppearanceSection />}
+
+              {activeTab === "desktop" && <DesktopAppSection />}
 
               {activeTab === "backup" && (
                 <>

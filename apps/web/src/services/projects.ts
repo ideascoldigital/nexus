@@ -293,6 +293,8 @@ export type EmbedderHealth = {
   modelPresent: boolean;
   modelName: string;
   host: string;
+  /** Which knob set `host`: the saved Ollama URL, OLLAMA_URL, or neither. */
+  hostSource?: "setting" | "env" | "default";
   error?: string;
 };
 
@@ -405,4 +407,18 @@ export async function searchProject(
     throw new Error(err.error ?? "Search failed");
   }
   return res.json();
+}
+
+/** Embed one or two texts and compare them — see lib/embedding-test.ts. */
+export async function testEmbeddings(
+  texts: string[],
+): Promise<import("@/lib/embedding-test").EmbeddingTestResult> {
+  const res = await fetch("/api/embeddings/test", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ texts }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? "Embedding test failed");
+  return body;
 }

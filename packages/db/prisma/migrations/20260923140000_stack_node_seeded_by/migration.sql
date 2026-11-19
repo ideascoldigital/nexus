@@ -1,0 +1,12 @@
+-- Who put this node on the canvas (spec 25 piece 2).
+--
+-- The repair loop's most important rule is that it never overwrites a node the
+-- user wrote by hand. That rule needs a fact the database did not record, and
+-- one that cannot be recovered afterwards: a node's shape says nothing about
+-- whether a human chose it.
+--
+-- Default "user", deliberately. Every node that exists today was put there by
+-- a person dragging it onto the canvas, and the safe direction for a rule that
+-- protects hand edits is to assume the edit was a hand edit. The seed writes
+-- "detect" for what it creates; a repair writes "agent" for what it changes.
+ALTER TABLE "StackNode" ADD COLUMN "seededBy" TEXT NOT NULL DEFAULT 'user';

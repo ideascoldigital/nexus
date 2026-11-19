@@ -24,11 +24,13 @@ import { prisma } from "@nexux/db";
 import {
   execRemote,
   HOST_DIR,
+  shq,
   HOST_UPDATE_LOG,
   sandboxPrivateKeyPath,
 } from "@nexux/sandbox";
 import { getConfig } from "@nexux/config";
 
+import { channelOf, composeImageSwapScript, withChannel, type HostChannel } from "@/lib/host-channel";
 import { hostSshAddress, hostSshUser } from "@/lib/host-ssh";
 
 /** Where the control directory is mounted inside the host's own container. */
@@ -61,10 +63,20 @@ export function isHostInstall(): boolean {
  * coming back, which is why the message says so rather than pretending the
  * operation completed.
  */
-export async function requestSelfUpdate(): Promise<HostUpdateResult> {
+export async function requestSelfUpdate(channel?: HostChannel): Promise<HostUpdateResult> {
   const request = `${CONTROL_MOUNT}/update-requested`;
+  if (channel && !process.env.NEXUX_IMAGE) {
+    // The updater finds the image to repoint through NEXUX_IMAGE; a host
+    // whose compose file predates it would silently update on its old tag.
+    return {
+      ok: false,
+      message:
+        "This host can't switch channel by itself yet. Update it once from the install that created it (Settings → Backup & migration) — that refreshes its setup, and from then on the switch works here.",
+    };
+  }
   try {
-    await fs.writeFile(request, `${new Date().toISOString()}\n`);
+    // The updater reads `channel=` from this file before pulling (template-host.ts).
+    await fs.writeFile(request, `${new Date().toISOString()}\n${channel ? `channel=${channel}\n` : ""}`);
   } catch (err) {
     // The mount is missing on a host provisioned before self-update existed.
     // Say which command brings it back rather than failing blankly.
@@ -72,7 +84,12 @@ export async function requestSelfUpdate(): Promise<HostUpdateResult> {
       ok: false,
       message:
         (err as { code?: string }).code === "ENOENT"
-          ? `This host has no update helper — it was created before self-update existed. Update it from your local install, or run \`${HOST_DIR}/update.sh\` on the machine.`
+          ? process.env.NEXUX_HOST_KIND === "endpoint"
+            ? // An endpoint host from before spec 27 phase 5: its stack has no
+              // updater service yet. One update from the install that created
+              // it adds one.
+              "This host has no update helper yet. Update it once from the install that created it (Settings → Backup & migration → Update) — that also installs the helper, and from then on this button works."
+            : `This host has no update helper — it was created before self-update existed. Update it from your local install, or run \`${HOST_DIR}/update.sh\` on the machine.`
           : `Could not write the update request: ${
               err instanceof Error ? err.message : String(err)
             }`,
@@ -86,6 +103,12 @@ export async function requestSelfUpdate(): Promise<HostUpdateResult> {
   };
 }
 
+/** This host's image and channel, from its own NEXUX_IMAGE. */
+export function selfImage(): { image: string | null; channel: HostChannel | null } {
+  const image = process.env.NEXUX_IMAGE?.trim() || null;
+  return { image, channel: image ? channelOf(image) : null };
+}
+
 /** The last thing the on-host updater printed, if it has ever run. */
 export async function readSelfUpdateLog(): Promise<string | null> {
   try {
@@ -96,6 +119,43 @@ export async function readSelfUpdateLog(): Promise<string | null> {
 }
 
 /**
+ * Pull and restart a host. With `imageRef`, move it to that image first — a
+ * release channel switch (host-channel.ts). The row's imageRef records what
+ * was actually pulled, so it only changes once the new image is running; a
+ * failed switch leaves the host, and the row, on the old one.
+ */
+export async function updateHost(
+  hostId: string,
+  opts: { imageRef?: string } = {},
+): Promise<HostUpdateResult> {
+  const found = await prisma.nexusHost.findUnique({ where: { id: hostId } });
+  if (!found) throw new Error("Host not found");
+  if (found.status !== "running") {
+    throw new Error(
+      `This host is ${found.status}, not running — there is nothing to update yet.`,
+    );
+  }
+  // A channel may have been switched from the host's own Settings since this
+  // install last looked. Adopt what it reports, or this update would re-render
+  // its compose file with the old tag and quietly switch it back.
+  if (!opts.imageRef) {
+    const reported = await reportedImage(found);
+    if (reported && reported !== found.imageRef && withChannel(reported, "edge") === withChannel(found.imageRef, "edge")) {
+      await prisma.nexusHost.update({ where: { id: hostId }, data: { imageRef: reported } });
+      found.imageRef = reported;
+    }
+  }
+  const imageRef = opts.imageRef?.trim() || found.imageRef;
+  const switching = imageRef !== found.imageRef;
+  const host = { ...found, imageRef };
+  const result = await updateHostRow(host, switching ? found.imageRef : null);
+  if (result.ok && switching) {
+    await prisma.nexusHost.update({ where: { id: hostId }, data: { imageRef } });
+  }
+  return result;
+}
+
+/**
  * Update a host from this install, over SSH.
  *
  * Runs the pull directly rather than poking the systemd unit: this side has a
@@ -103,13 +163,30 @@ export async function readSelfUpdateLog(): Promise<string | null> {
  * `up -d` still races the connection — recreating the container does not touch
  * sshd, so unlike the self-update path the command survives its own effect.
  */
-export async function updateHost(hostId: string): Promise<HostUpdateResult> {
-  const host = await prisma.nexusHost.findUnique({ where: { id: hostId } });
-  if (!host) throw new Error("Host not found");
-  if (host.status !== "running") {
-    throw new Error(
-      `This host is ${host.status}, not running — there is nothing to update yet.`,
-    );
+/** The image a running host says it runs, over the tailnet; null when it can't say. */
+async function reportedImage(host: { tailscaleIp: string | null }): Promise<string | null> {
+  if (!host.tailscaleIp) return null;
+  try {
+    const res = await fetch(`http://${host.tailscaleIp}:3030/api/version`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { image?: unknown };
+    return typeof body.image === "string" && body.image.trim() ? body.image.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function updateHostRow(
+  host: NonNullable<Awaited<ReturnType<typeof prisma.nexusHost.findUnique>>>,
+  /** The image being switched away from, when switching; null otherwise. */
+  previousImageRef: string | null,
+): Promise<HostUpdateResult> {
+  if (host.provider === "docker-endpoint") {
+    // No SSH to a box we do not own: the same pull + up -d, through the
+    // endpoint's Docker (spec 27). It re-renders the compose file from
+    // host.imageRef, so a switch needs nothing more.
+    const { updateHostOnEndpoint } = await import("@/lib/host-manager");
+    return updateHostOnEndpoint(host);
   }
 
   const address = hostSshAddress(host);
@@ -120,12 +197,19 @@ export async function updateHost(hostId: string): Promise<HostUpdateResult> {
   }
 
   const privateKeyPath = sandboxPrivateKeyPath(getConfig().dataDir);
+  // A VM host's compose file lives on the VM, written at bootstrap: a switch
+  // rewrites its app image line there, and puts it back if the pull or the
+  // restart fails, so the file never names an image the host is not running.
+  const pullAndUp = "docker compose pull && docker compose up -d";
+  const step = previousImageRef
+    ? composeImageSwapScript(previousImageRef, host.imageRef, pullAndUp, shq)
+    : pullAndUp;
   const result = await execRemote(
     // The image id of the running container, echoed before and after: "did
     // this update change anything" is otherwise unanswerable — a pull that
     // found nothing and a pull that replaced the stack print near-identical
     // output, and the UI needs to say "already up to date" for one of them.
-    `cd ${HOST_DIR} && echo "nexus-image-before=$(docker compose images --quiet nexux | head -1)" && docker compose pull && docker compose up -d && echo "nexus-image-after=$(docker compose images --quiet nexux | head -1)"`,
+    `cd ${HOST_DIR} && echo "nexus-image-before=$(docker compose images --quiet nexux | head -1)" && ${step} && echo "nexus-image-after=$(docker compose images --quiet nexux | head -1)"`,
     {
       host: address.host,
       user: hostSshUser(host),
@@ -171,6 +255,8 @@ export async function updateHost(hostId: string): Promise<HostUpdateResult> {
 export async function readHostUpdateLog(hostId: string): Promise<string | null> {
   const host = await prisma.nexusHost.findUnique({ where: { id: hostId } });
   if (!host || host.status !== "running") return null;
+  // An endpoint host has no on-host updater, so there is no log of one.
+  if (host.provider === "docker-endpoint") return null;
   const address = hostSshAddress(host);
   if (!address) return null;
 

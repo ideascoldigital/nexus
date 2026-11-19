@@ -84,9 +84,18 @@ async function readTextSafe(filePath: string): Promise<string | null> {
   }
 }
 
-function parseEnvKeys(content: string): { keys: string[]; ports: number[] } {
+function parseEnvKeys(content: string): {
+  keys: string[];
+  ports: number[];
+  values: Record<string, string>;
+} {
   const keys: string[] = [];
   const ports: number[] = [];
+  // The *values*, not just the names. A seed has to tell `postgres://` from
+  // `mysql://` inside the same DATABASE_URL, and the key alone cannot
+  // (spec 25 piece 1). An example file is committed placeholder config, so
+  // this carries no secret — a real .env is never read here.
+  const values: Record<string, string> = {};
   for (const rawLine of content.split("\n")) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
@@ -95,12 +104,14 @@ function parseEnvKeys(content: string): { keys: string[]; ports: number[] } {
     const key = line.slice(0, eq).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
     keys.push(key);
+    const value = line.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+    values[key] = value;
     if (/(^|_)PORT$/.test(key)) {
-      const val = Number(line.slice(eq + 1).trim().replace(/["']/g, ""));
+      const val = Number(value);
       if (Number.isInteger(val) && val > 0 && val < 65536) ports.push(val);
     }
   }
-  return { keys, ports };
+  return { keys, ports, values };
 }
 
 /**
@@ -451,12 +462,14 @@ export async function detectRepo(localPath: string): Promise<DetectionResult> {
   }
 
   let envExampleKeys: string[] = [];
+  let envExampleValues: Record<string, string> = {};
   const suggestedPorts: number[] = [];
   if (envExampleRel) {
     const envRaw = await readTextSafe(path.join(root, envExampleRel));
     if (envRaw) {
-      const { keys, ports } = parseEnvKeys(envRaw);
+      const { keys, ports, values } = parseEnvKeys(envRaw);
       envExampleKeys = keys;
+      envExampleValues = values;
       suggestedPorts.push(...ports);
     }
   }
@@ -480,6 +493,7 @@ export async function detectRepo(localPath: string): Promise<DetectionResult> {
     scripts,
     suggestedCommands,
     envExampleKeys,
+    envExampleValues,
     suggestedPorts: Array.from(new Set(suggestedPorts)),
   };
 }

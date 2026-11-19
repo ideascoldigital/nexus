@@ -35,7 +35,7 @@ src/
 
 - `projects/[id]/…` — bulk of it: `sandboxes` (dev/health/preview/vscode/password/bootstrap-log), `tasks` (+screenshots), `features`, `roadmap` (generate/apply), `dev-phases`, `document/sections/…/revisions`, `stack` (detect/compose/up/down/status/logs/assistant), `orchestration`, `brain`, `index`, `search`, `skills`, `agents`, `repositories`, `env-vars`, `schedules`, `definer/init`
 - `assistant/chat` — 5 flow types: agent / skill / code single-agent, project-definer orchestrator+specialists, stack-assistant tool-calling
-- `agents`, `skills` (+sync), `conversations`, `credentials`, `github`, `gitlab` (accounts/projects/groups/epics/resolve/sync/issues — one entry per instance, gitlab.com or self-hosted; import scoped by project, group or epic), `telegram/bot`, `embeddings` (health/install-model), `settings`, `terminal/info`, `health`
+- `agents`, `skills` (+sync), `conversations`, `credentials`, `github`, `gitlab` (accounts/projects/groups/epics/resolve/sync/issues — one entry per instance, gitlab.com or self-hosted; import scoped by project, group or epic), `telegram/bot`, `embeddings` (health/install-model/test), `settings`, `terminal/info`, `health`
 
 ## Startup
 
@@ -54,6 +54,7 @@ Lightweight scoping layer in `lib/workspace.ts`, designed so everything predatin
 
 - `DEFAULT_WORKSPACE_ID = "ws-default"`; the active one travels in the plain `nexux-workspace` cookie, read via `next/headers` by server components and API routes, set by the sidebar switcher. Unknown or stale ids fall back to the default.
 - Settings stay in one key/value table: `scopedSettingKey` prefixes non-default workspaces (`ws:<id>:<key>`) while the default keeps bare keys. `getWorkspaceSetting` falls back to the global key, so a workspace without its own token inherits it rather than breaking.
+- The embedder's Ollama follows the same rule: `lib/ollama-host.ts` reads the workspace's `ollama_url` (Settings → AI Providers) and passes it to `@nexux/embeddings`, which falls back to `OLLAMA_URL`, then localhost. Settings routes resolve through the active workspace; search, indexing and the assistant services through the project's.
 
 ## Data flow
 
@@ -65,7 +66,7 @@ Lightweight scoping layer in `lib/workspace.ts`, designed so everything predatin
 
 ## Key subsystems
 
-- **Bots (spec 23):** `lib/bot-manager.ts` (session lifecycle, per-session prompt queue, idle reaper, boot recovery) and `lib/bot-view.ts` (pure shaping + input schema) over `@nexux/sandbox` `bot.ts`. Routes under `/api/bots`. UI: `/bots` → `components/bots/bots-view.tsx` (team rail, chat, live noVNC computer panel), in its own `(bots)` route group so the simple view shows bots only — no AppShell sidebar, header or status bar.
+- **Bots (spec 31):** `lib/bot-manager.ts` (session lifecycle, per-session prompt queue, idle reaper, boot recovery) and `lib/bot-view.ts` (pure shaping + input schema) over `@nexux/sandbox` `bot.ts`. Routes under `/api/bots`. UI: `/bots` → `components/bots/bots-view.tsx` (team rail, chat, live noVNC computer panel), in its own `(bots)` route group so the simple view shows bots only — no AppShell sidebar, header or status bar.
 - **Sandbox orchestration:** `lib/sandbox-manager.ts`, `lib/task-manager.ts`, `lib/task-scheduler.ts`, `lib/dev-console.ts` — wraps `@nexux/sandbox` (provision → bootstrap → run agent task → notify). UI: `project-sandboxes`, `dev-console` (continuous agent session w/ prompt queue), `run-on-sandbox-dialog`, `scheduled-tasks-card`.
 - **Dual brain:** a project's `brain` (`claude` | `opencode`, per `ProjectBrain`) picks which agent CLI runs delegated work. Callers go through `@nexux/sandbox`'s `runAgentTask(policy.brain, …)` and stay brain-agnostic; only model selection (`claudeModel` vs `openCodeModel`) and sandbox provisioning (`installOpenCode`, auto-on when `brain=opencode`) branch on it.
 - **Features kanban:** drag between status columns (native HTML5 DnD), optimistic updates + rollback; Queue column wired to the dev sandbox. Roadmap generator bridges the definition document → DevPhases + Features (propose-then-Apply, nothing persisted without Apply).

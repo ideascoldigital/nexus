@@ -11,7 +11,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-exclude=\"**/*.test.ts\" --test-coverage-lines=93 --test-coverage-branches=79 --test-coverage-functions=96 \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@nexux/config": "workspace:*",

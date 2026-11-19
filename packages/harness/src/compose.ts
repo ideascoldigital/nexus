@@ -3,6 +3,8 @@
 
 import { stringify } from "yaml";
 
+import { healthcheckFor } from "./healthcheck";
+
 export interface StackPort {
   host: number;
   container: number;
@@ -136,6 +138,13 @@ export function generateCompose(input: ComposeInput): ComposeOutput {
 
     if (node.command) svc.command = node.command;
 
+    // Readiness, for the images we recognize (spec 24 piece 2). Without this
+    // the bootstrap's `--wait` waits for "running", which for a database is
+    // true seconds before it accepts a connection — the race a repo's install
+    // loses when it runs migrations.
+    const health = healthcheckFor(node.image);
+    if (health) svc.healthcheck = health;
+
     const ports = (node.ports ?? []).filter(
       (p) => p.host > 0 && p.container > 0
     );
@@ -169,7 +178,29 @@ export function generateCompose(input: ComposeInput): ComposeOutput {
       const targetName = serviceNames[edge.targetId];
       if (targetName) dependsOn.push(targetName);
     }
-    if (dependsOn.length > 0) svc.depends_on = dependsOn.sort();
+    if (dependsOn.length > 0) {
+      // Long form, so a dependency that has a healthcheck is waited *for*, not
+      // merely started before. The short-form list ignores health entirely —
+      // which would leave a generated healthcheck doing half its job: `--wait`
+      // would honour it at the top level while a dependent service still
+      // started against a database that was not accepting connections yet.
+      //
+      // `service_started` for the rest: an image we do not recognize has no
+      // health to wait on, and demanding it would hang the `up` forever.
+      svc.depends_on = Object.fromEntries(
+        dependsOn.sort().map((name) => {
+          const target = dockerNodes.find((n) => serviceNames[n.id] === name);
+          return [
+            name,
+            {
+              condition: healthcheckFor(target?.image)
+                ? "service_healthy"
+                : "service_started",
+            },
+          ];
+        })
+      );
+    }
 
     services[svcName] = svc;
   }

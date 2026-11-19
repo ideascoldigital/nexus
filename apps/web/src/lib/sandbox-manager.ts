@@ -11,9 +11,12 @@ import {
   destroySandbox,
   GLOBAL_ENV_SETTINGS,
   destroyLocalSandbox,
+  bootstrapReportCommand,
   dockerAvailable,
   ensureSandboxKeypair,
   execRemote,
+  failedSteps,
+  parseBootstrapReport,
   launchLocalSandbox,
   localBootstrapComplete,
   localBootstrapFailure,
@@ -29,6 +32,7 @@ import {
   localContainerExists,
   DEFAULT_SANDBOX_PREFIX,
   MAX_CUSTOM_NAME_LENGTH,
+  seedWaitSeconds,
   terraformAvailable,
   type ProviderCredentials,
   type SandboxProvider,
@@ -41,12 +45,16 @@ import {
   type SandboxStackCompose,
 } from "@/lib/stack/sandbox-compose";
 import { sandboxTarget } from "@/lib/agent-core";
+import { pushSeeds, pushSeedsWhenReachable, seedsForLaunch, type LaunchSeed } from "@/lib/seed/launch";
+import type { DockerTarget } from "@nexux/sandbox";
 import {
+  gitProviderOfUrl,
   gitProvidersForRepos,
   selfHostedGitLabHost,
   type GitProvider,
 } from "@/lib/git-host";
 import { getStackInheritance } from "@/lib/stack/sandbox-inheritance";
+import { isHostInstall } from "@/lib/host-update";
 import { notifySandboxStatus } from "@/lib/notify";
 import { sandboxPrefixForProject } from "@/lib/sandbox-prefix";
 import { getWorkspaceSetting } from "@/lib/workspace";
@@ -66,6 +74,7 @@ export const SANDBOX_CONFIG_DEFAULTS = {
   installClaudeCode: true,
   installAgentBrowser: true,
   installCloudflared: true,
+  installBrowserSession: false,
   installTailscale: false,
   tailscaleCredentialId: null as string | null,
   includeStackServices: true,
@@ -295,6 +304,19 @@ export async function refreshTailscaleSession(sandboxId: string): Promise<{
  * It renders through `renderRepoSetup`, the same function the bootstrap uses,
  * so there is no second definition of what "set up" means.
  */
+/**
+ * The pre-spec-24 failure signal: WARN lines in the setup log.
+ *
+ * Kept as a fallback for sandboxes provisioned before the step recorder
+ * existed, which have no report file to read. It sees only clone/install/build
+ * — that blindness is why the report replaced it.
+ */
+function scrapeFailuresFromLog(log: string): string[] {
+  return [
+    ...log.matchAll(/^\[nexux\] WARN: (?:clone|install|build) failed for (.+?)\r?$/gm),
+  ].map((m) => m[1]);
+}
+
 export async function retrySandboxSetup(sandboxId: string): Promise<{
   ok: boolean;
   failed: string[];
@@ -332,9 +354,28 @@ export async function retrySandboxSetup(sandboxId: string): Promise<{
     timeoutMs: 20 * 60_000,
   });
   const log = `${res.stdout}\n${res.stderr}`.trim();
-  const failed = [
-    ...log.matchAll(/^\[nexux\] WARN: (?:clone|install|build) failed for (.+?)\r?$/gm),
-  ].map((m) => m[1]);
+
+  // Read the structured report the steps just appended, rather than scraping
+  // the log for `[nexux] WARN: … failed for <name>` (spec 24 piece 1). The
+  // regex only ever matched clone/install/build, so a failed stack `up` or a
+  // failed launcher was invisible here and the retry reported success while
+  // the sandbox was still missing its database.
+  //
+  // The log stays the fallback: an older sandbox — provisioned before the
+  // recorder existed — has no report file, and its WARNs are all there is.
+  let failed: string[];
+  try {
+    const out = await execRemote(bootstrapReportCommand(), {
+      ...sandboxTarget(sandbox, "/", "root"),
+      timeoutMs: 30_000,
+    });
+    const report = parseBootstrapReport(out.stdout);
+    failed = report.steps.length
+      ? failedSteps(report).map((s) => s.step)
+      : scrapeFailuresFromLog(log);
+  } catch {
+    failed = scrapeFailuresFromLog(log);
+  }
 
   return { ok: failed.length === 0, failed: [...new Set(failed)], log };
 }
@@ -523,6 +564,18 @@ export type GitTokenInjection = {
   credentialName: string;
   /** The self-hosted instance this token also authenticates, if any. */
   gitlabHost: string | null;
+  /**
+   * Set when this provider's repos name different credentials: the sandbox
+   * gets one token per provider, so one of them wins and this says which.
+   */
+  conflict: string | null;
+};
+
+/** A repo as far as its git token goes. */
+export type GitTokenRepo = {
+  name?: string;
+  repoUrl?: string | null;
+  gitCredentialId?: string | null;
 };
 
 /**
@@ -536,10 +589,11 @@ export type GitTokenInjection = {
  * being the whole story the moment injection became host-scoped.
  */
 export async function resolveGitTokens(
-  repoUrls: Array<string | null | undefined>,
+  repos: GitTokenRepo[],
   selectedCredentialId?: string | null,
 ): Promise<GitTokenInjection[]> {
   const selected = await resolveGitCredential(selectedCredentialId);
+  const repoUrls = repos.map((r) => r.repoUrl);
   const needed = gitProvidersForRepos(repoUrls);
   if (selected) needed.add(selected.provider as GitProvider);
 
@@ -547,10 +601,18 @@ export async function resolveGitTokens(
   for (const provider of needed) {
     const envKey = GIT_TOKEN_ENV[provider];
     if (!envKey) continue;
+    // The credential on the repo card is the one the user picked for that
+    // repo, and the one Sync on this machine already clones with — a sandbox
+    // ignoring it cloned with a different, possibly dead, token while the card
+    // showed a working one. The sandbox's own "Git token" is the fallback for
+    // repos that name none.
+    const fromRepos = await repoCredentialsFor(provider, repos);
+    const winner = fromRepos[0];
     const cred =
-      selected?.provider === provider
+      winner?.cred ??
+      (selected?.provider === provider
         ? selected
-        : await resolveGitCredential(null, { provider });
+        : await resolveGitCredential(null, { provider }));
     if (!cred) continue;
     tokens.push({
       provider,
@@ -563,24 +625,59 @@ export async function resolveGitTokens(
         provider === "gitlab"
           ? selfHostedGitLabHost(repoUrls, cred.registryHost)
           : null,
+      conflict:
+        fromRepos.length > 1
+          ? `${provider} repos use different tokens (${fromRepos
+              .map((c) => `${c.cred.name}: ${c.repos.join(", ")}`)
+              .join("; ")}); the sandbox gets one ${envKey} — ${winner.cred.name}`
+          : null,
     });
   }
   // Stable order so the settings panel does not reshuffle between loads.
   return tokens.sort((a, b) => a.envKey.localeCompare(b.envKey));
 }
 
+/**
+ * The usable credentials this provider's repos name, most-used first (ties
+ * keep repo order, so the main repo — listed first — decides). A credential
+ * that is gone or belongs to another provider is skipped, not fatal.
+ */
+async function repoCredentialsFor(provider: GitProvider, repos: GitTokenRepo[]) {
+  const byId = new Map<string, string[]>();
+  for (const r of repos) {
+    if (!r.gitCredentialId || gitProviderOfUrl(r.repoUrl) !== provider) continue;
+    byId.set(r.gitCredentialId, [...(byId.get(r.gitCredentialId) ?? []), r.name ?? r.repoUrl ?? "?"]);
+  }
+  const found: Array<{ cred: NonNullable<Awaited<ReturnType<typeof resolveGitCredential>>>; repos: string[] }> = [];
+  for (const [id, names] of byId) {
+    const cred = await resolveGitCredential(id);
+    // resolveGitCredential falls back to any credential when the id is gone;
+    // only the one actually named counts here.
+    if (cred?.id === id && cred.provider === provider) found.push({ cred, repos: names });
+  }
+  return found.sort((a, b) => b.repos.length - a.repos.length);
+}
+
 export async function getSandboxReadiness() {
-  const [terraformInstalled, savedCreds, civoLegacy, awsLegacy, claudeToken] =
-    await Promise.all([
-      terraformAvailable(),
-      prisma.cloudCredential.groupBy({ by: ["provider"], _count: true }),
-      getCivoToken(),
-      getLegacyAwsCredentials(),
-      getLegacyClaudeCodeToken(),
-    ]);
+  const [
+    terraformInstalled,
+    dockerInstalled,
+    savedCreds,
+    civoLegacy,
+    awsLegacy,
+    claudeToken,
+  ] = await Promise.all([
+    terraformAvailable(),
+    dockerAvailable(),
+    prisma.cloudCredential.groupBy({ by: ["provider"], _count: true }),
+    getCivoToken(),
+    getLegacyAwsCredentials(),
+    getLegacyClaudeCodeToken(),
+  ]);
   const saved = new Set(savedCreds.map((c) => c.provider));
   return {
     terraformInstalled,
+    dockerInstalled,
     hasCivoToken: saved.has("civo") || Boolean(civoLegacy),
     hasAwsCredentials: saved.has("aws") || Boolean(awsLegacy),
     hasClaudeCodeToken: saved.has("claude") || Boolean(claudeToken),
@@ -597,7 +694,7 @@ async function buildSpec(
   projectId: string,
   instanceName: string,
   provider: SandboxProvider,
-): Promise<{ spec: SandboxSpec; stack: SandboxStackCompose }> {
+): Promise<{ spec: SandboxSpec; stack: SandboxStackCompose; seeds: LaunchSeed[] }> {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
@@ -645,7 +742,13 @@ async function buildSpec(
   // uses while the real one stayed silently absent.
   const mainRepo = pickMainRepo(project.repositories);
 
-  for (const git of await resolveGitTokens(repoUrls, cfg.githubCredentialId)) {
+  for (const git of await resolveGitTokens(
+    // Main repo first: it breaks a tie between repos naming different tokens.
+    [mainRepo, ...project.repositories.filter((r) => r !== mainRepo)].filter(
+      (r): r is NonNullable<typeof r> => !!r,
+    ),
+    cfg.githubCredentialId,
+  )) {
     if (!envVars[git.envKey]) envVars[git.envKey] = git.token;
     // Without GITLAB_HOST a self-hosted clone carries no credential at all and
     // fails as `could not read Username for 'https://…'` — an error that blames
@@ -718,6 +821,10 @@ async function buildSpec(
     claudeModel: cfg.claudeModel,
     installAgentBrowser: cfg.installAgentBrowser,
     installCloudflared: cfg.installCloudflared,
+    // The session runs Chromium from installAgentBrowser, so asking for a
+    // browser without one would install a display serving nothing.
+    installBrowserSession:
+      cfg.installBrowserSession && cfg.installAgentBrowser,
     installTailscale: cfg.installTailscale,
     // Without a key the bootstrap registers interactively and prints the URL
     // to approve, so a missing or keyless credential never blocks a launch.
@@ -768,17 +875,43 @@ async function buildSpec(
           r.setup?.runCommand?.trim() ||
           stackFor(r.id)?.runCommand ||
           r.setup?.runCommand,
+        // Only the canvas knows this — there is no per-repo port in
+        // RepositorySetup. The main repo falls back to the resolved preview
+        // port, which is the same number the UI previews and the user's own
+        // Start waits on, so a green probe means the Start will work too.
+        runPort:
+          stackFor(r.id)?.runPort ??
+          (mainRepo?.id === r.id ? previewPort : null),
         envVars: envVarsToRecord(r.envVars),
       })),
   };
 
-  return { spec, stack };
+  // Seed data (spec 29): only where the services it restores into will run.
+  const seeds =
+    stack.yaml && spec.installDocker
+      ? await seedsForLaunch(projectId, stack.services, (w) => stack.warnings.push(w.replace(/^\[nexux\] seed: /, "seed: ")))
+      : [];
+  if (seeds.length) spec.seeds = seeds.map((s) => s.spec);
+  // The UI asks before a cloud launch carries these; a launch from MCP or a
+  // schedule has nobody to ask, so it is at least on the record.
+  if (provider !== "local") {
+    for (const s of seeds.filter((x) => x.sensitive)) {
+      stack.warnings.push(`seed: ${s.spec.fileName} is marked as holding real people's data and is being sent to a ${provider} VM`);
+    }
+  }
+
+  return { spec, stack, seeds };
 }
 
 // Buffers terraform output in memory and flushes it to Sandbox.log at most
 // once per second, so log streaming doesn't hammer SQLite.
-function createLogWriter(sandboxId: string) {
-  let full = "";
+//
+// It writes the whole log each flush, starting from empty — right for a
+// provision, which owns the log from its first line. Anything that runs
+// later (a seed push to a VM, a reset) passes `existing`, the log as it is,
+// or its first flush would replace everything provisioning wrote.
+function createLogWriter(sandboxId: string, existing = "") {
+  let full = existing;
   let timer: NodeJS.Timeout | null = null;
   let writing = Promise.resolve();
 
@@ -810,6 +943,15 @@ function createLogWriter(sandboxId: string) {
 }
 
 /**
+ * A log writer that adds to what the sandbox's log already holds — for work
+ * that starts after provisioning wrote it (seed pushes, resets).
+ */
+export async function appendSandboxLog(sandboxId: string) {
+  const row = await prisma.sandbox.findUnique({ where: { id: sandboxId }, select: { log: true } });
+  return createLogWriter(sandboxId, row?.log ?? "");
+}
+
+/**
  * Resolve the instance name for a new sandbox, refusing one already in use.
  *
  * Two places can hold a name and both matter. Our own rows are the obvious
@@ -834,6 +976,8 @@ export type SandboxNameLookups = {
   heldBy: (name: string) => Promise<string | null>;
   /** Does the host already have a container by this name, any state? */
   containerExists: (name: string) => Promise<boolean>;
+  /** Names the daemon in the collision message; defaults to "this machine". */
+  where?: string;
 };
 
 export async function resolveSandboxName(
@@ -871,17 +1015,44 @@ export async function resolveSandboxName(
   // scoped to the provider, which rejects duplicates itself.
   if (provider === "local" && (await lookups.containerExists(name))) {
     throw new Error(
-      `A docker container called "${name}" already exists on this machine.`,
+      `A docker container called "${name}" already exists on ${lookups.where ?? "this machine"}.`,
     );
   }
 
   return name;
 }
 
+/**
+ * The daemon a new local sandbox goes to (spec 26): null for this machine,
+ * or a DockerEndpoint's id. Resolved here rather than trusted from the caller,
+ * so a stale id fails loudly instead of launching on this machine.
+ */
+async function resolveDockerEndpoint(
+  dockerEndpointId: string | null | undefined,
+): Promise<{ id: string; name: string; target: DockerTarget } | null> {
+  if (!dockerEndpointId) return null;
+  const endpoint = await prisma.dockerEndpoint.findUnique({
+    where: { id: dockerEndpointId },
+  });
+  if (!endpoint) throw new Error("That Docker endpoint no longer exists.");
+  return { id: endpoint.id, name: endpoint.name, target: { host: endpoint.host } };
+}
+
+/** Where a local sandbox's container lives, off its row. */
+function rowTarget(sandbox: { dockerHost: string | null }): DockerTarget {
+  return { host: sandbox.dockerHost };
+}
+
 export async function launchSandbox(
   projectId: string,
   providerOverride?: SandboxProvider,
   requestedName?: string,
+  /**
+   * Which machine's Docker, for a local sandbox. `undefined` = the project's
+   * saved choice (so a scheduled launch lands where the user set it); `null`
+   * = this machine, explicitly.
+   */
+  dockerEndpointId?: string | null,
 ): Promise<Sandbox> {
   const [readiness, project] = await Promise.all([
     getSandboxReadiness(),
@@ -899,13 +1070,42 @@ export async function launchSandbox(
       ? configProvider
       : "civo");
 
+  if (dockerEndpointId && provider !== "local") {
+    throw new Error("A Docker endpoint only applies to local sandboxes.");
+  }
+  const endpoint = await resolveDockerEndpoint(
+    dockerEndpointId !== undefined
+      ? dockerEndpointId
+      : provider === "local"
+        ? (project.sandboxConfig?.dockerEndpointId ?? null)
+        : null,
+  );
+  const target: DockerTarget = endpoint?.target ?? { host: null };
+
+  // A bind mount names a path on the daemon's disk. Another machine cannot see
+  // this one's folders — Docker would mount an empty directory without a word
+  // — so refuse, naming the repos, rather than drop them or guess a path.
+  if (endpoint) {
+    const mountOnly = project.repositories.filter((r) => !r.repoUrl && r.localPath);
+    if (mountOnly.length > 0) {
+      throw new Error(
+        `"${endpoint.name}" can't see local folders: ${mountOnly.map((r) => r.name).join(", ")}. Give ${mountOnly.length === 1 ? "it" : "them"} a clone URL, or run the sandbox on this machine.`,
+      );
+    }
+  }
+
   // Cloud credentials only matter for cloud providers; local needs Docker.
   let resolved: { credentialId: string | null; env: ProviderCredentials } | null =
     null;
   if (provider === "local") {
-    if (!(await dockerAvailable())) {
+    if (!(await dockerAvailable(target))) {
       throw new Error(
-        "Docker is not available. Local sandboxes run in a Docker container — start Docker Desktop and retry.",
+        endpoint
+          ? `Docker on "${endpoint.name}" isn't answering — check it in Settings → Cloud → Docker endpoints.`
+          : isHostInstall()
+            ? // A host is a container with no daemon of its own (spec 27 phase 6).
+              "This Nexus host has no Docker of its own. Register the machine it runs on (or another) as a Docker endpoint in Settings → Cloud → Docker endpoints, then pick it under Which Docker."
+            : "Docker is not available. Local sandboxes run in a Docker container — start Docker Desktop and retry.",
       );
     }
   } else {
@@ -976,10 +1176,15 @@ export async function launchSandbox(
     requestedName,
     provider,
     await sandboxPrefixForProject(projectId),
+    {
+      heldBy: projectHoldingName,
+      containerExists: (n) => localContainerExists(n, target),
+      where: endpoint ? `"${endpoint.name}"` : undefined,
+    },
   );
   const workDir = path.join(getConfig().dataDir, "sandboxes", sandboxId);
 
-  const { spec, stack } = await buildSpec(projectId, instanceName, provider);
+  const { spec, stack, seeds } = await buildSpec(projectId, instanceName, provider);
 
   const sandbox = await prisma.sandbox.create({
     data: {
@@ -989,10 +1194,13 @@ export async function launchSandbox(
       status: "provisioning",
       provider,
       credentialId: resolved?.credentialId ?? null,
-      region: provider === "local" ? "local" : spec.region,
+      // The row's "@ where" — for a remote daemon, the endpoint's name.
+      region: provider === "local" ? (endpoint?.name ?? "local") : spec.region,
       size: provider === "local" ? "docker" : spec.size,
       stackServices: stack.services,
       workDir,
+      dockerEndpointId: endpoint?.id ?? null,
+      dockerHost: target.host,
     },
   });
 
@@ -1012,8 +1220,8 @@ export async function launchSandbox(
   activeOps.add(sandboxId);
   const provision =
     provider === "local"
-      ? runLocalProvision(sandboxId, spec, stackLog)
-      : runProvision(sandboxId, workDir, spec, resolved!.env, stackLog);
+      ? runLocalProvision(sandboxId, spec, stackLog, target, seeds)
+      : runProvision(sandboxId, workDir, spec, resolved!.env, stackLog, seeds);
   void provision.finally(() => activeOps.delete(sandboxId));
 
   return sandbox;
@@ -1029,33 +1237,60 @@ async function runLocalProvision(
   sandboxId: string,
   spec: SandboxSpec,
   extraLogLines: string[] = [],
+  target: DockerTarget = { host: null },
+  seeds: LaunchSeed[] = [],
 ) {
   const log = createLogWriter(sandboxId);
+  let seedPush: Promise<unknown> = Promise.resolve();
   try {
-    log.append(`[nexux] provisioning local container ${spec.name}`);
+    log.append(
+      `[nexux] provisioning local container ${spec.name}${target.host ? ` on ${target.host}` : ""}`,
+    );
     for (const line of extraLogLines) log.append(line);
     const { containerName } = await launchLocalSandbox({
       name: spec.name,
       spec,
       onLog: log.sink.bind(log),
+      // Start from the prebuilt base when one is current (spec 24 piece 3).
+      // Never builds inline — an absent or stale base falls back to
+      // ubuntu:22.04 and the bootstrap installs what it needs, exactly as
+      // before. Building is an explicit action, because a launch that quietly
+      // spent five minutes on it would be the same slow surprise this piece
+      // exists to remove.
+      preferPrebuilt: true,
+      target,
     });
     await prisma.sandbox.update({
       where: { id: sandboxId },
       data: { instanceId: containerName },
     });
+    // Beside the bootstrap, not before it: the restore step waits for each
+    // file's marker (spec 29).
+    if (seeds.length) {
+      seedPush = pushSeeds(seeds, { container: containerName, dockerHost: target.host }, (l) => log.append(l)).catch(
+        (err: unknown) =>
+          log.append(
+            `[nexux] WARN: seed data could not be sent (${err instanceof Error ? err.message : String(err)}) — the sandbox continues with an empty database`,
+          ),
+      );
+    }
 
-    const deadline = Date.now() + 20 * 60_000;
+    // A seed's restore runs inside the bootstrap, after its file arrives: the
+    // same per-size allowance its step waits for, on top of the usual 20 min.
+    const seedAllowanceMs = seeds.reduce((ms, s) => ms + (seedWaitSeconds(s.spec.sizeBytes) - 900) * 1000, 0);
+    const budgetMs = 20 * 60_000 + seedAllowanceMs;
+    const deadline = Date.now() + budgetMs;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 10_000));
-      if (!(await localSandboxRunning(containerName))) {
+      if (!(await localSandboxRunning(containerName, target))) {
         throw new Error("container exited during bootstrap");
       }
       // Checked before completion: a fatal step suppresses the completion
       // marker, so without this the run only ends at the 20-minute timeout,
       // reporting a deadline instead of the reason sitting on disk.
-      const failure = await localBootstrapFailure(containerName);
+      const failure = await localBootstrapFailure(containerName, target);
       if (failure) throw new Error(failure);
-      if (await localBootstrapComplete(containerName)) {
+      if (await localBootstrapComplete(containerName, target)) {
         log.append(`[nexux] bootstrap complete — sandbox ready`);
         await prisma.sandbox.update({
           where: { id: sandboxId },
@@ -1065,7 +1300,7 @@ async function runLocalProvision(
         return;
       }
     }
-    throw new Error("bootstrap did not finish within 20 minutes");
+    throw new Error(`bootstrap did not finish within ${Math.round(budgetMs / 60_000)} minutes`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.append(`[nexux] ERROR: ${message}`);
@@ -1076,6 +1311,26 @@ async function runLocalProvision(
       })
       .catch(() => undefined);
     void notifySandboxStatus(sandboxId).catch(() => undefined);
+  } finally {
+    // The copy may outlive a failed bootstrap; let it finish logging first.
+    await seedPush;
+    await log.close();
+  }
+}
+
+/** Send a VM its seed files once it answers over SSH, logging to its own writer. */
+async function pushCloudSeeds(sandboxId: string, seeds: LaunchSeed[]) {
+  const log = await appendSandboxLog(sandboxId);
+  try {
+    await pushSeedsWhenReachable(
+      seeds,
+      async () => {
+        const sandbox = await prisma.sandbox.findUnique({ where: { id: sandboxId } }).catch(() => null);
+        if (!sandbox || sandbox.status !== "running" || !sandbox.publicIp) return null;
+        return sandboxTarget(sandbox, "/", "root");
+      },
+      (l) => log.append(l),
+    );
   } finally {
     await log.close();
   }
@@ -1124,7 +1379,8 @@ async function watchCloudBootstrap(
     if (res.code === 3) {
       const reason =
         res.stdout.trim() || "the bootstrap reported a fatal step";
-      const log = createLogWriter(sandboxId);
+      // Appended: the provision's log is the evidence for this very error.
+      const log = await appendSandboxLog(sandboxId);
       try {
         log.append(`[nexux] ERROR: ${reason}`);
       } finally {
@@ -1149,6 +1405,7 @@ async function runProvision(
   spec: SandboxSpec,
   credentials: ProviderCredentials,
   extraLogLines: string[] = [],
+  seeds: LaunchSeed[] = [],
 ) {
   const log = createLogWriter(sandboxId);
   try {
@@ -1181,6 +1438,8 @@ async function runProvision(
     // died on `cd`. Watch from here instead of blocking: provisioning is
     // already done, and the watch only ever downgrades.
     void watchCloudBootstrap(sandboxId).catch(() => undefined);
+    // sshd may not answer yet; the push retries until it does (spec 29).
+    if (seeds.length) void pushCloudSeeds(sandboxId, seeds).catch(() => undefined);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.append(`[nexux] ERROR: ${message}`);
@@ -1242,7 +1501,7 @@ export async function requestDestroy(sandboxId: string): Promise<Sandbox> {
       data: { status: "destroying", error: null },
     });
     activeOps.add(sandboxId);
-    void runLocalDestroy(sandboxId, sandbox.instanceId).finally(() =>
+    void runLocalDestroy(sandboxId, sandbox.instanceId, rowTarget(sandbox)).finally(() =>
       activeOps.delete(sandboxId),
     );
     return updated;
@@ -1274,7 +1533,11 @@ export async function requestDestroy(sandboxId: string): Promise<Sandbox> {
   return updated;
 }
 
-async function runLocalDestroy(sandboxId: string, containerName: string | null) {
+async function runLocalDestroy(
+  sandboxId: string,
+  containerName: string | null,
+  target: DockerTarget = { host: null },
+) {
   const log = createLogWriter(sandboxId);
   const existing = await prisma.sandbox.findUnique({
     where: { id: sandboxId },
@@ -1283,7 +1546,7 @@ async function runLocalDestroy(sandboxId: string, containerName: string | null) 
   if (existing?.log) log.sink(existing.log);
   try {
     if (containerName) {
-      await destroyLocalSandbox(containerName, log.sink.bind(log));
+      await destroyLocalSandbox(containerName, log.sink.bind(log), target);
     }
     await prisma.sandbox.update({
       where: { id: sandboxId },
@@ -1375,6 +1638,8 @@ export type ReconcileCandidate = {
   id: string;
   name: string;
   instanceId: string | null;
+  /** The daemon it lives on; null = this machine (spec 26). */
+  dockerHost?: string | null;
 };
 
 /**
@@ -1385,26 +1650,39 @@ export type ReconcileCandidate = {
 export async function staleRunningSandboxIds(
   candidates: ReconcileCandidate[],
   probes: {
-    dockerAvailable: () => Promise<boolean>;
-    containerRunning: (container: string) => Promise<boolean>;
+    dockerAvailable: (target: DockerTarget) => Promise<boolean>;
+    containerRunning: (container: string, target: DockerTarget) => Promise<boolean>;
   },
 ): Promise<string[]> {
   if (candidates.length === 0) return [];
-  // Docker being unreachable is not evidence the sandboxes died — leave the
-  // rows alone rather than marking every one of them paused.
-  if (!(await probes.dockerAvailable())) return [];
+
+  // Per daemon: a laptop's Docker Desktop being down says nothing about the
+  // workstation's sandboxes, and the reverse. Docker being unreachable is not
+  // evidence the sandboxes died — leave those rows alone rather than marking
+  // every one of them paused.
+  const byHost = new Map<string | null, ReconcileCandidate[]>();
+  for (const c of candidates) {
+    const key = c.dockerHost ?? null;
+    byHost.set(key, [...(byHost.get(key) ?? []), c]);
+  }
 
   const results = await Promise.all(
-    candidates.map(async (s) => {
-      // A probe that throws says nothing about the container; treat only a
-      // definite "not running" as stale.
-      const running = await probes
-        .containerRunning(s.instanceId ?? s.name)
-        .catch(() => true);
-      return running ? null : s.id;
+    [...byHost].map(async ([host, group]) => {
+      const target: DockerTarget = { host };
+      if (!(await probes.dockerAvailable(target).catch(() => false))) return [];
+      return Promise.all(
+        group.map(async (s) => {
+          // A probe that throws says nothing about the container; treat only a
+          // definite "not running" as stale.
+          const running = await probes
+            .containerRunning(s.instanceId ?? s.name, target)
+            .catch(() => true);
+          return running ? null : s.id;
+        }),
+      );
     }),
   );
-  return results.filter((id): id is string => id !== null);
+  return results.flat().filter((id): id is string => id !== null);
 }
 
 export async function reconcileLocalSandboxStatuses(
@@ -1412,12 +1690,12 @@ export async function reconcileLocalSandboxStatuses(
 ): Promise<void> {
   const candidates = await prisma.sandbox.findMany({
     where: { projectId, archived: false, provider: "local", status: "running" },
-    select: { id: true, name: true, instanceId: true },
+    select: { id: true, name: true, instanceId: true, dockerHost: true },
   });
 
   const stale = await staleRunningSandboxIds(candidates, {
-    dockerAvailable,
-    containerRunning: localSandboxRunning,
+    dockerAvailable: (target) => dockerAvailable(target),
+    containerRunning: (name, target) => localSandboxRunning(name, target),
   });
   if (stale.length === 0) return;
 
@@ -1439,7 +1717,7 @@ export async function pauseSandbox(sandboxId: string) {
   if (isSandboxBusy(sandboxId)) {
     throw new Error("A task is running on this sandbox — wait for it first");
   }
-  await pauseLocalSandbox(sandbox.instanceId ?? sandbox.name);
+  await pauseLocalSandbox(sandbox.instanceId ?? sandbox.name, rowTarget(sandbox));
   return prisma.sandbox.update({
     where: { id: sandboxId },
     data: { status: "paused" },
@@ -1456,7 +1734,9 @@ export async function resumeSandbox(sandboxId: string) {
   if (sandbox.status !== "paused") {
     throw new Error("Only a paused sandbox can be resumed");
   }
-  await resumeLocalSandbox(sandbox.instanceId ?? sandbox.name);
+  await resumeLocalSandbox(sandbox.instanceId ?? sandbox.name, {
+    target: rowTarget(sandbox),
+  });
   return prisma.sandbox.update({
     where: { id: sandboxId },
     data: { status: "running" },

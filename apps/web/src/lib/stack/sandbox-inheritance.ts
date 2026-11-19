@@ -20,7 +20,7 @@ import {
   runPhase,
   servicePhases,
 } from "./phases";
-import type { StackInheritance, StackPhase } from "./types";
+import type { PortMapping, StackInheritance, StackPhase } from "./types";
 
 const EMPTY: StackInheritance = {
   appName: null,
@@ -108,7 +108,7 @@ export async function getStackInheritance(
 
   // Every local repo node with a command — the canvas is a better answer than
   // a generic "pnpm start" guess, for the app and for launchers alike.
-  const repoCommands = localNodes.flatMap((n) => {
+  const repoCommands = await Promise.all(localNodes.map(async (n) => {
     if (!n.repository?.id) return [];
     const phases = phasesOfNode(n.id);
     // A repo's bootstrap has one slot per step, so a repeated role collapses
@@ -123,6 +123,22 @@ export async function getStackInheritance(
     const installCommand = commandOf("install");
     const buildCommand = commandOf("build");
     if (!runCommand && !installCommand && !buildCommand) return [];
+    // The port this repo's run command serves, resolved the same way the app
+    // node's is — the sandbox needs it per repo, not just for the one node
+    // that drives the preview, so a second service can be boot-probed too
+    // (spec 24 piece 2). Null when the node declares none and the command
+    // does not reveal one; the bootstrap then skips the probe rather than
+    // guessing a port.
+    const runPort = runCommand
+      ? nodePorts(
+          n.ports as PortMapping[] | null,
+          runCommand,
+          await resolveScriptCommand(
+            runCommand,
+            resolveNodeDir(n.repository?.localPath, n.workdir),
+          ),
+        )[0] ?? null
+      : null;
     return [
       {
         repositoryId: n.repository.id,
@@ -130,10 +146,11 @@ export async function getStackInheritance(
         installCommand,
         buildCommand,
         runCommand,
+        runPort,
         managesServices: n.managesServices,
       },
     ];
-  });
+  })).then((r) => r.flat());
 
   // The app node: a local repo node with a phase that boots the app. A
   // launcher has a `services` phase instead, so it never qualifies.

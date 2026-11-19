@@ -1,4 +1,4 @@
-// Files a bot hands the user (spec 23). The bot saves them in its outbox and
+// Files a bot hands the user (spec 31). The bot saves them in its outbox and
 // references them in its reply (`![caption](outbox://slide-1.png)`); after the
 // run, the manager copies each one out of the container into the data dir and
 // rewrites the reference to a Nexus URL, so the chat shows images inline and

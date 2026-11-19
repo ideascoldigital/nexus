@@ -1,6 +1,6 @@
 "use client";
 
-// Bots (spec 23): AI teammates, each with its own ephemeral computer.
+// Bots (spec 31): AI teammates, each with its own ephemeral computer.
 // An inbox of bots on the left (latest message, unread dot), the conversation
 // in the middle, the bot's panel on the right (activity, computer, settings).
 // The computer opens as a big live screen you can take control of.
