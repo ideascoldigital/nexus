@@ -1,4 +1,6 @@
-export { prisma } from "./client";
+export { ensureVault, prisma } from "./client";
+export { isSealed, openString, sealString, vaultKeySource } from "./vault";
+export type { VaultReport } from "./vault-admin";
 export { databasePath } from "./db-path";
 export {
   acquireInstanceLock,

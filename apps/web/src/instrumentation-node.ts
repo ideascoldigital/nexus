@@ -27,6 +27,19 @@ export async function registerNode() {
   process.once("exit", lock.release);
   console.log(`[instrumentation] holding ${lock.path}`);
 
+  // The vault (spec 32): check the key against the database and seal any
+  // secret still stored in plaintext — before anything reads one. A wrong key
+  // is fatal: every credential read would fail, and nothing was changed.
+  try {
+    const { ensureVault } = await import("@nexux/db");
+    const report = await ensureVault();
+    const sealed = Object.entries(report.sealed).map(([m, n]) => `${m} ${n}`).join(", ");
+    console.log(`[vault] key from ${report.keySource}${sealed ? `; sealed ${sealed}` : ""}`);
+  } catch (err) {
+    console.error("[vault]", err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
+
   // In dev, `pnpm dev` may already run the standalone terminal server; let an
   // explicit opt-out skip the in-process one to avoid a port clash.
   if (process.env.NEXUX_DISABLE_INPROC_TERMINAL !== "1") {

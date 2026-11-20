@@ -276,7 +276,7 @@ test("a bot's MCP servers: saved in the native shape, rejected when wrong, clear
 
   const bad = await patch({ mcpServers: { browser: { command: "x" } } });
   assert.equal(bad.status, 400);
-  assert.match(JSON.stringify(await bad.json()), /taken by the bot's own browser/);
+  assert.match(JSON.stringify(await bad.json()), /is used by Nexus/);
 
   // Other edits leave them alone; null clears them.
   assert.deepEqual((await (await patch({ role: "reads docs" })).json()).mcpServers, servers);

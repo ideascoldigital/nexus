@@ -332,12 +332,12 @@ function BotSettings({ bot, onDeleted }: { bot: BotListItem; onDeleted: () => vo
           className={cn(field, "min-h-24 resize-y font-mono text-[12px] leading-5", !mcp.ok && "border-destructive")}
           value={mcpJson}
           spellCheck={false}
-          placeholder={`{\n  "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },\n  "my-api": { "type": "http", "url": "https://mcp.example.com/mcp", "headers": { "Authorization": "Bearer …" } }\n}`}
+          placeholder={`{\n  "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },\n  "my-api": { "type": "http", "url": "https://mcp.example.com/mcp", "headers": { "Authorization": "Bearer {{secret:my-api-token}}" } }\n}`}
           onChange={(e) => setMcpJson(e.target.value)}
         />
         <p className={cn("px-1 text-[11.5px]", mcp.ok ? "text-muted-foreground" : "text-destructive")}>
           {mcp.ok
-            ? "Claude Code's mcpServers JSON. Loaded on its computer next to the browser from the next message. Use API keys in env or headers: sign-in (OAuth) MCPs can't open a login here. Commands run inside the bot's computer (Node and npx are there)."
+            ? "Claude Code's mcpServers JSON, loaded on its computer from the next message. Keep keys in the Vault and write {{secret:name}} here — never the key itself. Sign-in (OAuth) MCPs can't open a login here. Commands run inside the bot's computer (Node and npx are there)."
             : mcp.error}
         </p>
       </Section>

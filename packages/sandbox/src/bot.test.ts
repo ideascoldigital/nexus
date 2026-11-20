@@ -109,6 +109,9 @@ test("the Claude command resumes, picks the model, and wires the browser MCP", (
   assert.match(fresh, /--mcp-config \/etc\/nexux-bot\/mcp\.json --permission-mode/);
   // The bot's own servers ride in a second config file.
   const withOwn = buildBotClaudeCommand("hi", { systemPrompt: "s", userMcp: true });
+  // Room for a cold `npx -y` download, but only when the bot has servers of its own.
+  assert.match(withOwn, /^MCP_TIMEOUT=180000 claude -p/);
+  assert.doesNotMatch(fresh, /MCP_TIMEOUT/);
   assert.match(withOwn, /--mcp-config \/etc\/nexux-bot\/mcp\.json \/home\/bot\/\.nexux-mcp\.json --permission-mode/);
 });
 
