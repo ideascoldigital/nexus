@@ -43,6 +43,9 @@ No native state beyond two mutexes (`SidecarChild`, `ZoomLevel`). All data lives
 ## Commands
 
 - `pnpm dev:native` — Tauri dev against :3100.
-- `pnpm build:native` — `tauri:build` (runs sidecar build first).
+- `pnpm build:native` — `tauri:build` → `scripts/build-app.ts`, which wraps
+  `tauri build` (runs sidecar build first) and finishes a DMG that
+  `bundle_dmg.sh` abandoned while unmounting. `tauri:build:raw` skips the
+  wrapper; `tauri:build --finish-dmg` only recovers, without rebuilding.
 
 Rust backend uses `tauri-plugin-shell` + `tauri-plugin-opener`. Icons bundled for macOS/iOS/Android/Windows.

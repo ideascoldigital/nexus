@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "tauri dev",
     "tauri": "tauri",
-    "tauri:build": "tauri build",
+    "tauri:build": "tsx scripts/build-app.ts",
+    "tauri:build:raw": "tauri build",
     "tauri:icon": "tauri icon",
     "build:sidecar": "tsx scripts/build-sidecar.ts",
     "test": "tsx --test \"tests/**/*.test.ts\""

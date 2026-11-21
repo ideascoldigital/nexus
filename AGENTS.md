@@ -22,7 +22,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 pnpm dev            # web dashboard → :3333 (terminal WS :3002)
 pnpm dev:native     # Tauri dev (web on :3100, no sidecar)
 pnpm build          # turbo build all
-pnpm build:native   # tauri:build (bundles web as Node sidecar)
+pnpm build:native   # tauri:build → build-app.ts (bundles web as Node sidecar)
 pnpm test           # turbo test (packages use `tsx --test`)
 pnpm typecheck      # tsc --noEmit everywhere (depends on ^build)
 pnpm lint
