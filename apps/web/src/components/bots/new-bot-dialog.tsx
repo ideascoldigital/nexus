@@ -4,7 +4,7 @@
 // The job and standing instructions are edited later from the bot's panel.
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { BOT_COLORS, BOT_SHAPES, type BotShape } from "@/lib/bot-shapes";
 import { cn } from "@/lib/utils";
 import { createBot } from "@/services/bots";
+import { getDockerEndpoints } from "@/services/docker-endpoints";
 
 export function NewBotDialog({
   open,
@@ -29,14 +30,18 @@ export function NewBotDialog({
   const [name, setName] = useState("");
   const [shape, setShape] = useState<BotShape>("blob");
   const [color, setColor] = useState<string>("#ec4899");
+  // null = this machine's docker context, which is where a bot ran before
+  // endpoints reached them (D-86).
+  const [dockerEndpointId, setDockerEndpointId] = useState<string | null>(null);
 
   const create = useMutation({
-    mutationFn: () => createBot({ name: name.trim(), shape, color }),
+    mutationFn: () => createBot({ name: name.trim(), shape, color, dockerEndpointId }),
     onSuccess: (bot) => {
       qc.invalidateQueries({ queryKey: ["bots"] });
       onCreated(bot.id);
       onOpenChange(false);
       setName("");
+      setDockerEndpointId(null);
     },
     onError: (err) =>
       toast({
@@ -101,6 +106,7 @@ export function NewBotDialog({
               />
             ))}
           </div>
+          <RunsOnSwitch value={dockerEndpointId} onChange={setDockerEndpointId} />
           <button type="submit" hidden />
         </form>
         <DialogFooter className="m-0 rounded-none border-t border-border bg-transparent px-4 py-3">
@@ -118,5 +124,63 @@ export function NewBotDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Which daemon the new bot's computer will start on (D-86).
+ *
+ * Renders nothing at all until an endpoint exists: someone with one machine
+ * has no choice to make, and a dialog this small should not show a control
+ * whose only option is the default.
+ */
+function RunsOnSwitch({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (id: string | null) => void;
+}) {
+  const endpoints = useQuery({ queryKey: ["docker-endpoints"], queryFn: getDockerEndpoints });
+  const list = endpoints.data ?? [];
+  if (list.length === 0) return null;
+
+  const options = [
+    { id: null as string | null, label: "This machine", hint: "Its files and sign-ins stay here." },
+    ...list.map((e) => ({
+      id: e.id as string | null,
+      label: e.name,
+      hint:
+        e.kind === "remote"
+          ? `On ${e.host.replace(/^ssh:\/\//i, "")} — its files and sign-ins live there.`
+          : "A daemon on this machine, behind its own socket.",
+    })),
+  ];
+  const chosen = options.find((o) => o.id === value) ?? options[0];
+
+  return (
+    <div className="flex flex-col items-center gap-1.5 pt-1">
+      <span className="text-[11px] text-muted-foreground">Its computer runs on</span>
+      <div className="flex flex-wrap justify-center gap-1">
+        {options.map((o) => (
+          <button
+            key={o.id ?? "this-machine"}
+            type="button"
+            aria-pressed={value === o.id}
+            title={o.hint}
+            onClick={() => onChange(o.id)}
+            className={cn(
+              "rounded-full border px-3 py-1 text-[12px] transition-colors",
+              value === o.id
+                ? "border-primary/60 bg-primary/10 text-foreground"
+                : "border-border/60 text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+      <span className="text-[11px] text-muted-foreground">{chosen.hint}</span>
+    </div>
   );
 }

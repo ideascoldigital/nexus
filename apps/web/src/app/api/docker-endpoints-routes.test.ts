@@ -195,6 +195,22 @@ test("a repo with only a local folder can't launch on another machine, and the r
   assert.equal(await prisma.sandbox.count({ where: { projectId } }), 0);
 });
 
+test("a socket on this machine is not refused for mounting local folders", async () => {
+  const ep = await (
+    await create({ name: "litek8s", host: "unix:///Users/me/.litek8s/docker.sock" })
+  ).json();
+  assert.equal(ep.host, "unix:///Users/me/.litek8s/docker.sock");
+  assert.equal(ep.kind, "local");
+  await prisma.repository.create({
+    data: { projectId, name: "landing", localPath: "/Users/me/landing" },
+  });
+  const res = await launch({ provider: "local", dockerEndpointId: ep.id });
+  // It may well fail for want of a daemon behind that socket — what it must
+  // not do is refuse the folder for being on another machine, which it is not.
+  const body = JSON.stringify(await res.json().catch(() => ({})));
+  assert.ok(!/can't see local folders/.test(body), body);
+});
+
 test("an endpoint on a cloud launch is refused, and so is a stale one", async () => {
   const ep = await (await create({ name: "devbox", host: "ssh://devbox" })).json();
   const cloud = await launch({ provider: "civo", dockerEndpointId: ep.id });
@@ -222,6 +238,30 @@ function hostOn(dockerEndpointId: string, status: string) {
     },
   });
 }
+
+test("an endpoint with an awake bot computer cannot be removed, and is told to sleep it", async () => {
+  const ep = await (await create({ name: "devbox", host: "ssh://devbox" })).json();
+  const bot = await prisma.bot.create({ data: { name: "Remote Bot", dockerEndpointId: ep.id } });
+  // Counted by the session's own host, which is where the container really is.
+  await prisma.botSession.create({
+    data: { botId: bot.id, status: "ready", containerName: "c-remote", dockerHost: ep.host },
+  });
+
+  const refused = await deleteRoute(json("DELETE", "http://test/x"), params(ep.id));
+  assert.equal(refused.status, 409);
+  const { error } = await refused.json();
+  assert.match(error, /1 bot computer still runs on "devbox"/);
+  // Sleep, not destroy: a computer is ephemeral by design.
+  assert.match(error, /put them to sleep/);
+
+  // Asleep, it no longer holds the endpoint.
+  await prisma.botSession.updateMany({ where: { botId: bot.id }, data: { status: "stopped" } });
+  assert.equal((await deleteRoute(json("DELETE", "http://test/x"), params(ep.id))).status, 200);
+  // The bot survives and falls back to this machine (SET NULL).
+  const after = await prisma.bot.findUniqueOrThrow({ where: { id: bot.id } });
+  assert.equal(after.dockerEndpointId, null);
+  await prisma.bot.delete({ where: { id: bot.id } });
+});
 
 test("an endpoint running a Nexus host cannot be removed", async () => {
   const ep = await (await create({ name: "devbox", host: "ssh://devbox" })).json();

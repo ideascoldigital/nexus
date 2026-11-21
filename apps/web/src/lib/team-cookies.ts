@@ -166,30 +166,40 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /** A computer just woke: give it the team's sign-ins, then remember what it has. */
-export function seedComputer(botId: string, container: string): Promise<void> {
+export function seedComputer(
+  botId: string,
+  container: string,
+  dockerHost: string | null = null,
+): Promise<void> {
   return serial(async () => {
     const team = loadTeamStore();
     const now = Date.now() / 1000;
     const live = Object.values(team.cookies).filter(
       (c) => isShareable(c) && (c.session || c.expires <= 0 || c.expires > now),
     );
-    await setBotCookies(container, live.map(toCookieParam));
-    writePrivate(snapshotPath(botId), snapshotOf(await getBotCookies(container)));
+    const target = { host: dockerHost };
+    await setBotCookies(container, live.map(toCookieParam), target);
+    writePrivate(snapshotPath(botId), snapshotOf(await getBotCookies(container, target)));
   });
 }
 
 /**
  * Take what changed in one computer's browser into the team store and pass it
  * to the other awake computers. Returns how many cookies travelled.
+ *
+ * The team is not necessarily on one daemon (D-85): every computer carries the
+ * host its container lives on, so a sign-in made on this machine reaches a
+ * teammate on another one the same way.
  */
 export function shareFromComputer(
   botId: string,
   container: string,
-  others: { botId: string; container: string }[],
+  others: { botId: string; container: string; dockerHost: string | null }[],
+  dockerHost: string | null = null,
 ): Promise<number> {
   return serial(async () => {
     const before = readJson<Snapshot>(snapshotPath(botId), {});
-    const now = await getBotCookies(container);
+    const now = await getBotCookies(container, { host: dockerHost });
     const team = loadTeamStore();
     const { set, changed } = applyChanges(team, diffCookies(before, now));
     writePrivate(snapshotPath(botId), snapshotOf(now));
@@ -197,10 +207,11 @@ export function shareFromComputer(
     writePrivate(storePath(), team);
     for (const o of others) {
       try {
-        await setBotCookies(o.container, set);
+        const to = { host: o.dockerHost };
+        await setBotCookies(o.container, set, to);
         // What we just gave it is not "its" change: fold it into its snapshot.
         const snap = readJson<Snapshot>(snapshotPath(o.botId), {});
-        for (const c of await getBotCookies(o.container)) snap[cookieKey(c)] = fingerprint(c);
+        for (const c of await getBotCookies(o.container, to)) snap[cookieKey(c)] = fingerprint(c);
         writePrivate(snapshotPath(o.botId), snap);
       } catch (err) {
         console.warn(`[bots] could not share sign-ins with ${o.botId}:`, err instanceof Error ? err.message : err);

@@ -7,6 +7,7 @@ import os from "os";
 import { getConfig } from "@nexux/config";
 import { prisma } from "@nexux/db";
 import {
+  dockerHostKind,
   ensureEndpointKeypair,
   ensureUserSshInclude,
   probeDockerEndpoint,
@@ -58,18 +59,43 @@ export function liveHostCount(endpointId: string): Promise<number> {
   });
 }
 
+/**
+ * Bot computers awake on this endpoint (spec 31, D-85). Counted by the
+ * session's own `dockerHost`, not by the bot's current choice: a bot pointed
+ * somewhere else after its computer started still has that computer here.
+ */
+export async function liveBotCount(endpointId: string): Promise<number> {
+  const ep = await prisma.dockerEndpoint.findUnique({
+    where: { id: endpointId },
+    select: { host: true },
+  });
+  if (!ep) return 0;
+  return prisma.botSession.count({
+    where: { dockerHost: ep.host, status: { in: ["starting", "ready"] } },
+  });
+}
+
 /** What the list shows per endpoint: what still runs there. */
 export async function usage(endpointId: string) {
-  const [sandboxCount, hostCount] = await Promise.all([
+  const [sandboxCount, hostCount, botCount] = await Promise.all([
     liveSandboxCount(endpointId),
     liveHostCount(endpointId),
+    liveBotCount(endpointId),
   ]);
-  return { sandboxCount, hostCount };
+  return { sandboxCount, hostCount, botCount };
 }
 
 export async function listEndpoints() {
   const rows = await prisma.dockerEndpoint.findMany({ orderBy: { createdAt: "asc" } });
-  return Promise.all(rows.map(async (r) => ({ ...r, ...(await usage(r.id)) })));
+  // `kind` is derived here rather than in the component: @nexux/sandbox
+  // reaches for child_process, which has no business in a browser bundle.
+  return Promise.all(
+    rows.map(async (r) => ({
+      ...r,
+      kind: dockerHostKind(r.host),
+      ...(await usage(r.id)),
+    })),
+  );
 }
 
 // --- a Nexus host reaching endpoints over SSH (spec 27 phase 6) ----------------
@@ -89,6 +115,8 @@ export function hostEndpointKey(): { publicKey: string } | null {
 /** Make `docker -H <host>` from this host use its endpoint key. No-op on a laptop. */
 export function prepareEndpointSsh(dockerHost: string): void {
   if (!isHostInstall()) return;
+  // A unix socket is reached directly; there is no ssh to configure for it.
+  if (dockerHostKind(dockerHost) !== "remote") return;
   const dataDir = getConfig().dataDir;
   hostEndpointKey();
   upsertEndpointSshHost(dataDir, dockerHost);
@@ -97,6 +125,7 @@ export function prepareEndpointSsh(dockerHost: string): void {
 
 export function forgetEndpointSsh(dockerHost: string): void {
   if (!isHostInstall()) return;
+  if (dockerHostKind(dockerHost) !== "remote") return;
   removeEndpointSshHost(getConfig().dataDir, dockerHost);
 }
 
@@ -107,4 +136,13 @@ export async function restoreEndpointSsh(): Promise<number> {
   for (const r of rows) prepareEndpointSsh(r.host);
   ensureUserSshInclude(getConfig().dataDir);
   return rows.length;
+}
+
+/**
+ * A bot may only be pointed at an endpoint that exists. Prisma's foreign key
+ * would refuse it too, but as a 500 — this says what is wrong.
+ */
+export async function missingEndpoint(id: string | null | undefined): Promise<boolean> {
+  if (!id) return false;
+  return (await prisma.dockerEndpoint.count({ where: { id } })) === 0;
 }

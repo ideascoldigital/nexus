@@ -22,7 +22,7 @@ import {
   safeSlug,
 } from "./template";
 import { DEFAULT_WS_PORT } from "./template-browser";
-import { dockerHostArgs, type DockerTarget } from "./docker-endpoint";
+import { dockerHostArgs, dockerHostKind, type DockerTarget } from "./docker-endpoint";
 
 /**
  * What a sandbox container starts from when nothing has been prebuilt.
@@ -116,9 +116,10 @@ export async function dockerAvailable(
   target?: DockerTarget | null,
 ): Promise<boolean> {
   try {
-    // Longer for a remote daemon: the first call pays the SSH handshake.
+    // Longer for a remote daemon: the first call pays the SSH handshake. A
+    // daemon behind a local socket pays nothing, endpoint or not.
     const res = await docker(target, ["info"], {
-      timeoutMs: target?.host ? 30_000 : 15_000,
+      timeoutMs: dockerHostKind(target?.host) === "remote" ? 30_000 : 15_000,
     });
     return res.code === 0;
   } catch {
@@ -252,7 +253,11 @@ export async function launchLocalSandbox(opts: {
   // remote daemon that is an empty directory Docker creates without a word —
   // a sandbox working on nothing. The launch route refuses this with a
   // friendlier message; this is the backstop.
-  if (target?.host) {
+  //
+  // By kind, not by "has an endpoint": a daemon behind a local socket is on
+  // this machine, and whether it shares this filesystem is a question its
+  // health check answers rather than one to assume the worst of here.
+  if (target?.host && dockerHostKind(target.host) === "remote") {
     const unmountable = spec.repos.filter((r) => !r.repoUrl && r.mountPath);
     if (unmountable.length > 0) {
       throw new Error(

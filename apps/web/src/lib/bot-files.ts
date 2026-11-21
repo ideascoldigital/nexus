@@ -70,6 +70,8 @@ export async function collectBotFiles(opts: {
   botId: string;
   runId: string;
   container: string;
+  /** The daemon the container is on; null = this machine (D-85). */
+  dockerHost?: string | null;
   text: string;
 }): Promise<string> {
   const refs = findOutboxRefs(opts.text);
@@ -79,12 +81,15 @@ export async function collectBotFiles(opts: {
   const done = new Map<string, string | null>();
   for (const ref of refs) {
     const remote = `${BOT_OUTBOX}/${ref.name}`;
-    const size = await botFileSize(opts.container, remote);
+    const target = { host: opts.dockerHost ?? null };
+    const size = await botFileSize(opts.container, remote, target);
     if (size === null || size > MAX_FILE_BYTES) {
       done.set(ref.url, null);
       continue;
     }
-    const ok = await copyFromBot(opts.container, remote, path.join(dir, ref.name));
+    // `docker cp` reads from the daemon and writes here, so a file made on
+    // another machine still lands in Nexus's own folder.
+    const ok = await copyFromBot(opts.container, remote, path.join(dir, ref.name), target);
     done.set(ref.url, ok ? botFileUrl(opts.botId, opts.runId, ref.name) : null);
   }
   return rewriteOutboxRefs(opts.text, done);

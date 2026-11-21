@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { enqueueBotPrompt } from "@/lib/bot-manager";
 import { buildIntroPrompt } from "@/lib/bot-intro";
 import { botActivity, botDataFor, botInputSchema, botPreview } from "@/lib/bot-view";
+import { missingEndpoint } from "@/lib/docker-endpoints";
 
 export const dynamic = "force-dynamic";
 
@@ -42,17 +43,26 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
+  if (await missingEndpoint(parsed.data.dockerEndpointId)) {
+    return NextResponse.json({ error: "That Docker endpoint no longer exists." }, { status: 400 });
+  }
   const bot = await prisma.bot.create({ data: botDataFor(parsed.data, Prisma.DbNull) as Prisma.BotCreateInput });
   // `?intro=0` skips the greeting — imports create many bots at once, and each
   // greeting wakes a computer.
   if (req.nextUrl.searchParams.get("intro") === "0") return NextResponse.json(bot, { status: 201 });
   // A new teammate says hi first: it wakes its computer and introduces itself
-  // with a "where do we start?" question. Best effort — without Docker the bot
-  // still exists, it just waits for your first message.
-  try {
-    await enqueueBotPrompt(bot.id, await buildIntroPrompt(bot));
-  } catch (err) {
-    console.warn("[bots] intro skipped:", err instanceof Error ? err.message : err);
-  }
+  // with a "where do we start?" question.
+  //
+  // Deliberately not awaited. Waking a computer is slow in ways that have
+  // nothing to do with creating a bot: a daemon that has never built the bot
+  // image builds it now (minutes), and an endpoint pays an SSH handshake
+  // before that — one that fails on a 20s timeout when the machine is asleep,
+  // which is 20s of a dialog that has nothing left to do. The bot exists
+  // either way; the greeting arrives when it arrives, or not at all.
+  void buildIntroPrompt(bot)
+    .then((prompt) => enqueueBotPrompt(bot.id, prompt))
+    .catch((err) =>
+      console.warn("[bots] intro skipped:", err instanceof Error ? err.message : err),
+    );
   return NextResponse.json(bot, { status: 201 });
 }

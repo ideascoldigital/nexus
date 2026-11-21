@@ -17,6 +17,7 @@
 
 import { spawn } from "child_process";
 import { createHash } from "crypto";
+import { dockerHostArgs, type DockerTarget } from "./docker-endpoint";
 import { sandboxMemoryLimitMb } from "./local";
 import {
   createStreamParser,
@@ -461,7 +462,18 @@ export function dockerRun(...a: Parameters<typeof docker>): ReturnType<typeof do
   return docker(...a);
 }
 
+/**
+ * Every docker command a bot causes goes through here, and `target` is its
+ * first argument rather than an option so that no call site can forget it —
+ * the same discipline `local.ts` keeps, for the same reason: a bot half-living
+ * on two daemons would be a container on one and a lookup on the other.
+ *
+ * `target` null (or `{ host: null }`) is the daemon this machine's docker
+ * context points at, which is where every bot ran before endpoints reached
+ * them.
+ */
 function docker(
+  target: DockerTarget | null | undefined,
   args: string[],
   opts: {
     onLog?: LogSink;
@@ -471,7 +483,7 @@ function docker(
   } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn("docker", args, {
+    const child = spawn("docker", [...dockerHostArgs(target), ...args], {
       // Secrets ride in the child's environment and are referenced by name
       // (`-e KEY`), so they never appear in argv / `ps`.
       env: opts.env ? { ...process.env, ...opts.env } : process.env,
@@ -507,14 +519,17 @@ function tail(text: string, n = 400): string {
 }
 
 /** Build the bot image unless this exact recipe is already built. */
-export async function ensureBotImage(opts: { onLog?: LogSink } = {}): Promise<string> {
+export async function ensureBotImage(
+  opts: { onLog?: LogSink; target?: DockerTarget | null } = {},
+): Promise<string> {
   const dockerfile = renderBotDockerfile();
   const tag = botImageTag(dockerfile);
-  const exists = await docker(["image", "inspect", tag], { timeoutMs: 15_000 });
+  // Per daemon: the tag existing here says nothing about it existing there.
+  const exists = await docker(opts.target, ["image", "inspect", tag], { timeoutMs: 15_000 });
   if (exists.code === 0) return tag;
 
   opts.onLog?.(`[bot] building image ${tag} (first run takes a few minutes)\n`);
-  const built = await docker(["build", "-t", tag, "-"], {
+  const built = await docker(opts.target, ["build", "-t", tag, "-"], {
     stdin: dockerfile,
     onLog: opts.onLog,
     timeoutMs: 30 * 60_000,
@@ -578,10 +593,12 @@ export async function launchBotContainer(opts: {
   env: Record<string, string>;
   mounts?: { host: string; container: string }[];
   onLog?: LogSink;
+  target?: DockerTarget | null;
 }): Promise<{ containerName: string; vncPort: number }> {
-  const image = await ensureBotImage({ onLog: opts.onLog });
-  const memoryMb = await sandboxMemoryLimitMb();
+  const image = await ensureBotImage({ onLog: opts.onLog, target: opts.target });
+  const memoryMb = await sandboxMemoryLimitMb(opts.target);
   const created = await docker(
+    opts.target,
     botRunArgs({
       name: opts.name,
       image,
@@ -594,21 +611,42 @@ export async function launchBotContainer(opts: {
   if (created.code !== 0) {
     throw new Error(`docker run failed: ${tail(created.stderr || created.stdout)}`);
   }
-  const port = await docker(["port", opts.name, `${BOT_NOVNC_PORT}/tcp`], {
+  const port = await docker(opts.target, ["port", opts.name, `${BOT_NOVNC_PORT}/tcp`], {
     timeoutMs: 15_000,
   });
   const vncPort = parsePublishedPort(port.stdout);
   if (!vncPort) {
-    await stopBotContainer(opts.name);
+    await stopBotContainer(opts.name, opts.target);
     throw new Error("could not read the bot's published noVNC port");
   }
   return { containerName: opts.name, vncPort };
 }
 
+/**
+ * The port a running computer's noVNC is published on, read from its daemon.
+ * On another machine that is a port on *its* loopback, which is what an SSH
+ * forward then points at (D-85); after a Nexus restart it is the only way to
+ * find it again, since the forward died with the old process.
+ */
+export async function botScreenPort(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<number | null> {
+  const res = await docker(target, ["port", name, `${BOT_NOVNC_PORT}/tcp`], {
+    timeoutMs: 15_000,
+  }).catch(() => null);
+  if (!res || res.code !== 0) return null;
+  return parsePublishedPort(res.stdout);
+}
+
 export type BotReadiness = "ready" | "starting" | { failed: string };
 
-export async function botReadiness(name: string): Promise<BotReadiness> {
+export async function botReadiness(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<BotReadiness> {
   const res = await docker(
+    target,
     [
       "exec",
       name,
@@ -628,13 +666,17 @@ export async function botReadiness(name: string): Promise<BotReadiness> {
 }
 
 /** Remove the container (and, being --rm, everything in it). Idempotent. */
-export async function stopBotContainer(name: string): Promise<void> {
-  await docker(["rm", "-f", name], { timeoutMs: 60_000 }).catch(() => undefined);
+export async function stopBotContainer(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<void> {
+  await docker(target, ["rm", "-f", name], { timeoutMs: 60_000 }).catch(() => undefined);
 }
 
 /** Every bot container on this engine, running or not. */
-export async function listBotContainers(): Promise<string[]> {
+export async function listBotContainers(target?: DockerTarget | null): Promise<string[]> {
   const res = await docker(
+    target,
     ["ps", "-a", "--filter", `label=${BOT_CONTAINER_LABEL}`, "--format", "{{.Names}}"],
     { timeoutMs: 15_000 },
   ).catch(() => null);
@@ -643,16 +685,25 @@ export async function listBotContainers(): Promise<string[]> {
 }
 
 /** Size in bytes of a file inside a bot's computer, or null if it is not a regular file. */
-export async function botFileSize(name: string, path: string): Promise<number | null> {
-  const res = await docker(["exec", name, "stat", "-L", "-c", "%F %s", path], { timeoutMs: 15_000 }).catch(() => null);
+export async function botFileSize(
+  name: string,
+  path: string,
+  target?: DockerTarget | null,
+): Promise<number | null> {
+  const res = await docker(target, ["exec", name, "stat", "-L", "-c", "%F %s", path], { timeoutMs: 15_000 }).catch(() => null);
   if (!res || res.code !== 0) return null;
   const m = res.stdout.trim().match(/^regular(?: empty)? file (\d+)$/);
   return m ? Number(m[1]) : null;
 }
 
 /** Copy one file out of a bot's computer onto this machine. */
-export async function copyFromBot(name: string, path: string, dest: string): Promise<boolean> {
-  const res = await docker(["cp", "-L", `${name}:${path}`, dest], { timeoutMs: 60_000 }).catch(() => null);
+export async function copyFromBot(
+  name: string,
+  path: string,
+  dest: string,
+  target?: DockerTarget | null,
+): Promise<boolean> {
+  const res = await docker(target, ["cp", "-L", `${name}:${path}`, dest], { timeoutMs: 60_000 }).catch(() => null);
   return Boolean(res && res.code === 0);
 }
 
@@ -675,8 +726,11 @@ export type BotCookie = {
 };
 
 /** Every cookie in a computer's browser (sign-ins included). Secret material: never log it. */
-export async function getBotCookies(name: string): Promise<BotCookie[]> {
-  const res = await docker(["exec", "-u", BOT_USER, name, "node", BOT_COOKIE_SCRIPT, "get"], { timeoutMs: 20_000 });
+export async function getBotCookies(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<BotCookie[]> {
+  const res = await docker(target, ["exec", "-u", BOT_USER, name, "node", BOT_COOKIE_SCRIPT, "get"], { timeoutMs: 20_000 });
   if (res.code !== 0) throw new Error(`could not read cookies: ${tail(res.stderr, 200)}`);
   return JSON.parse(res.stdout) as BotCookie[];
 }
@@ -686,11 +740,15 @@ export async function getBotCookies(name: string): Promise<BotCookie[]> {
  * has none). Their env/headers may hold API keys: they travel on stdin and the
  * file is readable by the bot user only.
  */
-export async function writeBotMcpConfig(name: string, servers: Record<string, unknown> | null): Promise<void> {
+export async function writeBotMcpConfig(
+  name: string,
+  servers: Record<string, unknown> | null,
+  target?: DockerTarget | null,
+): Promise<void> {
   const script = servers
     ? `umask 077 && cat > ${BOT_USER_MCP_CONFIG}`
     : `rm -f ${BOT_USER_MCP_CONFIG}`;
-  const res = await docker(["exec", "-i", "-u", BOT_USER, name, "sh", "-c", script], {
+  const res = await docker(target, ["exec", "-i", "-u", BOT_USER, name, "sh", "-c", script], {
     stdin: servers ? JSON.stringify({ mcpServers: servers }) : "",
     timeoutMs: 15_000,
   });
@@ -698,9 +756,13 @@ export async function writeBotMcpConfig(name: string, servers: Record<string, un
 }
 
 /** Set cookies in a computer's browser. Values travel on stdin, never in argv. */
-export async function setBotCookies(name: string, cookies: Record<string, unknown>[]): Promise<void> {
+export async function setBotCookies(
+  name: string,
+  cookies: Record<string, unknown>[],
+  target?: DockerTarget | null,
+): Promise<void> {
   if (cookies.length === 0) return;
-  const res = await docker(["exec", "-i", "-u", BOT_USER, name, "node", BOT_COOKIE_SCRIPT, "set"], {
+  const res = await docker(target, ["exec", "-i", "-u", BOT_USER, name, "node", BOT_COOKIE_SCRIPT, "set"], {
     stdin: JSON.stringify(cookies),
     timeoutMs: 20_000,
   });
@@ -711,10 +773,13 @@ export async function setBotCookies(name: string, cookies: Record<string, unknow
  * Kill any Claude run still going inside a computer. Used when Nexux restarts
  * and adopts a live container: the old process's runs have no supervisor.
  */
-export async function stopBotClaudeRuns(name: string): Promise<void> {
+export async function stopBotClaudeRuns(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<void> {
   // Only the CLI (`claude …` or node running @anthropic-ai/claude-code), not
   // anything else whose arguments merely mention "claude".
-  await docker(["exec", name, "pkill", "-f", "^claude |@anthropic-ai/claude-code"], { timeoutMs: 15_000 }).catch(
+  await docker(target, ["exec", name, "pkill", "-f", "^claude |@anthropic-ai/claude-code"], { timeoutMs: 15_000 }).catch(
     () => null,
   );
 }
@@ -919,12 +984,14 @@ export async function runBotPrompt(
     signal?: AbortSignal;
     /** Working directory for Claude; defaults to the scratch BOT_WORKDIR. */
     cwd?: string;
+    target?: DockerTarget | null;
   },
 ): Promise<ClaudeRunResult> {
   const parser = createStreamParser(opts.onLog);
   const res = await execRemote(buildBotClaudeCommand(prompt, opts), {
     container: opts.container,
     user: BOT_USER,
+    dockerHost: opts.target?.host ?? null,
     cwd: opts.cwd ?? BOT_WORKDIR,
     onLog: parser.handleChunk,
     timeoutMs: opts.timeoutMs,

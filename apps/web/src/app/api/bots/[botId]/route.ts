@@ -5,6 +5,7 @@ import { removeBotProfile } from "@/lib/bot-workspace";
 import { removeCookieSnapshot } from "@/lib/team-cookies";
 import { stopBotSession } from "@/lib/bot-manager";
 import { botDataFor, botInputSchema } from "@/lib/bot-view";
+import { missingEndpoint } from "@/lib/docker-endpoints";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
   const exists = await prisma.bot.findUnique({ where: { id: botId }, select: { id: true } });
   if (!exists) return NextResponse.json({ error: "Bot not found" }, { status: 404 });
+  if (await missingEndpoint(parsed.data.dockerEndpointId)) {
+    return NextResponse.json({ error: "That Docker endpoint no longer exists." }, { status: 400 });
+  }
   const bot = await prisma.bot.update({ where: { id: botId }, data: botDataFor(parsed.data, Prisma.DbNull) as Prisma.BotUpdateInput });
   return NextResponse.json(bot);
 }

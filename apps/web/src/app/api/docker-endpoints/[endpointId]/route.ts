@@ -7,6 +7,7 @@
  */
 
 import { prisma } from "@nexux/db";
+import { dockerHostKind } from "@nexux/sandbox";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -32,7 +33,11 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     where: { id: endpointId },
     data: { name: parsed.data.name },
   });
-  return NextResponse.json({ ...updated, ...(await usage(endpointId)) });
+  return NextResponse.json({
+    ...updated,
+    kind: dockerHostKind(updated.host),
+    ...(await usage(endpointId)),
+  });
 }
 
 export async function DELETE(_req: NextRequest, { params }: Params) {
@@ -42,15 +47,19 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
 
   // Same rule as a credential in use: removing it would strand containers
   // Nexux can no longer reach to stop or destroy.
-  const { sandboxCount, hostCount } = await usage(endpointId);
+  const { sandboxCount, hostCount, botCount } = await usage(endpointId);
   const inUse = [
     sandboxCount && `${sandboxCount} sandbox${sandboxCount === 1 ? "" : "es"}`,
     hostCount && `${hostCount} Nexus host${hostCount === 1 ? "" : "s"}`,
+    botCount && `${botCount} bot computer${botCount === 1 ? "" : "s"}`,
   ].filter(Boolean);
+  const total = sandboxCount + hostCount + botCount;
   if (inUse.length > 0) {
     return NextResponse.json(
       {
-        error: `${inUse.join(" and ")} still run${sandboxCount + hostCount === 1 ? "s" : ""} on "${row.name}" — destroy ${sandboxCount + hostCount === 1 ? "it" : "them"} first.`,
+        error: `${inUse.join(" and ")} still run${total === 1 ? "s" : ""} on "${row.name}" — ${
+          botCount && total === botCount ? "put them to sleep" : "destroy"
+        } ${total === 1 ? "it" : "them"} first.`,
       },
       { status: 409 },
     );

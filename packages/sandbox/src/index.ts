@@ -3,6 +3,7 @@ export * from "./types";
 export {
   describeDockerHostError,
   dockerHostArgs,
+  dockerHostKind,
   explainProbeFailure,
   parseDockerHost,
   parseDockerInfo,
@@ -245,6 +246,7 @@ export {
   BOT_OUTBOX,
   BOT_WORKSPACE,
   botFileSize,
+  botScreenPort,
   copyFromBot,
   BOT_ROUTINE_FENCE,
   botImageTag,

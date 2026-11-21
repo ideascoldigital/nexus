@@ -1,7 +1,7 @@
 // What the dashboard sees of a bot. Pure shaping, no Prisma — shared by the
 // bot routes and kept free of server-only imports so it is cheap to test.
 
-import { botVncUrl } from "@nexux/sandbox";
+import { dockerHostKind, botVncUrl } from "@nexux/sandbox";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { handoffRun, replyRun } from "@/lib/bot-handoffs";
@@ -22,6 +22,12 @@ export const botInputSchema = z.object({
   shape: z.enum(BOT_SHAPES).optional(),
   model: z.string().trim().max(60).nullish(),
   claudeCredentialId: z.string().nullish(),
+  /**
+   * Which Docker daemon its computers run on (D-85); null = this machine.
+   * A computer that is already up stays where it is — the session carries its
+   * own host — so a change applies to the next one.
+   */
+  dockerEndpointId: z.string().nullish(),
   idleMinutes: z.number().int().min(5).max(24 * 60).optional(),
   /** Its own MCP servers; null clears them. */
   mcpServers: z
@@ -56,10 +62,27 @@ export type BotSessionView = {
   vncFullUrl: string | null;
   /** What the boot is doing right now (image build step, waiting for the desktop). */
   progress: string | null;
+  /**
+   * Which machine this computer is on (D-85) — worth showing, because it is
+   * where the bot's files and sign-ins live, and on a remote daemon its screen
+   * reaches the dashboard through an SSH forward.
+   */
+  runsOn: { kind: "local" | "remote"; label: string };
   createdAt: Date;
   stoppedAt: Date | null;
   lastActivityAt: Date;
 };
+
+/** How a computer's daemon reads in the UI: short, and never a bare "null". */
+export function describeRunsOn(dockerHost: string | null | undefined): {
+  kind: "local" | "remote";
+  label: string;
+} {
+  if (!dockerHost) return { kind: "local", label: "this machine" };
+  return dockerHostKind(dockerHost) === "remote"
+    ? { kind: "remote", label: dockerHost.replace(/^ssh:\/\//i, "") }
+    : { kind: "local", label: dockerHost.replace(/^unix:\/\//i, "") };
+}
 
 export function shapeSession(
   s: {
@@ -68,6 +91,7 @@ export function shapeSession(
     error: string | null;
     vncPort: number | null;
     vncPassword: string | null;
+    dockerHost?: string | null;
     createdAt: Date;
     stoppedAt: Date | null;
     lastActivityAt: Date;
@@ -83,6 +107,7 @@ export function shapeSession(
     vncUrl: live ? botVncUrl(s.vncPort!, s.vncPassword!) : null,
     vncFullUrl: live ? botVncUrl(s.vncPort!, s.vncPassword!, { full: true }) : null,
     progress: s.status === "starting" ? progress : null,
+    runsOn: describeRunsOn(s.dockerHost),
     createdAt: s.createdAt,
     stoppedAt: s.stoppedAt,
     lastActivityAt: s.lastActivityAt,

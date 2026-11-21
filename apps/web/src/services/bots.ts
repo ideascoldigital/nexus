@@ -16,6 +16,8 @@ export type Bot = {
   /** Its own MCP servers (Claude Code's native mcpServers shape), or null. */
   mcpServers: Record<string, Record<string, unknown>> | null;
   claudeCredentialId: string | null;
+  /** The Docker endpoint its computers run on; null = this machine (D-85). */
+  dockerEndpointId: string | null;
   idleMinutes: number;
   createdAt: string;
   updatedAt: string;
@@ -42,6 +44,8 @@ export type BotSession = {
   vncFullUrl: string | null;
   /** Boot progress while `starting` (image build step, waiting for the desktop). */
   progress: string | null;
+  /** Which machine this computer is on — where its files and sign-ins live. */
+  runsOn: { kind: "local" | "remote"; label: string };
   createdAt: string;
   stoppedAt: string | null;
   lastActivityAt: string;
@@ -108,6 +112,8 @@ export type BotInput = {
   shape?: BotShape;
   model?: string | null;
   idleMinutes?: number;
+  /** null = this machine; a change applies to the bot's next computer. */
+  dockerEndpointId?: string | null;
   mcpServers?: Record<string, Record<string, unknown>> | null;
 };
 

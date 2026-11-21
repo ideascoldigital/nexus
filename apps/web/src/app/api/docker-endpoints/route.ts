@@ -7,7 +7,7 @@
  */
 
 import { prisma } from "@nexux/db";
-import { describeDockerHostError, parseDockerHost } from "@nexux/sandbox";
+import { describeDockerHostError, dockerHostKind, parseDockerHost } from "@nexux/sandbox";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -65,5 +65,8 @@ export async function POST(req: NextRequest) {
   const row = await prisma.dockerEndpoint.create({
     data: { name: parsed.data.name, host: host.host, ...probeColumns(res) },
   });
-  return NextResponse.json({ ...row, sandboxCount: 0, hostCount: 0 }, { status: 201 });
+  return NextResponse.json(
+    { ...row, kind: dockerHostKind(row.host), sandboxCount: 0, hostCount: 0 },
+    { status: 201 },
+  );
 }

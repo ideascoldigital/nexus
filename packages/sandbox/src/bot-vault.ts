@@ -12,6 +12,7 @@
  */
 
 import { BOT_CDP_PORT, BOT_HOME, BOT_USER, dockerRun } from "./bot";
+import { type DockerTarget } from "./docker-endpoint";
 
 export const BOT_VAULT_MCP_SCRIPT = `${BOT_HOME}/.nexux-vault-mcp.js`;
 export const BOT_VAULT_TYPE_SCRIPT = `${BOT_HOME}/.nexux-vault-type.js`;
@@ -128,12 +129,15 @@ const hostOk = (hosts, url) => { let h; try { h = new URL(url).hostname.toLowerC
 }
 
 /** Write the vault scripts into a computer (owner-only). */
-export async function writeBotVaultScripts(name: string): Promise<void> {
+export async function writeBotVaultScripts(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<void> {
   for (const [path, body] of [
     [BOT_VAULT_MCP_SCRIPT, renderVaultMcpScript()],
     [BOT_VAULT_TYPE_SCRIPT, renderVaultTypeScript()],
   ] as const) {
-    const res = await dockerRun(["exec", "-i", "-u", BOT_USER, name, "sh", "-c", `umask 077 && cat > ${path}`], { stdin: body, timeoutMs: 15_000 });
+    const res = await dockerRun(target, ["exec", "-i", "-u", BOT_USER, name, "sh", "-c", `umask 077 && cat > ${path}`], { stdin: body, timeoutMs: 15_000 });
     if (res.code !== 0) throw new Error(`could not write the vault scripts: ${res.stderr.slice(-200)}`);
   }
 }
@@ -144,8 +148,9 @@ export type VaultTypeResult = { ok: boolean; reason?: string; host?: string };
 export async function typeIntoBotBrowser(
   name: string,
   req: { text: string; password?: boolean; hosts?: string[]; https?: boolean },
+  target?: DockerTarget | null,
 ): Promise<VaultTypeResult> {
-  const res = await dockerRun(["exec", "-i", "-u", BOT_USER, name, "node", BOT_VAULT_TYPE_SCRIPT], {
+  const res = await dockerRun(target, ["exec", "-i", "-u", BOT_USER, name, "node", BOT_VAULT_TYPE_SCRIPT], {
     stdin: JSON.stringify(req),
     timeoutMs: 20_000,
   });

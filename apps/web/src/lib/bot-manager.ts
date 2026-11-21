@@ -12,10 +12,13 @@ import { prisma, type BotSession } from "@nexux/db";
 import {
   botReadiness,
   dockerAvailable,
+  dockerHostKind,
+  probeDockerEndpoint,
   launchBotContainer,
   listBotContainers,
   renderBotSystemPrompt,
   runBotPrompt,
+  botScreenPort,
   botVaultMcpServer,
   writeBotVaultScripts,
   writeBotMcpConfig,
@@ -25,7 +28,9 @@ import {
 import { detectNeedsInput, NEEDS_INPUT_MARKER } from "@/lib/agent-core";
 import { parseChoices } from "@/lib/bot-choices";
 import { collectBotFiles } from "@/lib/bot-files";
-import { botMounts, botWorkdir, workspaceFolderFor } from "@/lib/bot-workspace";
+import { probeColumns } from "@/lib/docker-endpoints";
+import { botScreenLocalPort, closeBotScreenForward } from "@/lib/bot-screen";
+import { botMounts, botVolumes, botWorkdir, workspaceFolderFor } from "@/lib/bot-workspace";
 import { seedComputer, shareFromComputer } from "@/lib/team-cookies";
 import {
   findTeammate,
@@ -93,6 +98,31 @@ export async function activeSession(botId: string): Promise<BotSession | null> {
   });
 }
 
+/**
+ * Which daemon a bot's computers run on, and what to call it when something
+ * goes wrong there. Read once per launch and copied onto the session, so every
+ * path afterwards works from the row rather than re-joining (D-85).
+ *
+ * An endpoint row that has gone missing falls back to this machine, which is
+ * also what `onDelete: SetNull` leaves behind — a bot is never stranded
+ * because its endpoint was removed.
+ */
+async function botTarget(bot: {
+  dockerEndpointId: string | null;
+}): Promise<{ host: string | null; name: string | null }> {
+  if (!bot.dockerEndpointId) return { host: null, name: null };
+  const ep = await prisma.dockerEndpoint.findUnique({
+    where: { id: bot.dockerEndpointId },
+    select: { host: true, name: true },
+  });
+  return ep ? { host: ep.host, name: ep.name } : { host: null, name: null };
+}
+
+/** The mounts for a computer: this machine's folders, or volumes on its daemon. */
+function mountsFor(bot: { id: string; name: string }, dockerHost: string | null) {
+  return dockerHostKind(dockerHost) === "remote" ? botVolumes(bot) : botMounts(bot);
+}
+
 // ---- Session lifecycle ----------------------------------------------------------
 
 /**
@@ -105,7 +135,28 @@ export async function startBotSession(botId: string): Promise<BotSession> {
 
   const bot = await prisma.bot.findUnique({ where: { id: botId } });
   if (!bot) throw new Error("Bot not found");
-  if (!(await dockerAvailable())) {
+  const target = await botTarget(bot);
+  if (target.host) {
+    // The endpoint probe rather than `dockerAvailable`: both ask the daemon one
+    // question, but only the probe keeps the answer. "Not answering" is the one
+    // thing the user cannot act on — a changed host key, an untrusted one, a
+    // daemon that is down, docker missing from that user's PATH and a machine
+    // that is simply asleep all look identical until the stderr is shown.
+    const probed = await probeDockerEndpoint(target.host);
+    // The answer is written back to the endpoint, so Settings cannot sit on a
+    // stale green while a bot is being told the same machine is unreachable.
+    // Those two disagreeing is worse than either being wrong.
+    if (bot.dockerEndpointId) {
+      await prisma.dockerEndpoint
+        .update({ where: { id: bot.dockerEndpointId }, data: probeColumns(probed) })
+        .catch(() => undefined);
+    }
+    if (!probed.ok) {
+      throw new Error(`"${target.name ?? target.host}" could not run this computer: ${probed.error}`);
+    }
+  } else if (!(await dockerAvailable())) {
+    // Naming the endpoint matters the other way too: this message must only
+    // ever be said about this machine's own Docker.
     throw new Error("Docker is not running — bots need it to start their computer");
   }
   const claude = await resolveClaudeCodeToken(bot.claudeCredentialId);
@@ -120,6 +171,7 @@ export async function startBotSession(botId: string): Promise<BotSession> {
       botId,
       status: "starting",
       containerName: botContainerName(botId),
+      dockerHost: target.host,
       vncPassword: randomBytes(6).toString("hex"),
     },
   });
@@ -130,23 +182,33 @@ export async function startBotSession(botId: string): Promise<BotSession> {
 async function bootSession(sessionId: string, claudeToken: string): Promise<void> {
   const session = await prisma.botSession.findUnique({ where: { id: sessionId }, include: { bot: true } });
   if (!session) return;
+  const target = { host: session.dockerHost };
   let build = { step: null as string | null, line: null as string | null };
   bootProgress.set(sessionId, "Preparing the computer…");
   try {
     const { vncPort } = await launchBotContainer({
       name: session.containerName,
+      target,
       env: {
         CLAUDE_CODE_OAUTH_TOKEN: claudeToken,
         VNC_PASSWORD: session.vncPassword ?? "",
       },
       // The shared workspace and its browser profile outlive the computer.
-      mounts: botMounts(session.bot),
+      mounts: mountsFor(session.bot, session.dockerHost),
       onLog: (chunk) => {
         build = buildProgress(build, chunk);
         if (build.step || build.line) bootProgress.set(sessionId, formatBuildProgress(build));
       },
     });
-    await prisma.botSession.update({ where: { id: sessionId }, data: { vncPort } });
+    // What goes on the row is the port on *this* machine: the published one for
+    // a local daemon, an SSH forward's for a remote one.
+    const localPort = await botScreenLocalPort({
+      sessionId,
+      dockerHost: session.dockerHost,
+      remotePort: vncPort,
+    });
+    if (localPort === null) throw new Error("could not forward the computer's screen from the endpoint");
+    await prisma.botSession.update({ where: { id: sessionId }, data: { vncPort: localPort } });
     bootProgress.set(sessionId, "Waiting for the desktop and Chromium to come up…");
 
     const deadline = Date.now() + READY_TIMEOUT_MS;
@@ -154,10 +216,10 @@ async function bootSession(sessionId: string, claudeToken: string): Promise<void
       // Ended by the user while booting: the stop path already cleaned up.
       const current = await prisma.botSession.findUnique({ where: { id: sessionId } });
       if (!current || current.status !== "starting") {
-        await stopBotContainer(session.containerName);
+        await stopBotContainer(session.containerName, target);
         return;
       }
-      const state = await botReadiness(session.containerName);
+      const state = await botReadiness(session.containerName, target);
       if (state === "ready") break;
       if (typeof state === "object") throw new Error(state.failed);
       if (Date.now() > deadline) throw new Error("the desktop did not come up in 3 minutes");
@@ -166,7 +228,7 @@ async function bootSession(sessionId: string, claudeToken: string): Promise<void
 
     // The team's sign-ins, before the first task runs.
     bootProgress.set(sessionId, "Signing in like the rest of the team…");
-    await seedComputer(session.botId, session.containerName).catch((err) =>
+    await seedComputer(session.botId, session.containerName, session.dockerHost).catch((err) =>
       console.warn("[bots] could not seed sign-ins:", err instanceof Error ? err.message : err),
     );
     await prisma.botSession.update({
@@ -176,7 +238,7 @@ async function bootSession(sessionId: string, claudeToken: string): Promise<void
     kickBotWorker(sessionId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await stopBotContainer(session.containerName);
+    await stopBotContainer(session.containerName, target);
     await endSession(sessionId, "error", `Could not start the computer: ${message}`);
   } finally {
     bootProgress.delete(sessionId);
@@ -197,7 +259,7 @@ export async function touchBotSession(botId: string): Promise<boolean> {
   if (touched.count > 0 && Date.now() - last > SHARE_EVERY_MS) {
     lastShare.set(botId, Date.now());
     const s = await prisma.botSession.findFirst({ where: { botId, status: "ready" } });
-    if (s) void shareSignIns(botId, s.containerName);
+    if (s) void shareSignIns(botId, s.containerName, s.dockerHost);
   }
   return touched.count > 0;
 }
@@ -210,16 +272,25 @@ const lastShare = ((globalThis as unknown as { nexuxLastShare?: Map<string, numb
  * browser to the team and to every other awake computer. Best effort — a
  * failure never stops a bot.
  */
-export async function shareSignIns(botId: string, container: string): Promise<void> {
+export async function shareSignIns(
+  botId: string,
+  container: string,
+  dockerHost: string | null = null,
+): Promise<void> {
   try {
     const others = await prisma.botSession.findMany({
       where: { status: "ready", botId: { not: botId } },
-      select: { botId: true, containerName: true },
+      select: { botId: true, containerName: true, dockerHost: true },
     });
     await shareFromComputer(
       botId,
       container,
-      others.map((o) => ({ botId: o.botId, container: o.containerName })),
+      others.map((o) => ({
+        botId: o.botId,
+        container: o.containerName,
+        dockerHost: o.dockerHost,
+      })),
+      dockerHost,
     );
   } catch (err) {
     console.warn("[bots] could not share sign-ins:", err instanceof Error ? err.message : err);
@@ -232,6 +303,9 @@ async function endSession(
   status: "stopped" | "error",
   error?: string,
 ): Promise<void> {
+  // Every way a session ends passes through here, so this is the one place the
+  // screen forward has to be dropped. A no-op when the daemon was local.
+  closeBotScreenForward(sessionId);
   const now = new Date();
   await prisma.botSession.updateMany({
     where: { id: sessionId, status: { in: [...ACTIVE_SESSION_STATUSES] } },
@@ -254,7 +328,7 @@ export async function stopBotSession(botId: string): Promise<void> {
   });
   for (const s of sessions) {
     // Last chance to keep what was signed into on this computer.
-    if (s.status === "ready") await shareSignIns(botId, s.containerName);
+    if (s.status === "ready") await shareSignIns(botId, s.containerName, s.dockerHost);
     // Settle first so the worker and the booter both see the session gone.
     await endSession(s.id, "stopped");
     const running = await prisma.botRun.findMany({
@@ -262,7 +336,7 @@ export async function stopBotSession(botId: string): Promise<void> {
       select: { id: true },
     });
     for (const r of running) aborts.get(r.id)?.abort();
-    await stopBotContainer(s.containerName);
+    await stopBotContainer(s.containerName, { host: s.dockerHost });
   }
 }
 
@@ -417,24 +491,32 @@ async function drain(sessionId: string): Promise<void> {
     aborts.set(run.id, abort);
     const log = createRunLog(run.id);
     // Valid only while this prompt runs.
-    const vaultToken = fillable.length ? grantVault({ botId: session.botId, runId: run.id, container: session.containerName }) : null;
+    const vaultToken = fillable.length ? grantVault({
+          botId: session.botId,
+          runId: run.id,
+          container: session.containerName,
+          dockerHost: session.dockerHost,
+        }) : null;
     try {
       // Rewritten every prompt, so a settings change applies on the next message.
       let userMcp = false;
       try {
         const servers: Record<string, unknown> = { ...(mcpServers ?? {}) };
         if (vaultToken) {
-          await writeBotVaultScripts(session.containerName);
+          await writeBotVaultScripts(session.containerName, { host: session.dockerHost });
           servers.vault = botVaultMcpServer({ nexusUrl: hostAppUrl(), botId: session.botId, token: vaultToken });
         }
         const any = Object.keys(servers).length > 0;
-        await writeBotMcpConfig(session.containerName, any ? servers : null);
+        await writeBotMcpConfig(session.containerName, any ? servers : null, {
+          host: session.dockerHost,
+        });
         userMcp = any;
       } catch (err) {
         console.warn(`[bots] ${session.bot.name}: MCP servers not loaded:`, err instanceof Error ? err.message : err);
       }
       const result = await runBotPrompt(prompt, {
         container: session.containerName,
+        target: { host: session.dockerHost },
         systemPrompt,
         resumeSessionId: resume,
         model: session.bot.model,
@@ -452,6 +534,7 @@ async function drain(sessionId: string): Promise<void> {
           botId: session.botId,
           runId: run.id,
           container: session.containerName,
+          dockerHost: session.dockerHost,
           text: result.result,
         }).catch((err) => {
           console.warn("[bots] could not collect files:", err instanceof Error ? err.message : err);
@@ -531,7 +614,7 @@ async function drain(sessionId: string): Promise<void> {
       revokeVault(vaultToken);
     }
     // Anything it signed into (or out of) during the task reaches the team.
-    await shareSignIns(session.botId, session.containerName);
+    await shareSignIns(session.botId, session.containerName, session.dockerHost);
   }
 }
 
@@ -681,17 +764,31 @@ export async function reapIdleBots(): Promise<number> {
  * Claude memory); every other active session ends; containers nobody adopts
  * are deleted. Pure, so the decision is testable without Docker.
  */
+/** A container is identified by its name *and* its daemon, never by name alone. */
+export type BotContainerRef = { name: string; dockerHost: string | null };
+
+const refKey = (c: BotContainerRef) => `${c.dockerHost ?? ""}\u0000${c.name}`;
+
+/**
+ * A container name is derived from the bot's id, so the same name can exist on
+ * two daemons at once — a bot that ran on an endpoint and was then pointed at
+ * this machine leaves one behind. Matching on the name alone would adopt the
+ * wrong one, or remove a live computer; both halves of the key are needed
+ * (D-85).
+ */
 export function planRecovery(
-  sessions: { id: string; status: string; containerName: string }[],
-  containers: string[],
-): { adopt: string[]; end: string[]; remove: string[] } {
-  const present = new Set(containers);
-  const adopt = sessions.filter((s) => s.status === "ready" && present.has(s.containerName));
-  const kept = new Set(adopt.map((s) => s.containerName));
+  sessions: { id: string; status: string; containerName: string; dockerHost: string | null }[],
+  containers: BotContainerRef[],
+): { adopt: string[]; end: string[]; remove: BotContainerRef[] } {
+  const present = new Set(containers.map(refKey));
+  const key = (s: { containerName: string; dockerHost: string | null }) =>
+    refKey({ name: s.containerName, dockerHost: s.dockerHost });
+  const adopt = sessions.filter((s) => s.status === "ready" && present.has(key(s)));
+  const kept = new Set(adopt.map(key));
   return {
     adopt: adopt.map((s) => s.id),
     end: sessions.filter((s) => !adopt.includes(s)).map((s) => s.id),
-    remove: containers.filter((c) => !kept.has(c)),
+    remove: containers.filter((c) => !kept.has(refKey(c))),
   };
 }
 
@@ -705,18 +802,39 @@ export function planRecovery(
 export async function recoverBots(): Promise<void> {
   const sessions = await prisma.botSession.findMany({
     where: { status: { in: [...ACTIVE_SESSION_STATUSES] } },
-    select: { id: true, status: true, containerName: true },
+    select: { id: true, status: true, containerName: true, dockerHost: true },
   });
-  const plan = planRecovery(sessions, await listBotContainers());
+  // Computers can be spread across daemons, so every one Nexus knows about is
+  // asked: this machine, plus each endpoint. An endpoint that does not answer
+  // is skipped rather than fatal — the rest of recovery still has to happen.
+  const hosts: (string | null)[] = [
+    null,
+    ...(await prisma.dockerEndpoint.findMany({ select: { host: true } })).map((e) => e.host),
+  ];
+  const containers: BotContainerRef[] = [];
+  for (const host of hosts) {
+    for (const name of await listBotContainers({ host })) containers.push({ name, dockerHost: host });
+  }
+  const plan = planRecovery(sessions, containers);
   const now = new Date();
   for (const id of plan.adopt) {
     const s = sessions.find((x) => x.id === id)!;
-    if ((await botReadiness(s.containerName)) !== "ready") {
-      await stopBotContainer(s.containerName);
+    const target = { host: s.dockerHost };
+    if ((await botReadiness(s.containerName, target)) !== "ready") {
+      await stopBotContainer(s.containerName, target);
       await endSession(id, "stopped", "Nexux restarted — the computer was deleted");
       continue;
     }
-    await stopBotClaudeRuns(s.containerName);
+    await stopBotClaudeRuns(s.containerName, target);
+    // The old process owned the SSH forward, so a remote computer's screen has
+    // to be found and forwarded again — and its local port is a new one.
+    if (dockerHostKind(s.dockerHost) === "remote") {
+      const remotePort = await botScreenPort(s.containerName, target);
+      const localPort = remotePort
+        ? await botScreenLocalPort({ sessionId: id, dockerHost: s.dockerHost, remotePort })
+        : null;
+      await prisma.botSession.update({ where: { id }, data: { vncPort: localPort } });
+    }
     await prisma.botRun.updateMany({
       where: { sessionId: id, status: "running" },
       data: { status: "error", error: "Nexux restarted while this was running. Ask again.", finishedAt: now },
@@ -728,8 +846,8 @@ export async function recoverBots(): Promise<void> {
   for (const id of plan.end) {
     await endSession(id, "stopped", "Nexux restarted — the computer was deleted");
   }
-  for (const name of plan.remove) {
-    await stopBotContainer(name);
+  for (const c of plan.remove) {
+    await stopBotContainer(c.name, { host: c.dockerHost });
   }
   if (!g.nexuxBotReaper) {
     // One tick a minute: put idle computers to sleep, wake bots whose

@@ -1,4 +1,7 @@
 import { strict as assert } from "node:assert";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 
 import type { DockerRunner } from "@/lib/host-endpoint";
@@ -83,4 +86,78 @@ test("parsers", () => {
     ),
     1448.8,
   );
+});
+
+
+// --- the bind-mount probe (a daemon on this machine) -------------------------
+
+/** The `-v <dir>:/probe:ro` argument's host side, as the probe passes it. */
+function mountedDir(args: string[]): string | null {
+  const v = args[args.indexOf("-v") + 1] ?? "";
+  const host = v.split(":")[0];
+  return host.startsWith("/") ? host : null;
+}
+
+/**
+ * A local daemon. `shares` decides whether a bind mount really arrives: when
+ * it does the stub reads the marker off disk, which is the round trip the
+ * probe is asking about; when it does not, Docker's own behaviour is mimicked
+ * — an empty directory on the daemon's side, so `cat` finds nothing.
+ */
+function localDaemon(opts: { shares: boolean }) {
+  const base = daemon({ networkDns: true });
+  const run: DockerRunner = async (args) => {
+    if (args.includes("/probe/marker")) {
+      const dir = mountedDir(args);
+      if (!opts.shares || !dir) {
+        return { code: 1, stdout: "", stderr: "cat: can't open '/probe/marker': No such file or directory" };
+      }
+      return { code: 0, stdout: fs.readFileSync(path.join(dir, "marker"), "utf8"), stderr: "" };
+    }
+    return base.run(args, {});
+  };
+  return { run, calls: base.calls };
+}
+
+const MOUNT = "bind mounts see this machine's files";
+
+test("a local daemon that shares the filesystem passes the mount probe", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexux-mount-"));
+  const r = await checkEndpointForSandboxes("unix:///var/run/docker.sock", {
+    run: localDaemon({ shares: true }).run,
+    probe: OK_PROBE,
+    dataDir,
+  });
+  assert.equal(r.status, "ok");
+  assert.equal(line(r, MOUNT)?.ok, true);
+  // The marker directory is staged and taken away again.
+  assert.deepEqual(fs.readdirSync(dataDir), []);
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test("a local daemon in a VM of its own is caught, not assumed to work", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexux-mount-"));
+  const r = await checkEndpointForSandboxes("unix:///Users/me/.litek8s/docker.sock", {
+    run: localDaemon({ shares: false }).run,
+    probe: OK_PROBE,
+    dataDir,
+  });
+  // A sandbox can still clone instead of mounting, so this warns, not fails.
+  assert.equal(r.status, "warn");
+  const mount = line(r, MOUNT);
+  assert.equal(mount?.ok, false);
+  assert.match(mount?.detail ?? "", /does not share this filesystem/);
+  assert.match(mount?.detail ?? "", /No such file or directory/);
+  assert.deepEqual(fs.readdirSync(dataDir), []);
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+test("a remote daemon is not asked about this machine's files", async () => {
+  const d = daemon({ networkDns: true });
+  const r = await checkEndpointForSandboxes("ssh://devbox", { run: d.run, probe: OK_PROBE });
+  const mount = line(r, MOUNT);
+  assert.equal(mount?.ok, null);
+  assert.match(mount?.detail ?? "", /clones its repo instead of mounting/);
+  // Nothing was mounted and nothing was staged to mount.
+  assert.ok(!d.calls.some((c) => c.includes("/probe/marker")));
 });

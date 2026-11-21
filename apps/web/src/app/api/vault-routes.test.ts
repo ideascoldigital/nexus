@@ -74,7 +74,7 @@ test("a bot reaches the vault only with a live token, only its entries, only fil
     botVault(req(`/api/bots/${bot.id}/vault`, "GET", undefined, token ? { "x-nexux-vault-token": token } : {}), p({ botId: bot.id }));
   assert.equal((await vaultOf()).status, 401);
 
-  const token = grantVault({ botId: bot.id, runId: "r1", container: "no-such-container" });
+  const token = grantVault({ botId: bot.id, runId: "r1", container: "no-such-container" , dockerHost: null });
   const list = await (await vaultOf(token)).json();
   // Its own login only; secrets are for MCP configs, not for vault_fill.
   assert.deepEqual(list.map((e: { name: string }) => e.name), ["facebook.com"]);

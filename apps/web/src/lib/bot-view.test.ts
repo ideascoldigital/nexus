@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   botActivity,
   botInputSchema,
+  describeRunsOn,
   botPreview,
   botSteps,
   buildProgress,
@@ -182,4 +183,30 @@ test("routines ride with each message; the system prompt hash notices changes", 
   assert.equal(promptHash("a"), promptHash("a"));
   assert.notEqual(promptHash("a"), promptHash("b"));
   assert.equal(promptHash("a").length, 16);
+});
+
+test("a computer says which machine it is on, never a bare null", () => {
+  assert.deepEqual(describeRunsOn(null), { kind: "local", label: "this machine" });
+  assert.deepEqual(describeRunsOn(undefined), { kind: "local", label: "this machine" });
+  // A socket endpoint is on this machine: local, but worth naming.
+  assert.deepEqual(describeRunsOn("unix:///Users/me/.litek8s/docker.sock"), {
+    kind: "local",
+    label: "/Users/me/.litek8s/docker.sock",
+  });
+  assert.deepEqual(describeRunsOn("ssh://dev@devbox"), { kind: "remote", label: "dev@devbox" });
+});
+
+test("a session carries where it runs, so the screen can be labelled", () => {
+  const row = {
+    id: "s1",
+    status: "ready",
+    error: null,
+    vncPort: 6080,
+    vncPassword: "pw",
+    createdAt: new Date(),
+    stoppedAt: null,
+    lastActivityAt: new Date(),
+  };
+  assert.equal(shapeSession(row)?.runsOn.kind, "local");
+  assert.equal(shapeSession({ ...row, dockerHost: "ssh://devbox" })?.runsOn.kind, "remote");
 });

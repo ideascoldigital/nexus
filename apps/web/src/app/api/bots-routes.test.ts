@@ -199,16 +199,100 @@ test("a due routine is rescheduled when the tick fires it", async () => {
   assert.equal(untouched.lastRunAt, null);
 });
 
+test("a new bot can be created straight onto an endpoint", async () => {
+  const ep = await prisma.dockerEndpoint.create({
+    data: { name: "omarchy", host: "ssh://omarchy", updatedAt: new Date() },
+  });
+  const made = await createBot(
+    json("/api/bots", "POST", { name: "Remote Hire", dockerEndpointId: ep.id }),
+  );
+  assert.equal(made.status, 201);
+  assert.equal((await made.json()).dockerEndpointId, ep.id);
+
+  // The default stays this machine when nothing is chosen.
+  const local = await createBot(json("/api/bots", "POST", { name: "Local Hire" }));
+  assert.equal((await local.json()).dockerEndpointId, null);
+
+  // A dangling id is refused at creation too, not only on edit.
+  const bad = await createBot(
+    json("/api/bots", "POST", { name: "Nowhere", dockerEndpointId: "nope" }),
+  );
+  assert.equal(bad.status, 400);
+
+  await prisma.bot.deleteMany({ where: { name: { in: ["Remote Hire", "Local Hire"] } } });
+  await prisma.dockerEndpoint.delete({ where: { id: ep.id } });
+});
+
+test("a bot can be pointed at an endpoint, and never at one that is gone", async () => {
+  const bot = await prisma.bot.create({ data: { name: "Pointable" } });
+  const ep = await prisma.dockerEndpoint.create({
+    data: { name: "litek8s", host: "unix:///Users/me/.litek8s/docker.sock", updatedAt: new Date() },
+  });
+
+  const ok = await patchBot(
+    json(`/api/bots/${bot.id}`, "PATCH", { dockerEndpointId: ep.id }),
+    p({ botId: bot.id }),
+  );
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).dockerEndpointId, ep.id);
+
+  // A dangling id is a 400 with a sentence, not a foreign-key 500.
+  const bad = await patchBot(
+    json(`/api/bots/${bot.id}`, "PATCH", { dockerEndpointId: "nope" }),
+    p({ botId: bot.id }),
+  );
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).error, /no longer exists/);
+
+  // And back to this machine.
+  const home = await patchBot(
+    json(`/api/bots/${bot.id}`, "PATCH", { dockerEndpointId: null }),
+    p({ botId: bot.id }),
+  );
+  assert.equal((await home.json()).dockerEndpointId, null);
+
+  await prisma.bot.delete({ where: { id: bot.id } });
+  await prisma.dockerEndpoint.delete({ where: { id: ep.id } });
+});
+
 test("a restart adopts live ready computers and deletes the rest", () => {
   const plan = planRecovery(
     [
-      { id: "a", status: "ready", containerName: "c-a" }, // alive: adopted, sign-ins kept
-      { id: "b", status: "ready", containerName: "c-b" }, // container gone: ended
-      { id: "c", status: "starting", containerName: "c-c" }, // mid-boot: ended, container removed
+      { id: "a", status: "ready", containerName: "c-a", dockerHost: null }, // alive: adopted, sign-ins kept
+      { id: "b", status: "ready", containerName: "c-b", dockerHost: null }, // container gone: ended
+      { id: "c", status: "starting", containerName: "c-c", dockerHost: null }, // mid-boot: ended, container removed
     ],
-    ["c-a", "c-c", "c-orphan"],
+    [
+      { name: "c-a", dockerHost: null },
+      { name: "c-c", dockerHost: null },
+      { name: "c-orphan", dockerHost: null },
+    ],
   );
-  assert.deepEqual(plan, { adopt: ["a"], end: ["b", "c"], remove: ["c-c", "c-orphan"] });
+  assert.deepEqual(plan, {
+    adopt: ["a"],
+    end: ["b", "c"],
+    remove: [
+      { name: "c-c", dockerHost: null },
+      { name: "c-orphan", dockerHost: null },
+    ],
+  });
+});
+
+test("the same container name on two daemons is two computers, not one", () => {
+  // A bot ran on an endpoint and was then pointed at this machine: the name is
+  // derived from its id, so both daemons hold one. Matching on the name alone
+  // would adopt the wrong computer and delete the live one.
+  const plan = planRecovery(
+    [{ id: "a", status: "ready", containerName: "c-a", dockerHost: null }],
+    [
+      { name: "c-a", dockerHost: null },
+      { name: "c-a", dockerHost: "ssh://devbox" },
+    ],
+  );
+  assert.deepEqual(plan.adopt, ["a"]);
+  assert.deepEqual(plan.end, []);
+  // Only the stale one, and on the daemon it is actually on.
+  assert.deepEqual(plan.remove, [{ name: "c-a", dockerHost: "ssh://devbox" }]);
 });
 
 test("a bot's files are served sandboxed, and nothing outside its folder is", async () => {

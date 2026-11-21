@@ -5,14 +5,19 @@
  * needs more, all of it checkable in seconds with throwaway busybox
  * containers: privileged runs (it is Docker-in-Docker), DNS both on the
  * default bridge and on a compose-style network (a machine can have the first
- * and not the second — `devbox` did), the internet, and disk for images.
+ * and not the second — `devbox` did), the internet, disk for images, and —
+ * for a daemon on this machine — whether a bind mount from here actually
+ * arrives.
  *
  * Everything created is removed, including the temporary network.
  */
 
 import { randomBytes } from "crypto";
+import fs from "fs";
+import path from "path";
 
-import { dockerHostArgs, probeDockerEndpoint } from "@nexux/sandbox";
+import { getConfig } from "@nexux/config";
+import { dockerHostArgs, dockerHostKind, probeDockerEndpoint } from "@nexux/sandbox";
 
 import { runDocker, type DockerRunner } from "@/lib/host-endpoint";
 
@@ -38,9 +43,68 @@ export function freeGbFromDf(output: string): number | null {
   return Number.isFinite(avail) ? Math.round((avail / 1024 / 1024) * 10) / 10 : null;
 }
 
+const MOUNT_LABEL = "bind mounts see this machine's files";
+
+/**
+ * Does `-v <path on this machine>` reach a container on this daemon?
+ *
+ * Worth asking only of a daemon that is on this machine, and not obvious even
+ * then: one behind its own socket can sit inside a VM that shares all of the
+ * filesystem (OrbStack), part of it (Docker Desktop's configured list) or
+ * none of it. Docker does not fail a mount it cannot honour — it creates an
+ * empty directory on its own side — so the only way to know is to write a
+ * value here and have a container read it back.
+ *
+ * What hangs on the answer: a sandbox mounts a repo that has no clone URL,
+ * and a bot mounts its workspace and its browser profile. Where those live is
+ * the difference between work you can open in Finder and work that quietly
+ * stays on the daemon's side.
+ */
+async function checkBindMount(
+  run: DockerRunner,
+  H: string[],
+  dataDir: string,
+): Promise<CheckLine> {
+  const marker = randomBytes(8).toString("hex");
+  const dir = path.join(dataDir, `mount-probe-${marker}`);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "marker"), marker);
+    const res = await run(
+      [...H, "run", "--rm", "-v", `${dir}:/probe:ro`, IMAGE, "cat", "/probe/marker"],
+      { timeoutMs: 60_000 },
+    );
+    if (res.code === 0 && res.stdout.trim() === marker) return { label: MOUNT_LABEL, ok: true };
+    const stderr = res.stderr.trim().slice(-200);
+    return {
+      label: MOUNT_LABEL,
+      ok: false,
+      detail:
+        "a container here could not read back a file this machine had just written, so this daemon does not share this filesystem — a mounted repo, a bot's workspace and its sign-ins would all live on the daemon's side instead" +
+        (stderr ? `\n${stderr}` : ""),
+    };
+  } catch (err) {
+    // Could not even stage the probe: that is this machine's problem, not the
+    // endpoint's, so it is unknown rather than a failure.
+    return {
+      label: MOUNT_LABEL,
+      ok: null,
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export async function checkEndpointForSandboxes(
   host: string,
-  deps: { run?: DockerRunner; now?: () => Date; probe?: typeof probeDockerEndpoint } = {},
+  deps: {
+    run?: DockerRunner;
+    now?: () => Date;
+    probe?: typeof probeDockerEndpoint;
+    /** Where the bind-mount probe stages its marker. Injected by the tests. */
+    dataDir?: string;
+  } = {},
 ): Promise<CredentialCheck> {
   const run = deps.run ?? runDocker;
   const checkedAt = (deps.now?.() ?? new Date()).toISOString();
@@ -125,6 +189,17 @@ export async function checkEndpointForSandboxes(
     freeGb === null
       ? { label: "disk space for Docker", ok: null, detail: "could not read it" }
       : { label: "disk space for Docker", ok: freeGb >= MIN_FREE_GB, detail: `${freeGb} GB free${freeGb < MIN_FREE_GB ? ` — images and a sandbox's own Docker need more than ${MIN_FREE_GB} GB` : ""}` },
+  );
+
+  lines.push(
+    dockerHostKind(host) === "remote"
+      ? {
+          label: MOUNT_LABEL,
+          ok: null,
+          detail:
+            "a daemon on another machine mounts that machine's paths, not this one's — a sandbox there clones its repo instead of mounting it",
+        }
+      : await checkBindMount(run, H, deps.dataDir ?? getConfig().dataDir),
   );
 
   const hardFail = lines.some((l) => l.ok === false && /privileged|default bridge/.test(l.label));

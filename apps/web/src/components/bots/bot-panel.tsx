@@ -11,6 +11,7 @@ import { BotAvatar } from "@/components/bots/bot-avatar";
 import { ComputerCard, computerState } from "@/components/bots/bot-computer";
 import { RoutineDialog } from "@/components/bots/bot-routine-dialog";
 import { Button } from "@/components/ui/button";
+import { DockerEndpointPicker } from "@/components/projects/docker-endpoint-picker";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { parseBotMcpJson } from "@/lib/bot-mcp";
@@ -255,6 +256,7 @@ function BotSettings({ bot, onDeleted }: { bot: BotListItem; onDeleted: () => vo
     shape: bot.shape,
     model: bot.model ?? "",
     idleMinutes: bot.idleMinutes,
+    dockerEndpointId: bot.dockerEndpointId ?? null,
   });
   // MCP servers edit as raw JSON (the native mcpServers shape), checked on save.
   const [mcpJson, setMcpJson] = useState(() =>
@@ -390,6 +392,21 @@ function BotSettings({ bot, onDeleted }: { bot: BotListItem; onDeleted: () => vo
           />
         </Section>
       </div>
+      {/* Renders nothing unless an endpoint exists, so one machine sees no choice. */}
+      <DockerEndpointPicker
+        value={form.dockerEndpointId ?? null}
+        onChange={(id) => setForm({ ...form, dockerEndpointId: id })}
+        mountOnlyRepos={[]}
+        title="Computer runs on"
+        description="Where this bot's computer starts — and so where its files and its sign-ins live."
+      />
+      {(form.dockerEndpointId ?? null) !== (bot.dockerEndpointId ?? null) && (
+        <p className="text-[11px] text-amber-300/90">
+          A computer that is already awake stays where it is — this applies to the
+          next one. Its workspace and sign-ins live wherever it runs, so the next
+          computer starts fresh there.
+        </p>
+      )}
       <div className="flex items-center justify-between pt-1">
         <Button
           type="button"

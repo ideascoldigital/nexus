@@ -5,7 +5,13 @@
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
-type Grant = { botId: string; runId: string; container: string };
+type Grant = {
+  botId: string;
+  runId: string;
+  container: string;
+  /** The daemon the container is on; null = this machine (D-85). */
+  dockerHost: string | null;
+};
 
 const g = globalThis as unknown as { nexuxVaultGrants?: Map<string, Grant> };
 const grants = (g.nexuxVaultGrants ??= new Map<string, Grant>());

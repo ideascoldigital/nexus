@@ -449,7 +449,7 @@ model Sandbox {
 model DockerEndpoint {
   id            String    @id @default(cuid())
   name          String
-  host          String    @unique // ssh://user@host[:port]
+  host          String    @unique // ssh://user@host[:port], or unix:///path/to.sock on this machine
   serverVersion String?
   arch          String? // the base image is built on the remote, natively
   memTotalMb    Int?
@@ -465,6 +465,7 @@ model DockerEndpoint {
   sandboxes      Sandbox[]
   nexusHosts     NexusHost[]
   sandboxConfigs SandboxConfig[]
+  bots           Bot[]
 }
 
 // SandboxProcess - one long-running command started on a sandbox instance
@@ -1197,12 +1198,18 @@ model Bot {
   claudeCredentialId String? // saved "claude" credential to run on; null = the first one (resolveClaudeCodeToken)
   idleMinutes        Int      @default(30) // the computer is deleted after this long without a prompt
   mcpServers         Json? // its own MCP servers, Claude Code's native mcpServers shape — loaded next to the browser MCP
+  // Which Docker daemon its computers run on (spec 26, D-85). Null = this
+  // machine's docker context, which is where every bot ran before endpoints
+  // reached them. A remote endpoint means its workspace and its sign-ins live
+  // on that machine, so moving a bot gives it a fresh computer.
+  dockerEndpointId   String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  sessions BotSession[]
-  runs     BotRun[]
-  routines BotRoutine[]
+  sessions       BotSession[]
+  runs           BotRun[]
+  routines       BotRoutine[]
+  dockerEndpoint DockerEndpoint? @relation(fields: [dockerEndpointId], references: [id], onDelete: SetNull)
 }
 
 // BotSession - one lifetime of a bot's ephemeral computer (one container).
@@ -1213,7 +1220,12 @@ model BotSession {
   botId           String
   status          String    @default("starting") // starting | ready | stopped | error
   containerName   String
-  vncPort         Int? // noVNC on host loopback
+  // The endpoint's host, copied at launch — the same reason Sandbox keeps one:
+  // every exec, stop and recovery path reaches the daemon the container is
+  // actually on, without a join, and it cannot drift when the bot is pointed
+  // somewhere else or the endpoint is removed. Null = this machine.
+  dockerHost      String?
+  vncPort         Int? // noVNC on the daemon's loopback; forwarded here when it is remote
   vncPassword     String? // random per session; the container is gone when it ends
   claudeSessionId String? // --resume target for the next prompt in this session
   systemPromptHash String? // hash of the system prompt claudeSessionId began with; a change means a fresh Claude session

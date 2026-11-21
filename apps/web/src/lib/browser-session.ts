@@ -31,6 +31,7 @@ import {
   renderBrowserStartScript,
   renderBrowserStopScript,
   sandboxPrivateKeyPath,
+  dockerHostKind,
   sshUrlParts,
   VNC_TOKEN_LENGTH,
 } from "@nexux/sandbox";
@@ -174,7 +175,7 @@ export function endpointForwardArgs(opts: {
 }
 
 /** Wait until something answers on the forwarded port, or give up. */
-async function waitForPort(port: number, attempts = 30): Promise<boolean> {
+export async function waitForPort(port: number, attempts = 30): Promise<boolean> {
   for (let i = 0; i < attempts; i++) {
     const ok = await new Promise<boolean>((resolve) => {
       const sock = net
@@ -377,7 +378,14 @@ export async function startBrowserSession(
   // A container on another machine's Docker: docker published the bridge on
   // that machine's loopback. Read the port there, then forward to it through
   // the endpoint's SSH — the same shape as a cloud sandbox, different door.
-  if (sandbox.provider === "local" && sandbox.dockerHost) {
+  // Only a daemon on another machine. One behind a local socket publishes on
+  // this machine's loopback like any local container, so it falls through to
+  // the no-forward path below.
+  if (
+    sandbox.provider === "local" &&
+    sandbox.dockerHost &&
+    dockerHostKind(sandbox.dockerHost) === "remote"
+  ) {
     const remotePort = sandbox.instanceId
       ? await browserWsPort(sandbox.instanceId, { host: sandbox.dockerHost }).catch(() => null)
       : null;

@@ -47,12 +47,16 @@ export async function POST(req: NextRequest, { params }: Params) {
   const value = valueFor(field, (item.secret ?? {}) as Record<string, unknown>);
   if (!value) return NextResponse.json({ error: `The entry "${item.name}" has no ${field}.` }, { status: 404 });
 
-  const typed = await typeIntoBotBrowser(grant.container, {
-    text: value,
-    password: type === "login" && field === "password",
-    hosts: type === "login" ? ((item.websites as string[] | null) ?? []) : undefined,
-    https: type === "card",
-  });
+  const typed = await typeIntoBotBrowser(
+    grant.container,
+    {
+      text: value,
+      password: type === "login" && field === "password",
+      hosts: type === "login" ? ((item.websites as string[] | null) ?? []) : undefined,
+      https: type === "card",
+    },
+    { host: grant.dockerHost },
+  );
   if (!typed.ok) return NextResponse.json({ error: typed.reason ?? "Could not type it." }, { status: 409 });
   await prisma.vaultItem.update({ where: { id: item.id }, data: { lastUsedAt: new Date() } });
   console.log(`[vault] ${field} of "${item.name}" typed for bot ${botId} on ${typed.host ?? "?"}`);

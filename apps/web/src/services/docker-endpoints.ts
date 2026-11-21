@@ -5,8 +5,13 @@
 export type DockerEndpoint = {
   id: string;
   name: string;
-  /** ssh://[user@]host[:port] */
+  /** ssh://[user@]host[:port], or unix:///path/to.sock on this machine */
   host: string;
+  /**
+   * Whose filesystem the daemon has, derived from the host's scheme on the
+   * server (the helper that decides it reaches for child_process).
+   */
+  kind: "local" | "remote" | null;
   serverVersion: string | null;
   arch: string | null;
   memTotalMb: number | null;
@@ -17,6 +22,8 @@ export type DockerEndpoint = {
   sandboxCount: number;
   /** Nexus hosts running on it (spec 27) — same rule. */
   hostCount: number;
+  /** Bot computers awake on it (spec 31) — same rule, but they only need sleep. */
+  botCount: number;
   /** Whether a sandbox would work there (spec 28 phase 5). */
   sandboxCheck?: import("@/lib/credential-checks/types").CredentialCheck | null;
   createdAt: string;

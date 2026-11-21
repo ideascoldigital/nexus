@@ -225,6 +225,18 @@ export function ComputerDialog({
           >
             {inControl ? "You're in control" : COMPUTER_LABEL[state]}
           </span>
+          {session?.runsOn && state !== "asleep" && (
+            <span
+              className="rounded border border-border/60 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+              title={
+                session.runsOn.kind === "remote"
+                  ? `On ${session.runsOn.label} — its files and sign-ins live there, and this screen comes through an SSH forward.`
+                  : `On ${session.runsOn.label}.`
+              }
+            >
+              {session.runsOn.kind === "remote" ? `remote · ${session.runsOn.label}` : "local"}
+            </span>
+          )}
           <div className="ml-auto flex items-center gap-1.5">
             {url && (
               <Button
