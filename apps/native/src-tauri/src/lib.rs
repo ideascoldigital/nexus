@@ -1,5 +1,4 @@
 use std::io::Write;
-use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,8 +11,9 @@ use tauri_plugin_shell::ShellExt;
 mod native_config;
 
 /// Holds the spawned sidecar process so it can be killed on app exit.
-/// Without this, the node sidecar outlives the app and keeps serving the
-/// previous build on port 3030 (stale UI on next launch).
+/// Without this, the node sidecar outlives the app holding the database's
+/// instance lock and an open handle on `sidecar/node_modules/...`, so the next
+/// launch refuses to start against its own database.
 struct SidecarChild(Mutex<Option<CommandChild>>);
 
 const ZOOM_MIN: f64 = 0.5;
@@ -46,8 +46,11 @@ fn page_zoom(app: &AppHandle, dir: &str) {
     }
 }
 
-const SIDECAR_PORT: u16 = 3030;
-const SIDECAR_TERMINAL_PORT: u16 = 3032;
+/// Neither server gets a port from here. Both are spawned with `0` — "any free
+/// port" — and report what the OS gave them, so an unrelated process, or an
+/// orphaned sidecar from an app that was killed rather than closed, cannot keep
+/// Nexus from starting. "One Nexus per database" is enforced where it belongs,
+/// by the instance lock in @nexux/db, whose refusal arrives on the same stream.
 const SIDECAR_HOST: &str = "127.0.0.1";
 const SIDECAR_READY_TIMEOUT_SECS: u64 = 30;
 
@@ -88,13 +91,127 @@ fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
     p
 }
 
+/// The PATH the sidecar should run with.
+///
+/// macOS hands a GUI app launchd's PATH — `/usr/bin:/bin:/usr/sbin:/sbin` —
+/// not the one the user's terminal has. The sidecar shells out to developer
+/// tooling that lives outside those four directories, `docker` above all:
+/// OrbStack and Docker Desktop both install it under `/usr/local/bin` or the
+/// home directory. `spawn("docker")` then fails with `ENOENT`, which the app
+/// reported to the user as "Docker is not running" — a daemon that is in fact
+/// up. The same trap waits for every tool the app learns to call.
+///
+/// So ask the login shell what its PATH is and run with that: what the user
+/// installed, wherever their shell says it is (homebrew, nvm, mise, asdf).
+/// A fixed list of the usual suspects is merged in behind it, so a shell that
+/// cannot be asked — or answers with nothing — still leaves docker reachable.
+#[cfg(unix)]
+fn login_shell_path(log: &Option<PathBuf>) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    // Interactive, because PATH is commonly set in `.zshrc`/`.bashrc`, which a
+    // non-interactive shell does not read. That also means rc files may print
+    // banners onto stdout, so the value travels between sentinels rather than
+    // being read as "whatever came out".
+    let script = "printf '\\n__NEXUX_PATH__%s__NEXUX_PATH__\\n' \"$PATH\"";
+    let mut child = Command::new(&shell)
+        .args(["-ilc", script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut out = child.stdout.take()?;
+
+    // A login shell runs the user's rc files, and one of those can block
+    // forever (a prompt, a network call). Reading on another thread keeps that
+    // from hanging the app's startup: past the deadline we kill it and fall
+    // back, having lost two seconds rather than the launch.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = out.read_to_string(&mut s);
+        let _ = tx.send(s);
+    });
+    let text = match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(s) => {
+            let _ = child.wait();
+            s
+        }
+        Err(_) => {
+            let _ = child.kill();
+            log_line(log, "[native] WARN: login shell did not report PATH in time");
+            return None;
+        }
+    };
+
+    let value = text
+        .split("__NEXUX_PATH__")
+        .nth(1)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())?;
+    Some(value)
+}
+
+#[cfg(not(unix))]
+fn login_shell_path(_log: &Option<PathBuf>) -> Option<String> {
+    // Windows resolves from the registry PATH, which a GUI process already has.
+    None
+}
+
+/// Where docker ends up when nobody asks the shell. Not a guess at the user's
+/// setup — a floor, so the common installs stay reachable even when the shell
+/// cannot be read.
+fn fallback_path_dirs() -> Vec<String> {
+    let mut dirs = vec![
+        "/usr/local/bin".to_string(),
+        "/usr/local/sbin".to_string(),
+        "/opt/homebrew/bin".to_string(),
+        "/opt/homebrew/sbin".to_string(),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        for rel in [".orbstack/bin", ".docker/bin", ".rd/bin"] {
+            dirs.push(home.join(rel).to_string_lossy().to_string());
+        }
+    }
+    dirs
+}
+
+/// The login shell's PATH, then this process's, then the floor — each entry
+/// kept once, in that order of precedence.
+fn sidecar_path(log: &Option<PathBuf>) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut push = |p: String| {
+        if !p.is_empty() && !parts.contains(&p) {
+            parts.push(p);
+        }
+    };
+    if let Some(from_shell) = login_shell_path(log) {
+        for p in from_shell.split(':') {
+            push(p.to_string());
+        }
+    }
+    if let Ok(inherited) = std::env::var("PATH") {
+        for p in inherited.split(':') {
+            push(p.to_string());
+        }
+    }
+    for p in fallback_path_dirs() {
+        push(p);
+    }
+    parts.join(":")
+}
+
 /// Tie the sidecar's lifetime to this process at the OS level (Windows).
 ///
 /// `RunEvent::Exit` kills the child on a normal quit, but nothing runs on a
 /// `TerminateProcess` — Task Manager, a crash, or an installer force-closing the
-/// app. The sidecar then outlives us holding port 3030 *and* an open handle on
-/// `sidecar/node_modules/...`, so the next install fails with "Error opening
-/// file for writing" and a half-written app dir. A job object with
+/// app. The sidecar then outlives us holding the database's instance lock *and*
+/// an open handle on `sidecar/node_modules/...`, so the next install fails with
+/// "Error opening file for writing" and a half-written app dir. A job object with
 /// `KILL_ON_JOB_CLOSE` makes the kernel do it: when our last handle to the job
 /// closes — however we died — every process in it is terminated.
 ///
@@ -142,14 +259,6 @@ fn adopt_into_kill_on_close_job(pid: u32) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-fn port_in_use(host: &str, port: u16) -> bool {
-    let addr = match format!("{}:{}", host, port).parse() {
-        Ok(a) => a,
-        Err(_) => return false,
-    };
-    TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
 }
 
 /// Replace the loading screen with a message. The window starts on the bundled
@@ -286,32 +395,12 @@ pub fn run() {
 
             let db_url = format!("file:{}", paths.database_path.to_string_lossy());
 
-            // Refuse to start on an occupied port instead of racing for it. The
-            // sidecar would die with EADDRINUSE and the readiness probe — which
-            // only knows "something answers on 3030" — would then point the
-            // window at *whoever* owns it: a second install, or an orphaned
-            // sidecar from an app that was killed rather than closed. That
-            // renders someone else's build inside this window, which is far
-            // harder to diagnose than being told the port is taken.
-            if port_in_use(SIDECAR_HOST, SIDECAR_PORT) {
-                log_line(
-                    &log_file,
-                    &format!(
-                        "[native] ERROR: port {SIDECAR_PORT} is already in use — \
-                         another Nexus (or an orphaned sidecar) is running. Not starting."
-                    ),
-                );
-                show_status(
-                    &handle,
-                    &format!(
-                        "Nexus is already running, or a previous one did not shut down. \
-                         Something else is using port {SIDECAR_PORT} — close it and reopen Nexus."
-                    ),
-                );
-                return Ok(());
-            }
+            // Logged because "docker is missing" and "docker is somewhere this
+            // PATH does not reach" look identical from the UI, and the log is
+            // where that question gets settled.
+            let sidecar_path_value = sidecar_path(&log_file);
+            log_line(&log_file, &format!("[native] PATH={sidecar_path_value}"));
 
-            let port_str = SIDECAR_PORT.to_string();
             let sidecar = match handle.shell().sidecar("node") {
                 Ok(s) => s,
                 Err(e) => {
@@ -322,9 +411,14 @@ pub fn run() {
 
             let spawned = sidecar
                 .args([server_js.to_string_lossy().to_string()])
-                .env("PORT", &port_str)
+                // 0 = let the OS pick, atomically. Each server reports the
+                // port it got: the web one on stdout (parsed below), the
+                // terminal one through /api/terminal/info, which is how the
+                // browser client has always discovered it.
+                .env("PORT", "0")
                 .env("HOSTNAME", SIDECAR_HOST)
-                .env("NEXUX_TERMINAL_PORT", SIDECAR_TERMINAL_PORT.to_string())
+                .env("NEXUX_TERMINAL_PORT", "0")
+                .env("PATH", &sidecar_path_value)
                 .env("NEXUX_MODE", "local")
                 // Lets the server tell the desktop app from `pnpm dev` — the
                 // data-location settings say "reopen Nexus" only in the app.
@@ -364,9 +458,13 @@ pub fn run() {
             // "another Nexux is running against this database" is worth showing
             // on screen rather than behind "see native.log".
             let refusal: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            // The port the sidecar actually bound, in its own words. This is
+            // what the window navigates to — never a number we assumed.
+            let ready_port: Arc<Mutex<Option<u16>>> = Arc::new(Mutex::new(None));
             let log_pipe = log_file.clone();
             let died_pipe = sidecar_died.clone();
             let refusal_pipe = refusal.clone();
+            let port_pipe = ready_port.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = rx.recv().await {
                     match event {
@@ -375,6 +473,11 @@ pub fn run() {
                             let text = text.trim_end();
                             if let Some(reason) = text.split("[instance-lock] ").nth(1) {
                                 *refusal_pipe.lock().unwrap() = Some(reason.to_string());
+                            }
+                            if let Some(rest) = text.split("[nexux] listening on ").nth(1) {
+                                if let Ok(p) = rest.trim().parse::<u16>() {
+                                    *port_pipe.lock().unwrap() = Some(p);
+                                }
                             }
                             log_line(&log_pipe, &format!("[sidecar] {text}"));
                         }
@@ -394,17 +497,20 @@ pub fn run() {
             // window (blank/"not responding" on Windows). The window shows the
             // bundled loading placeholder until we navigate it to the server.
             //
-            // The port was free before we spawned, so whatever answers now is
-            // ours. Watching `sidecar_died` alongside it turns a server that
-            // exits during startup into a message on screen instead of a
-            // half-minute of "Starting…" followed by silence.
+            // Readiness is our own child naming the port it bound, not a probe
+            // against a port we picked: the answer cannot come from a stranger.
+            // Watching `sidecar_died` alongside it turns a server that exits
+            // during startup into a message on screen instead of a half-minute
+            // of "Starting…" followed by silence.
             let ready_handle = handle.clone();
             let ready_log = log_file.clone();
             let ready_died = sidecar_died.clone();
             let ready_refusal = refusal.clone();
+            let ready_port_probe = ready_port.clone();
             std::thread::spawn(move || {
                 let start = std::time::Instant::now();
                 let timeout = Duration::from_secs(SIDECAR_READY_TIMEOUT_SECS);
+                let bound_port;
                 loop {
                     if ready_died.load(Ordering::SeqCst) {
                         log_line(
@@ -425,7 +531,8 @@ pub fn run() {
                         );
                         return;
                     }
-                    if port_in_use(SIDECAR_HOST, SIDECAR_PORT) {
+                    if let Some(p) = *ready_port_probe.lock().unwrap() {
+                        bound_port = p;
                         break;
                     }
                     if start.elapsed() >= timeout {
@@ -442,9 +549,12 @@ pub fn run() {
                     }
                     std::thread::sleep(Duration::from_millis(250));
                 }
-                log_line(&ready_log, "[native] sidecar ready, navigating webview");
+                log_line(
+                    &ready_log,
+                    &format!("[native] sidecar ready on :{bound_port}, navigating webview"),
+                );
                 if let Some(window) = ready_handle.get_webview_window("main") {
-                    let url = format!("http://{SIDECAR_HOST}:{SIDECAR_PORT}");
+                    let url = format!("http://{SIDECAR_HOST}:{bound_port}");
                     match url.parse() {
                         Ok(u) => {
                             if let Err(e) = window.navigate(u) {

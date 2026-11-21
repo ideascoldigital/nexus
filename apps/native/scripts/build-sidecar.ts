@@ -289,25 +289,45 @@ process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(
 );
 
 const next = require("next");
-const port = parseInt(process.env.PORT || "3030", 10);
+// 0 = any free port. Deployments that pin one (the Docker image sets
+// PORT=3030) still get it; only the fallback changed. Binding first and
+// reading back what we got is atomic — there is no window between "is it
+// free?" and "take it" for another process to win, which is what made a fixed
+// port a single point of failure: one orphaned sidecar on it blocked every
+// later launch.
+const port = parseInt(process.env.PORT || "0", 10);
 const hostname = process.env.HOSTNAME || "127.0.0.1";
 
 (async () => {
+  const http = require("http");
+  const server = http.createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, hostname, resolve);
+  });
+  const boundPort = server.address().port;
+  // Publish it before anything reads PORT. instrumentation builds the instance
+  // lock's origin from it, and a lock recording ":0" tells the next launch
+  // nothing about where the server it collided with actually is.
+  process.env.PORT = String(boundPort);
+
   const app = next({
     dev: false,
     dir: __dirname,
     hostname,
-    port,
+    port: boundPort,
     conf: requiredServerFiles.config,
   });
   const handler = app.getRequestHandler();
   await app.prepare();
-  const http = require("http");
-  http
-    .createServer((req, res) => handler(req, res))
-    .listen(port, hostname, () => {
-      console.log(\`Nexus sidecar listening on http://\${hostname}:\${port}\`);
-    });
+  // Attached only once Next can answer. The socket is open before this, but
+  // nothing knows where to connect until the line below says so.
+  server.on("request", (req, res) => handler(req, res));
+
+  // Machine-readable, for the native shell: it waits for this line and
+  // navigates to the port named in it, rather than probing one it assumed.
+  console.log(\`[nexux] listening on \${boundPort}\`);
+  console.log(\`Nexus sidecar listening on http://\${hostname}:\${boundPort}\`);
 })().catch((err) => {
   console.error("[sidecar] fatal:", err);
   process.exit(1);
@@ -416,10 +436,10 @@ function assertNextVersionParity() {
 }
 
 // The window opens on this page, not on the sidecar — the server needs a few
-// seconds and pointing the window straight at :3030 showed a browser connection
-// error until it came up. It also gives lib.rs somewhere to *say* something:
-// `__nexuxStatus` is how a port conflict or a sidecar that died during startup
-// reaches the screen instead of only the log.
+// seconds, and its port is not known until it reports one, so there is no URL
+// to open on. It also gives lib.rs somewhere to *say* something: `__nexuxStatus`
+// is how a refused instance lock or a sidecar that died during startup reaches
+// the screen instead of only the log.
 function makeStaticPlaceholder() {
   const placeholder = join(STATIC_OUT, "index.html");
   const html = `<!doctype html><meta charset="utf-8"><title>Nexus</title>

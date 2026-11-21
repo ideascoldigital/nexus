@@ -59,7 +59,9 @@ export async function registerNode() {
           return endpoint?.host ?? null;
         },
       });
-      console.log(`[instrumentation] terminal server up on :${handle.port}`);
+      console.log(
+        `[instrumentation] terminal server up on :${await handle.ready}`,
+      );
     } catch (err) {
       console.error("[instrumentation] terminal server failed to start:", err);
     }

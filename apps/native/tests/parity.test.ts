@@ -38,20 +38,53 @@ test("root, web, native, tauri.conf and Cargo.toml versions agree", () => {
 
 // --- sidecar ports -----------------------------------------------------------
 
-test("sidecar port 3030 agrees between lib.rs and start.js", () => {
+test("neither side hardcodes a sidecar port", () => {
   const libRs = read("apps/native/src-tauri/src/lib.rs");
   const sidecarScript = read("apps/native/scripts/build-sidecar.ts");
 
-  const rustPort = libRs.match(/const SIDECAR_PORT: u16 = (\d+);/)?.[1];
-  assert.ok(rustPort, "lib.rs SIDECAR_PORT not found");
-
-  const startJsPort = sidecarScript.match(
+  // A fixed port is a single point of failure: anything already holding it —
+  // an orphaned sidecar above all — makes the app unlaunchable. The OS assigns
+  // one instead, so there is no number to agree on.
+  assert.ok(
+    !/const SIDECAR_PORT: u16/.test(libRs),
+    "lib.rs pins a sidecar port again",
+  );
+  assert.ok(
+    libRs.includes('.env("PORT", "0")'),
+    "lib.rs no longer asks the sidecar for an ephemeral port",
+  );
+  const startJsDefault = sidecarScript.match(
     /process\.env\.PORT \|\| "(\d+)"/,
   )?.[1];
   assert.equal(
-    startJsPort,
-    rustPort,
-    "start.js default port drifted from lib.rs SIDECAR_PORT",
+    startJsDefault,
+    "0",
+    "start.js defaults to a fixed port instead of an ephemeral one",
+  );
+});
+
+test("the port the sidecar reports is the one lib.rs listens for", () => {
+  const libRs = read("apps/native/src-tauri/src/lib.rs");
+  const sidecarScript = read("apps/native/scripts/build-sidecar.ts");
+
+  // The marker is a wire format between two languages and nothing checks it
+  // across the boundary: drift here hangs every launch on "Starting…" until
+  // the timeout, with a healthy server running the whole time.
+  const MARKER = "[nexux] listening on ";
+  assert.ok(
+    sidecarScript.includes(MARKER),
+    "start.js no longer announces the port it bound",
+  );
+  assert.ok(
+    libRs.includes(MARKER),
+    "lib.rs no longer reads the port the sidecar announces",
+  );
+  // Anything that reports "where this server is" reads PORT — the instance
+  // lock's origin above all, which is the next launch's only clue about what
+  // it collided with. An ephemeral port has to be written back into it.
+  assert.ok(
+    sidecarScript.includes("process.env.PORT = String(boundPort)"),
+    "start.js no longer publishes the bound port back into the environment",
   );
 });
 
@@ -69,8 +102,8 @@ test("the window opens on the bundled placeholder, not on the sidecar", () => {
     `window url (${windowUrl}) points at a server; it must open the bundled placeholder`,
   );
   assert.ok(
-    libRs.includes("format!(\"http://{SIDECAR_HOST}:{SIDECAR_PORT}\")"),
-    "lib.rs no longer navigates to the sidecar it defines",
+    libRs.includes("format!(\"http://{SIDECAR_HOST}:{bound_port}\")"),
+    "lib.rs no longer navigates to the port the sidecar reported",
   );
   // Both halves of the status channel must exist or failures go unreported.
   assert.ok(
@@ -87,8 +120,9 @@ test("the sidecar is bound to a kill-on-close job on Windows", () => {
   const libRs = read("apps/native/src-tauri/src/lib.rs");
   const cargo = read("apps/native/src-tauri/Cargo.toml");
   // RunEvent::Exit does not run on TerminateProcess, and a surviving sidecar
-  // holds port 3030 and a file lock on its own node_modules — which is what
-  // makes the next install fail with "Error opening file for writing".
+  // holds the database's instance lock and a file lock on its own node_modules
+  // — which is what makes the next install fail with "Error opening file for
+  // writing".
   assert.ok(
     libRs.includes("adopt_into_kill_on_close_job(child.pid())"),
     "lib.rs no longer binds the sidecar to a job object",
@@ -104,27 +138,62 @@ test("the sidecar is bound to a kill-on-close job on Windows", () => {
   );
 });
 
-test("lib.rs refuses to start on an occupied sidecar port", () => {
+test("one-instance is enforced by the database lock, not by a port", () => {
   const libRs = read("apps/native/src-tauri/src/lib.rs");
-  // Without this the readiness probe cannot tell our sidecar from an orphan or
-  // a second install, and the window silently renders whoever owns the port.
+  // Port occupancy cannot tell a second Nexus from anything else that happens
+  // to be listening, and leaves the user no move. The lock knows whose process
+  // holds the database, takes over after a crash, and says so — lib.rs only
+  // has to relay it.
   assert.ok(
-    /if port_in_use\(SIDECAR_HOST, SIDECAR_PORT\)/.test(libRs),
-    "lib.rs no longer checks the port before spawning the sidecar",
+    !/port_in_use/.test(libRs),
+    "lib.rs guards startup on a port again instead of on the database lock",
+  );
+  assert.ok(
+    libRs.includes('"[instance-lock] "'),
+    "lib.rs no longer surfaces the instance lock's refusal",
   );
 });
 
-test("terminal port passed by lib.rs is the one it defines", () => {
+test("the sidecar is given a PATH that reaches developer tooling", () => {
   const libRs = read("apps/native/src-tauri/src/lib.rs");
-  const termPort = libRs.match(
-    /const SIDECAR_TERMINAL_PORT: u16 = (\d+);/,
-  )?.[1];
-  assert.ok(termPort, "lib.rs SIDECAR_TERMINAL_PORT not found");
+  const local = read("packages/sandbox/src/local.ts");
+
+  // A GUI app on macOS starts with launchd's PATH — /usr/bin:/bin:/usr/sbin:
+  // /sbin — and the sandbox layer spawns `docker` by bare name. Without a PATH
+  // from here that call fails with ENOENT, which the UI then reports as
+  // "Docker is not running": the wrong cause, about a daemon that is up.
   assert.ok(
-    libRs.includes(
-      '.env("NEXUX_TERMINAL_PORT", SIDECAR_TERMINAL_PORT.to_string())',
-    ),
-    "lib.rs no longer forwards SIDECAR_TERMINAL_PORT as NEXUX_TERMINAL_PORT",
+    /run\("docker"/.test(local),
+    "the sandbox layer no longer resolves docker through PATH",
+  );
+  assert.ok(
+    libRs.includes('.env("PATH", &sidecar_path_value)'),
+    "lib.rs no longer hands the sidecar a PATH",
+  );
+  assert.ok(
+    libRs.includes("fn login_shell_path"),
+    "lib.rs no longer asks the login shell where the user's tools are",
+  );
+});
+
+test("the terminal port is ephemeral and discovered at request time", () => {
+  const libRs = read("apps/native/src-tauri/src/lib.rs");
+  const termServer = read("packages/terminal/src/terminal-server.ts");
+  const infoRoute = read("apps/web/src/app/api/terminal/info/route.ts");
+
+  assert.ok(
+    libRs.includes('.env("NEXUX_TERMINAL_PORT", "0")'),
+    "lib.rs pins a terminal port instead of letting the OS pick",
+  );
+  // The bound port has to travel back into the environment, because that is
+  // where /api/terminal/info — the browser client's only source — reads it.
+  assert.ok(
+    termServer.includes("process.env.NEXUX_TERMINAL_PORT = String(bound)"),
+    "the terminal server no longer publishes the port it actually bound",
+  );
+  assert.ok(
+    infoRoute.includes("process.env.NEXUX_TERMINAL_PORT"),
+    "/api/terminal/info no longer reads the live terminal port",
   );
 });
 

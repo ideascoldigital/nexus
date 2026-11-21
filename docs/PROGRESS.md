@@ -19,7 +19,7 @@ _Last updated: 2026-09-26._
 | `storage` | ✅ local complete | `server` adapter (stub) |
 | `terminal` | 🟡 mixed | sidecar-server + types = Phase 0 stubs (Tools/MCP) |
 | `apps/web` | ✅ active | see "In progress" · browser session works on local docker (D-70); idle TTL + CDP screenshot route still open (spec 23) |
-| `apps/native` | ✅ functional | — (sidecar :3030, kill on exit) |
+| `apps/native` | ✅ functional | — (sidecar on an OS-assigned port, kill on exit) |
 
 ## Milestones (timeline by PR)
 

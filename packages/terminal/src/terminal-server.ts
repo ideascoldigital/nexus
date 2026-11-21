@@ -7,7 +7,10 @@ import { getConfig } from "@nexux/config";
 import { defaultShellId, parseShellId, spawnPlan } from "./shells";
 
 export interface TerminalServerHandle {
+  /** The port actually bound; meaningful once `ready` has resolved. */
   port: number;
+  /** Resolves with the bound port — the only reliable read when PORT is 0. */
+  ready: Promise<number>;
   close: () => Promise<void>;
 }
 
@@ -434,9 +437,19 @@ export function startTerminalServer(
   });
 });
 
-  server.listen(PORT, () => {
-    console.log(`[terminal] Server listening on ws://localhost:${PORT}`);
-    console.log(`[terminal] Default shell: ${defaultShellId()}`);
+  // PORT may be 0 — "any free port" — which is what the native sidecar asks
+  // for, so an orphaned process cannot block a launch. What it resolves to is
+  // published back into the environment because /api/terminal/info reads it
+  // from there at request time, and the browser client asks that route.
+  const ready = new Promise<number>((resolve) => {
+    server.listen(PORT, () => {
+      const addr = server.address();
+      const bound = typeof addr === "object" && addr ? addr.port : PORT;
+      process.env.NEXUX_TERMINAL_PORT = String(bound);
+      console.log(`[terminal] Server listening on ws://localhost:${bound}`);
+      console.log(`[terminal] Default shell: ${defaultShellId()}`);
+      resolve(bound);
+    });
   });
 
   const close = () =>
@@ -445,7 +458,14 @@ export function startTerminalServer(
       server.close(() => resolve());
     });
 
-  return { port: PORT, close };
+  return {
+    get port() {
+      const addr = server.address();
+      return typeof addr === "object" && addr ? addr.port : PORT;
+    },
+    ready,
+    close,
+  };
 }
 
 // CLI entry: `tsx terminal-server.ts` (dev:terminal / start:terminal). Running

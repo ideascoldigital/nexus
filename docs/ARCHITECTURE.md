@@ -11,7 +11,7 @@ pnpm workspaces + Turborepo. TypeScript everywhere; packages ship raw TS (`main`
 ```
 apps/
   web/        # @nexux/web    — Next.js 16 dashboard: the product
-  native/     # @nexux/native — Tauri v2 shell; web app as Node sidecar (:3030)
+  native/     # @nexux/native — Tauri v2 shell; web app as Node sidecar (ephemeral port)
 packages/
   config/     # env/mode config — root of the dep graph
   core/       # shared type contracts (Claude stream, WS protocol, enums)
@@ -46,8 +46,8 @@ No cycles; max depth 2 (`embeddings → db → config`). `apps/web` is the only 
 
 ```
 ┌ Tauri shell (native) ──────────────────────────┐
-│  webview → Next.js sidecar :3030               │
-│            terminal WS     :3032               │
+│  webview → Next.js sidecar :0 (OS-assigned)    │
+│            terminal WS     :0 (OS-assigned)    │
 └────────────────────────────────────────────────┘
    standalone dev: Next :3000 / terminal WS :3002
 
