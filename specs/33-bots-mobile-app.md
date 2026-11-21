@@ -288,10 +288,38 @@ gear egg pill triangle hexagon diamond`. `textOn()` (WCAG luminance,
 threshold 0.4) decides black or white text on a bot-colored bubble — port it,
 don't eyeball it.
 
-Type: Inter for UI, JetBrains Mono for anything mechanical (cron strings, MCP
-JSON, log tails). Sizes scale up from the web's dense values — the web's
-13.5px body becomes 15px, 11.5px captions become 12.5px — because a phone is
-held further from nothing and read with a thumb in the way.
+Type: **the platform's own face** — SF Pro on iOS, Roboto on Android, which is
+what Flutter reaches for by default. The web uses Inter; the app deliberately
+does not. Three reasons, in order of weight: the system face is hinted and
+spaced by the vendor for that exact screen, it is the only option that honours
+the text size the user set in Accessibility without us implementing anything,
+and it ships nothing — no download, no flash of unstyled text on a cold start.
+The cost is that app and web are not glyph-identical, which nobody will notice
+and which matters less than a screen that is read standing up.
+
+JetBrains Mono stays for anything mechanical (cron strings, MCP JSON, scopes,
+log tails) — it already separates `0`/`O` and `l`/`1`, and sharing it with the
+web is worth the one font we do bundle.
+
+Sizes step up a notch from the web's density, which was drawn for a monitor at
+60 cm:
+
+| Where | Web | App |
+|---|---|---|
+| bot name in the inbox | 15 regular | **16 medium** |
+| preview line | 12.5 | **13.5**, lightened to `#a8a8a8` |
+| chat bubble | 14.5 | **16** |
+| mail body, teammate posts | 13.5 | **15** |
+| form fields, option cards | 14 | **15** |
+| captions, timestamps | 11.5 | **12.5** |
+
+That is the body size of WhatsApp and Mail. It costs one bot per inbox screen
+(seven instead of eight), which is not a loss in a list that has search.
+
+If the system face is ever dropped for a bundled one, the text-scale work
+becomes ours: `MediaQuery.textScaler` has to be honoured explicitly and the two
+fixed-height pieces — the inbox row and the remote desktop's key bar — are what
+will break first.
 
 ### Team (inbox)
 
