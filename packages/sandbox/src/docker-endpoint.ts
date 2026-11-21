@@ -339,3 +339,28 @@ export async function probeDockerEndpoint(
   }
   return { ok: true, ...info };
 }
+
+/**
+ * `docker build` leaves the image in a daemon's store only when the active
+ * buildx builder uses the `docker` driver. A `docker-container` builder —
+ * what `docker buildx create` gives you, and what a dev cluster can leave
+ * selected — keeps the result in the build cache instead and only warns about
+ * it on stderr. The build then "succeeds", `docker run` finds no such image,
+ * falls back to Docker Hub and fails with a 401 on a name that was never
+ * published there.
+ *
+ * `--load` moves the result into the store. It is a no-op for the `docker`
+ * driver and unknown to the pre-buildx builder, so a build that is refused
+ * for the flag is retried without it rather than failing on an older Docker.
+ */
+export const LOAD_FLAG = "--load";
+
+export const IMAGE_NOT_IN_STORE =
+  "the image built but is not in this daemon's image store — its buildx builder is probably a " +
+  '"docker-container" one, which keeps the result in the build cache. Select a builder that ' +
+  "loads: docker buildx use default";
+
+/** Did docker reject the flag itself, rather than fail the build? */
+export function rejectedBuildFlag(stderr: string): boolean {
+  return /unknown flag|flag provided but not defined|unknown shorthand/i.test(stderr);
+}

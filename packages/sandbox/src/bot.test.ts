@@ -13,6 +13,7 @@ import {
   botRunArgs,
   botVncUrl,
   buildBotClaudeCommand,
+  ensureBotImage,
   parsePublishedPort,
   runBotPrompt,
   renderBotDockerfile,
@@ -250,4 +251,75 @@ test("a prompt makes its working directory before cd'ing into it", async () => {
     calls.slice(1).some((c) => c.includes("cd '/workspace/gmail-ayudante'")),
     `no run cd'd into the folder: ${calls.join(" | ")}`,
   );
+});
+
+/** A `docker` on PATH that records its argv and answers from a script. */
+function fakeDocker(behaviour: string): { dir: string; calls: () => string[] } {
+  const dir = mkdtempSync(path.join(tmpdir(), "nexux-fake-docker-"));
+  const log = path.join(dir, "calls.log");
+  writeFileSync(
+    path.join(dir, "docker"),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\n${behaviour}\n`,
+    { mode: 0o755 },
+  );
+  return {
+    dir,
+    calls: () => {
+      try {
+        return readFileSync(log, "utf8").trim().split("\n").filter(Boolean);
+      } catch {
+        return [];
+      }
+    },
+  };
+}
+
+async function withFakeDocker<T>(behaviour: string, fn: (calls: () => string[]) => Promise<T>): Promise<T> {
+  const fake = fakeDocker(behaviour);
+  const realPath = process.env.PATH;
+  process.env.PATH = `${fake.dir}:${realPath}`;
+  try {
+    return await fn(fake.calls);
+  } finally {
+    process.env.PATH = realPath;
+  }
+}
+
+test("the image is built with --load, and a build that never lands is caught", async () => {
+  // A docker-container buildx builder keeps the result in the build cache and
+  // still exits 0. Without --load the bot would then start, find no image and
+  // have docker fall back to Docker Hub — a 401 on a name never published.
+  const calls = await withFakeDocker(
+    'case "$*" in *"image inspect"*) exit 1 ;; *build*) exit 0 ;; esac\nexit 0',
+    async (getCalls) => {
+      await assert.rejects(
+        () => ensureBotImage(),
+        /not in this daemon's image store/,
+        "a build whose image is missing afterwards must not be reported as success",
+      );
+      return getCalls();
+    },
+  );
+  const build = calls.find((c) => c.startsWith("build "));
+  assert.ok(build, `no build was attempted: ${calls.join(" | ")}`);
+  assert.match(build, /(^| )--load( |$)/);
+  // It asks twice: once before building, once to confirm the image landed.
+  assert.equal(calls.filter((c) => c.includes("image inspect")).length, 2);
+});
+
+test("an older docker that does not know --load still builds", async () => {
+  const calls = await withFakeDocker(
+    'case "$*" in\n  *"image inspect"*) if [ -f "$0.built" ]; then exit 0; else exit 1; fi ;;\n'
+      + '  *--load*) echo "unknown flag: --load" >&2; exit 125 ;;\n'
+      + '  *build*) touch "$0.built"; exit 0 ;;\nesac\nexit 0',
+    async (getCalls) => {
+      // The retry drops the flag rather than refusing to build.
+      await ensureBotImage();
+      return getCalls();
+    },
+  );
+  const builds = calls.filter((c) => c.startsWith("build "));
+  assert.equal(builds.length, 2, `expected a retry, got: ${builds.join(" | ")}`);
+  assert.match(builds[0], /--load/);
+  assert.doesNotMatch(builds[1], /--load/);
 });

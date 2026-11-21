@@ -22,7 +22,14 @@ import {
   safeSlug,
 } from "./template";
 import { DEFAULT_WS_PORT } from "./template-browser";
-import { dockerHostArgs, dockerHostKind, type DockerTarget } from "./docker-endpoint";
+import {
+  dockerHostArgs,
+  dockerHostKind,
+  IMAGE_NOT_IN_STORE,
+  LOAD_FLAG,
+  rejectedBuildFlag,
+  type DockerTarget,
+} from "./docker-endpoint";
 
 /**
  * What a sandbox container starts from when nothing has been prebuilt.
@@ -179,16 +186,29 @@ export async function buildSandboxBaseImage(
     onLog?.(`[nexux] building ${BASE_IMAGE_TAG} (first run takes a few minutes)\n`);
     // Over -H the build context is uploaded, so the image is built on — and
     // native to — the daemon that will run the sandboxes.
-    const res = await docker(
-      opts.target,
-      ["build", "-t", BASE_IMAGE_TAG, "--label", `org.nexux.base-version=${BASE_IMAGE_VERSION}`, dir],
-      { onLog, timeoutMs: 20 * 60_000 },
-    );
+    // --load for the reason docker-endpoint.ts gives: a docker-container
+    // builder would leave this in the build cache, and the launch that
+    // follows would go looking for it on Docker Hub.
+    const argv = (load: boolean) => [
+      "build",
+      ...(load ? [LOAD_FLAG] : []),
+      "-t",
+      BASE_IMAGE_TAG,
+      "--label",
+      `org.nexux.base-version=${BASE_IMAGE_VERSION}`,
+      dir,
+    ];
+    let res = await docker(opts.target, argv(true), { onLog, timeoutMs: 20 * 60_000 });
+    if (res.code !== 0 && rejectedBuildFlag(res.stderr)) {
+      res = await docker(opts.target, argv(false), { onLog, timeoutMs: 20 * 60_000 });
+    }
     if (res.code !== 0) {
       throw new Error(
         `base image build failed: ${res.stderr.trim().slice(-400) || res.stdout.trim().slice(-400)}`,
       );
     }
+    const landed = await docker(opts.target, ["image", "inspect", BASE_IMAGE_TAG], { timeoutMs: 15_000 });
+    if (landed.code !== 0) throw new Error(`base image build failed: ${IMAGE_NOT_IN_STORE}`);
     return { tag: BASE_IMAGE_TAG, built: true };
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});

@@ -17,7 +17,13 @@
 
 import { spawn } from "child_process";
 import { createHash } from "crypto";
-import { dockerHostArgs, type DockerTarget } from "./docker-endpoint";
+import {
+  dockerHostArgs,
+  IMAGE_NOT_IN_STORE,
+  LOAD_FLAG,
+  rejectedBuildFlag,
+  type DockerTarget,
+} from "./docker-endpoint";
 import { sandboxMemoryLimitMb } from "./local";
 import {
   createStreamParser,
@@ -519,6 +525,16 @@ function tail(text: string, n = 400): string {
 }
 
 /** Build the bot image unless this exact recipe is already built. */
+async function buildWithLoad(
+  target: DockerTarget | null | undefined,
+  args: string[],
+  opts: { stdin?: string; onLog?: LogSink; timeoutMs?: number },
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const first = await docker(target, args, opts);
+  if (first.code === 0 || !rejectedBuildFlag(first.stderr)) return first;
+  return docker(target, args.filter((a) => a !== LOAD_FLAG), opts);
+}
+
 export async function ensureBotImage(
   opts: { onLog?: LogSink; target?: DockerTarget | null } = {},
 ): Promise<string> {
@@ -529,7 +545,7 @@ export async function ensureBotImage(
   if (exists.code === 0) return tag;
 
   opts.onLog?.(`[bot] building image ${tag} (first run takes a few minutes)\n`);
-  const built = await docker(opts.target, ["build", "-t", tag, "-"], {
+  const built = await buildWithLoad(opts.target, ["build", LOAD_FLAG, "-t", tag, "-"], {
     stdin: dockerfile,
     onLog: opts.onLog,
     timeoutMs: 30 * 60_000,
@@ -537,6 +553,9 @@ export async function ensureBotImage(
   if (built.code !== 0) {
     throw new Error(`bot image build failed: ${tail(built.stderr || built.stdout)}`);
   }
+  // A build that succeeded is not the same as an image this daemon can run.
+  const landed = await docker(opts.target, ["image", "inspect", tag], { timeoutMs: 15_000 });
+  if (landed.code !== 0) throw new Error(IMAGE_NOT_IN_STORE);
   return tag;
 }
 
