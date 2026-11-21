@@ -970,6 +970,29 @@ export function buildBotClaudeCommand(
   );
 }
 
+/**
+ * The bot's working directory, made if it is not there yet.
+ *
+ * `execRemote` prefixes the command with `cd`, so a missing directory fails
+ * the run before Claude ever sees the prompt. On this machine the bot's folder
+ * under the shared workspace is created host-side before the mount; in a named
+ * volume on another daemon there is no host side to create it on, and a rename
+ * moves the directory out from under a live session either way. Making it here
+ * covers all of it, and `mkdir -p` on a directory that exists costs nothing.
+ */
+async function ensureBotCwd(
+  container: string,
+  cwd: string,
+  target?: DockerTarget | null,
+): Promise<void> {
+  const res = await docker(target, ["exec", "-u", BOT_USER, container, "mkdir", "-p", cwd], {
+    timeoutMs: 15_000,
+  });
+  if (res.code !== 0) {
+    throw new Error(`could not create the working directory ${cwd}: ${tail(res.stderr, 200)}`);
+  }
+}
+
 /** One prompt on a running bot, streamed through the same parser as sandboxes. */
 export async function runBotPrompt(
   prompt: string,
@@ -988,11 +1011,13 @@ export async function runBotPrompt(
   },
 ): Promise<ClaudeRunResult> {
   const parser = createStreamParser(opts.onLog);
+  const cwd = opts.cwd ?? BOT_WORKDIR;
+  await ensureBotCwd(opts.container, cwd, opts.target);
   const res = await execRemote(buildBotClaudeCommand(prompt, opts), {
     container: opts.container,
     user: BOT_USER,
     dockerHost: opts.target?.host ?? null,
-    cwd: opts.cwd ?? BOT_WORKDIR,
+    cwd,
     onLog: parser.handleChunk,
     timeoutMs: opts.timeoutMs,
     signal: opts.signal,

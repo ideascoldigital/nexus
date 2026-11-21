@@ -44,7 +44,10 @@ export function botWorkdir(name: string): string {
  * The workspace and profile as named volumes on the daemon that runs the
  * computer — the remote counterpart of `botMounts`. Docker reads a `-v` source
  * that is not an absolute path as a volume name and creates it on first use,
- * so there is nothing to prepare.
+ * taking the image's ownership of that path, so there is no host side to
+ * prepare. What there *is* no host side for is the bot's own folder under the
+ * workspace, which `botMounts` makes with `mkdirSync`: the computer makes that
+ * one itself before a prompt runs (`runBotPrompt`).
  *
  * The workspace volume is shared, like the folder it stands in for; the
  * profile is per bot, like its folder.

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 
 import {
@@ -11,6 +14,7 @@ import {
   botVncUrl,
   buildBotClaudeCommand,
   parsePublishedPort,
+  runBotPrompt,
   renderBotDockerfile,
   renderBotEntrypoint,
   renderBotMcpConfig,
@@ -215,4 +219,35 @@ test("the computer mounts the shared workspace and a persistent profile", () => 
   const sys = renderBotSystemPrompt({ name: "B", needsInputMarker: "Q:", workspaceFolder: "gastos" });
   assert.match(sys, /\/workspace\/gastos\/, where you start/);
   assert.match(sys, /shared with your teammates' computers/);
+});
+
+test("a prompt makes its working directory before cd'ing into it", async () => {
+  // The bot's folder under /workspace is created host-side before the mount on
+  // this machine, but a named volume on another daemon has no host side — and
+  // `execRemote` starts with `cd`, so the run died on "No such file or
+  // directory" before Claude saw the prompt.
+  const dir = mkdtempSync(path.join(tmpdir(), "nexux-fake-docker-"));
+  const log = path.join(dir, "calls.log");
+  writeFileSync(path.join(dir, "docker"), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\nexit 0\n`, {
+    mode: 0o755,
+  });
+  const realPath = process.env.PATH;
+  process.env.PATH = `${dir}:${realPath}`;
+  try {
+    // The fake docker streams nothing back, so the run itself cannot succeed;
+    // the calls it made are the point.
+    await runBotPrompt("hi", {
+      container: "nexux-bot-x",
+      systemPrompt: "s",
+      cwd: "/workspace/gmail-ayudante",
+    }).catch(() => undefined);
+  } finally {
+    process.env.PATH = realPath;
+  }
+  const calls = readFileSync(log, "utf8").trim().split("\n");
+  assert.equal(calls[0], "exec -u bot nexux-bot-x mkdir -p /workspace/gmail-ayudante");
+  assert.ok(
+    calls.slice(1).some((c) => c.includes("cd '/workspace/gmail-ayudante'")),
+    `no run cd'd into the folder: ${calls.join(" | ")}`,
+  );
 });
