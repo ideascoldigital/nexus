@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { after, beforeEach, test } from "node:test";
+import { after, before, beforeEach, test } from "node:test";
 
 // Env setup must stay above every other import — the route modules reach
-// @nexux/db, whose client is built (and migrated) at module load.
-import { testDbDir } from "./routes.test-setup";
+// @nexux/db, whose client is built (and migrated) at module load. The bots
+// routes also resolve the active workspace (D-87), and `cookies()` throws
+// outside a request scope, which is where these tests call handlers from —
+// hence the workspace flavour of the setup, which sets the override first.
+import { setActiveWorkspace, testDbDir } from "./workspace-routes.test-setup";
 import { NextRequest } from "next/server";
 import { prisma } from "@nexux/db";
 
@@ -26,8 +29,20 @@ after(async () => {
   fs.rmSync(testDbDir, { recursive: true, force: true });
 });
 
+const ALT_WORKSPACE = "ws-alt";
+
+before(async () => {
+  // The default workspace is seeded by the migrations; add a second one.
+  await prisma.workspace.upsert({
+    where: { id: ALT_WORKSPACE },
+    update: {},
+    create: { id: ALT_WORKSPACE, name: "Alternate" },
+  });
+});
+
 beforeEach(async () => {
   await prisma.bot.deleteMany({});
+  setActiveWorkspace("ws-default");
 });
 
 const json = (url: string, method: string, body?: unknown) =>
@@ -365,4 +380,33 @@ test("a bot's MCP servers: saved in the native shape, rejected when wrong, clear
   // Other edits leave them alone; null clears them.
   assert.deepEqual((await (await patch({ role: "reads docs" })).json()).mcpServers, servers);
   assert.equal((await (await patch({ mcpServers: null })).json()).mcpServers, null);
+});
+
+test("the inbox is one workspace's team, and a new bot is hired into it", async () => {
+  const here = await (await createBot(json("/api/bots?intro=0", "POST", { name: "Here" }))).json();
+  assert.equal(here.workspaceId, "ws-default");
+
+  setActiveWorkspace(ALT_WORKSPACE);
+  const there = await (await createBot(json("/api/bots?intro=0", "POST", { name: "There" }))).json();
+  assert.equal(there.workspaceId, ALT_WORKSPACE);
+
+  assert.deepEqual((await (await listBots()).json()).map((b: { name: string }) => b.name), ["There"]);
+  setActiveWorkspace("ws-default");
+  assert.deepEqual((await (await listBots()).json()).map((b: { name: string }) => b.name), ["Here"]);
+});
+
+test("a handoff never reaches a bot in another workspace", async () => {
+  const sender = await prisma.bot.create({ data: { name: "Sender" } });
+  await prisma.bot.create({ data: { name: "Mate" } });
+  await prisma.bot.create({ data: { name: "Stranger", workspaceId: ALT_WORKSPACE } });
+  const msg = (to: string) => "ok\n```handoff\n" + JSON.stringify({ to, message: "mira esto" }) + "\n```";
+
+  // Another workspace's bot is not a teammate: the name resolves to nobody.
+  assert.equal(await deliverHandoffs({ fromId: sender.id, fromName: "Sender", hop: 1, text: msg("Stranger") }), 0);
+  // Its own workspace's: delivery is attempted (waking the computer needs a
+  // Claude token, absent in tests — same signal the sibling test reads).
+  await assert.rejects(
+    deliverHandoffs({ fromId: sender.id, fromName: "Sender", hop: 1, text: msg("Mate") }),
+    /Claude Code token/,
+  );
 });

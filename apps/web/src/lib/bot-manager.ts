@@ -29,6 +29,7 @@ import { detectNeedsInput, NEEDS_INPUT_MARKER } from "@/lib/agent-core";
 import { parseChoices } from "@/lib/bot-choices";
 import { collectBotFiles } from "@/lib/bot-files";
 import { probeColumns } from "@/lib/docker-endpoints";
+import { botNexusUrl, closeNexusReach } from "@/lib/bot-nexus-reach";
 import { botScreenLocalPort, closeBotScreenForward } from "@/lib/bot-screen";
 import { botMounts, botVolumes, botWorkdir, workspaceFolderFor } from "@/lib/bot-workspace";
 import { seedComputer, shareFromComputer } from "@/lib/team-cookies";
@@ -306,6 +307,12 @@ async function endSession(
   // Every way a session ends passes through here, so this is the one place the
   // screen forward has to be dropped. A no-op when the daemon was local.
   closeBotScreenForward(sessionId);
+  // Read before the row is closed: which daemon this computer was on decides
+  // whether the endpoint's return tunnel still has a user.
+  const ended = await prisma.botSession.findUnique({
+    where: { id: sessionId },
+    select: { dockerHost: true },
+  });
   const now = new Date();
   await prisma.botSession.updateMany({
     where: { id: sessionId, status: { in: [...ACTIVE_SESSION_STATUSES] } },
@@ -319,6 +326,15 @@ async function endSession(
       finishedAt: now,
     },
   });
+  // The return tunnel belongs to the endpoint, not to this session: it goes
+  // only once the last computer there is gone (D-88).
+  const host = ended?.dockerHost;
+  if (host) {
+    const others = await prisma.botSession.count({
+      where: { dockerHost: host, status: { in: [...ACTIVE_SESSION_STATUSES] } },
+    });
+    if (others === 0) await closeNexusReach(host).catch(() => undefined);
+  }
 }
 
 /** Delete the bot's computer. Anything queued or running is canceled. */
@@ -402,8 +418,12 @@ async function drain(sessionId: string): Promise<void> {
     // Claude Code keeps a session's first system prompt on --resume, so when
     // the instructions changed (an edit in Settings, a Nexus update) the bot
     // starts a fresh Claude session — on the same computer — instead.
+
+    // Teammates it can hand work to are its workspace's (D-87): the roster in
+    // the system prompt and the delivery in deliverHandoffs must name the same
+    // bots, or the bot writes a handoff to someone it cannot reach.
     const team = await prisma.bot.findMany({
-      where: { id: { not: session.botId } },
+      where: { id: { not: session.botId }, workspaceId: session.bot.workspaceId },
       orderBy: { createdAt: "asc" },
       select: { name: true, role: true },
     });
@@ -426,13 +446,26 @@ async function drain(sessionId: string): Promise<void> {
       console.warn(`[bots] ${session.bot.name}: MCP server "${m.server}" skipped — no vault secret "${m.secret}" it may use`);
     }
     const fillable = vault.filter((v) => (FILLABLE[v.type as VaultType] ?? []).length > 0);
+    // Nexus as *this* computer reaches it: itself when the daemon is here, a
+    // return tunnel when it is on another machine (D-88). A computer that
+    // cannot reach Nexus is not a failure to start — it just does its work
+    // without the vault, and says so in the log rather than letting the bot
+    // discover it as "fetch failed" halfway through a task.
+    let nexusUrl = hostAppUrl();
+    let nexusReachable = true;
+    try {
+      nexusUrl = await botNexusUrl(session.dockerHost);
+    } catch (err) {
+      nexusReachable = false;
+      console.warn(`[bots] ${session.bot.name}: ${err instanceof Error ? err.message : err}`);
+    }
     const systemPrompt = renderBotSystemPrompt({
       name: session.bot.name,
       role: session.bot.role,
       instructions: session.bot.instructions,
       needsInputMarker: NEEDS_INPUT_MARKER,
       timezone: hostTimezone(),
-      hostAppUrl: hostAppUrl(),
+      hostAppUrl: nexusUrl,
       teammates: team,
       workspaceFolder: workspaceFolderFor(session.bot.name),
       mcpServers: mcpServers ? Object.keys(mcpServers) : [],
@@ -485,7 +518,7 @@ async function drain(sessionId: string): Promise<void> {
     const mail = mailRun(run.prompt);
     if (mail) prompt = prompt.replace(run.prompt, mailForClaude(mail));
     // Links to the user's machine, reachable from the container.
-    prompt = absolutizeNexusLinks(toContainerUrls(prompt));
+    prompt = absolutizeNexusLinks(toContainerUrls(prompt, nexusUrl), nexusUrl);
 
     const abort = new AbortController();
     aborts.set(run.id, abort);
@@ -502,9 +535,9 @@ async function drain(sessionId: string): Promise<void> {
       let userMcp = false;
       try {
         const servers: Record<string, unknown> = { ...(mcpServers ?? {}) };
-        if (vaultToken) {
+        if (vaultToken && nexusReachable) {
           await writeBotVaultScripts(session.containerName, { host: session.dockerHost });
-          servers.vault = botVaultMcpServer({ nexusUrl: hostAppUrl(), botId: session.botId, token: vaultToken });
+          servers.vault = botVaultMcpServer({ nexusUrl, botId: session.botId, token: vaultToken });
         }
         const any = Object.keys(servers).length > 0;
         await writeBotMcpConfig(session.containerName, any ? servers : null, {
@@ -667,7 +700,17 @@ export async function deliverHandoffs(opts: {
     console.warn(`[bots] ${opts.fromName}: handoff chain past ${MAX_HANDOFF_HOPS} hops, not delivered`);
     return 0;
   }
-  const team = await prisma.bot.findMany({ where: { id: { not: opts.fromId } }, select: { id: true, name: true } });
+  // A handoff reaches the sender's own workspace (D-87) — the roster the bot
+  // was given is that workspace's, so anything else is a name it never saw.
+  const from = await prisma.bot.findUnique({
+    where: { id: opts.fromId },
+    select: { workspaceId: true },
+  });
+  if (!from) return 0;
+  const team = await prisma.bot.findMany({
+    where: { id: { not: opts.fromId }, workspaceId: from.workspaceId },
+    select: { id: true, name: true },
+  });
   let sent = 0;
   for (const h of handoffs) {
     const to = findTeammate(team, h.to);

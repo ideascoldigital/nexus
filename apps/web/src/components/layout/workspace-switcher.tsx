@@ -1,9 +1,10 @@
 "use client";
 
-// Workspace switcher — sits at the top of the sidebar. A pure SELECTOR:
-// pick a workspace, create one in a pinch, jump to /workspaces for anything
-// else. Editing and deleting deliberately live on that page, not in a
-// dropdown row where a mis-click next to "switch" used to rename things.
+// Workspace switcher — the top of the dashboard sidebar, and the bots title
+// bar (`variant="compact"`). A pure SELECTOR: pick a workspace, create one in
+// a pinch, jump to /workspaces for anything else. Editing and deleting
+// deliberately live on that page, not in a dropdown row where a mis-click
+// next to "switch" used to rename things.
 
 import { useState } from "react";
 import Link from "next/link";
@@ -37,17 +38,30 @@ async function fetchWorkspaces(): Promise<{
   return res.json();
 }
 
-async function activate(id: string) {
+async function activate(id: string, returnTo: string) {
   await fetch("/api/workspaces/activate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id }),
   });
   // Full reload: server components, queries and cookies all re-scope.
-  window.location.href = "/";
+  window.location.href = returnTo;
 }
 
-export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }) {
+export function WorkspaceSwitcher({
+  collapsed = false,
+  /**
+   * "compact" is the bots title bar: a round icon button the size of the ones
+   * next to it, since that bar has no room for a name.
+   */
+  variant = "sidebar",
+  /** Where the reload lands — the bots view switches without leaving itself. */
+  returnTo = "/",
+}: {
+  collapsed?: boolean;
+  variant?: "sidebar" | "compact";
+  returnTo?: string;
+}) {
   const [creating, setCreating] = useState(false);
 
   const { data } = useQuery({
@@ -56,20 +70,23 @@ export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }
   });
 
   const active = data?.workspaces.find((w) => w.id === data.activeId);
+  const compact = variant === "compact";
+  // No label: the name lives in a tooltip instead.
+  const iconOnly = compact || collapsed;
 
-  // Collapsed sidebar: same menu, icon-only trigger — the name lives in a
-  // tooltip since there is no room for a label.
   const trigger = (
     <DropdownMenuTrigger
       className={
-        collapsed
-          ? "mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-background/40 transition-colors hover:border-border"
-          : "mx-0.5 mb-2 flex items-center gap-2 rounded-lg border border-border/60 bg-background/40 px-2.5 py-2 text-left transition-colors hover:border-border"
+        compact
+          ? "flex size-7 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground transition-colors hover:bg-secondary/80"
+          : collapsed
+            ? "mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-background/40 transition-colors hover:border-border"
+            : "mx-0.5 mb-2 flex items-center gap-2 rounded-lg border border-border/60 bg-background/40 px-2.5 py-2 text-left transition-colors hover:border-border"
       }
       aria-label="Switch workspace"
     >
       <WorkspaceAvatar ws={active} size="md" />
-      {!collapsed && (
+      {!iconOnly && (
         <>
           <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold">
             {active?.name ?? "…"}
@@ -82,22 +99,22 @@ export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }
 
   return (
     <DropdownMenu>
-      {collapsed ? (
+      {iconOnly ? (
         <Tooltip>
           <TooltipTrigger render={trigger} />
-          <TooltipContent side="right">
+          <TooltipContent side={compact ? "bottom" : "right"}>
             {active?.name ?? "Workspace"} · switch workspace
           </TooltipContent>
         </Tooltip>
       ) : (
         trigger
       )}
-      <DropdownMenuContent align="start" className="w-56">
+      <DropdownMenuContent align={compact ? "end" : "start"} className="w-56">
         {data?.workspaces.map((w) => (
           <DropdownMenuItem
             key={w.id}
             onClick={() => {
-              if (w.id !== data.activeId) void activate(w.id);
+              if (w.id !== data.activeId) void activate(w.id, returnTo);
             }}
             className="gap-2"
           >
@@ -133,7 +150,7 @@ export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }
         onOpenChange={setCreating}
         workspace={null}
         onSaved={async (id, created) => {
-          if (created) await activate(id);
+          if (created) await activate(id, returnTo);
         }}
       />
     </DropdownMenu>

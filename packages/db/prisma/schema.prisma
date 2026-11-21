@@ -22,6 +22,7 @@ model Workspace {
   agents      Agent[]
   skills      Skill[]
   credentials CloudCredential[]
+  bots        Bot[]
 }
 
 model Project {
@@ -1188,28 +1189,35 @@ model TaskSchedule {
 // runs in a fresh, ephemeral desktop container (Chromium + Claude Code on the
 // Claude subscription token) that is deleted when the session ends.
 model Bot {
-  id                 String   @id @default(cuid())
+  id                 String    @id @default(cuid())
+  // Which workspace's team it is on (D-87), like Project/Agent/Skill before
+  // it. "ws-default" is the seeded workspace every bot created before this
+  // belongs to.
+  workspaceId        String    @default("ws-default")
+  workspace          Workspace @relation(fields: [workspaceId], references: [id])
   name               String
   role               String? // one-line job, shown under the name and given to Claude
-  instructions       String   @default("") // standing instructions appended to the system prompt
-  color              String   @default("#8b5cf6")
-  shape              String   @default("blob") // avatar shape id (apps/web bot-shapes)
+  instructions       String    @default("") // standing instructions appended to the system prompt
+  color              String    @default("#8b5cf6")
+  shape              String    @default("blob") // avatar shape id (apps/web bot-shapes)
   model              String? // claude --model for its runs; null = CLI default
   claudeCredentialId String? // saved "claude" credential to run on; null = the first one (resolveClaudeCodeToken)
-  idleMinutes        Int      @default(30) // the computer is deleted after this long without a prompt
+  idleMinutes        Int       @default(30) // the computer is deleted after this long without a prompt
   mcpServers         Json? // its own MCP servers, Claude Code's native mcpServers shape — loaded next to the browser MCP
   // Which Docker daemon its computers run on (spec 26, D-85). Null = this
   // machine's docker context, which is where every bot ran before endpoints
   // reached them. A remote endpoint means its workspace and its sign-ins live
   // on that machine, so moving a bot gives it a fresh computer.
   dockerEndpointId   String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   sessions       BotSession[]
   runs           BotRun[]
   routines       BotRoutine[]
   dockerEndpoint DockerEndpoint? @relation(fields: [dockerEndpointId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
 }
 
 // BotSession - one lifetime of a bot's ephemeral computer (one container).

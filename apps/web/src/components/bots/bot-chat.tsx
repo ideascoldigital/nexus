@@ -18,6 +18,7 @@ import { format, isToday, isYesterday } from "date-fns";
 import {
   ArrowUp,
   Clock,
+  Copy,
   FileText,
   Globe,
   Hand,
@@ -25,6 +26,7 @@ import {
   Mail,
   MonitorPlay,
   PanelRight,
+  RotateCcw,
   Search,
   Square,
   SquareTerminal,
@@ -34,6 +36,13 @@ import {
 import { BotAvatar } from "@/components/bots/bot-avatar";
 import { MailCard } from "@/components/bots/bot-mail-card";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { MarkdownReport } from "@/components/ui/markdown-report";
 import { useToast } from "@/hooks/use-toast";
 import { CHOICE_LETTERS, type BotChoices } from "@/lib/bot-choices";
@@ -234,6 +243,7 @@ export function BotChat({
                   answer={answer}
                   canChoose={i === runs.length - 1 && !send.isPending}
                   onCancel={cancel.mutate}
+                  onRetry={send.mutate}
                   onOpenComputer={onOpenComputer}
                   onChoose={(option) => send.mutate(option)}
                   onSomethingElse={() => inputRef.current?.focus()}
@@ -315,15 +325,28 @@ function CurrentStep({ step }: { step: BotStep }) {
   );
 }
 
+/** Silent on purpose: a toast for every copy would be noise in a chat. */
+function copyToClipboard(text: string | null | undefined) {
+  if (!text?.trim()) return;
+  void navigator.clipboard?.writeText(text).catch(() => undefined);
+}
+
 function Bubble({
   children,
   className,
+  /** A typing indicator has nothing worth copying. */
+  copyable = true,
 }: {
   children: ReactNode;
   className?: string;
+  copyable?: boolean;
 }) {
-  return (
+  // What the bubble reads as on screen, which is what "copy" should mean for
+  // a reply rendered from Markdown.
+  const body = useRef<HTMLDivElement>(null);
+  const bubble = (
     <div
+      ref={body}
       className={cn(
         "w-fit max-w-[560px] rounded-2xl bg-card px-3.5 py-2.5 text-[13.5px] leading-relaxed",
         className,
@@ -331,6 +354,18 @@ function Bubble({
     >
       {children}
     </div>
+  );
+  if (!copyable) return bubble;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger render={bubble} />
+      <ContextMenuContent>
+        <ContextMenuItem onClick={() => copyToClipboard(body.current?.innerText)}>
+          <Copy />
+          Copy text
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -342,7 +377,7 @@ function TypingBubble({
   children?: ReactNode;
 }) {
   return (
-    <Bubble className="flex items-center gap-3 bg-card/60">
+    <Bubble copyable={false} className="flex items-center gap-3 bg-card/60">
       <span className="flex gap-1" aria-hidden>
         {[0, 150, 300].map((d) => (
           <span
@@ -583,6 +618,7 @@ const RunMessages = memo(function RunMessages({
   answer,
   canChoose,
   onCancel,
+  onRetry,
   onOpenComputer,
   onChoose,
   onSomethingElse,
@@ -606,6 +642,8 @@ const RunMessages = memo(function RunMessages({
   answer: string | null;
   canChoose: boolean;
   onCancel: (runId: string) => void;
+  /** Send the same prompt again, as a new run. */
+  onRetry: (prompt: string) => void;
   onOpenComputer: () => void;
   onChoose: (option: string) => void;
   onSomethingElse: () => void;
@@ -705,12 +743,37 @@ const RunMessages = memo(function RunMessages({
       ) : hidden ? null : (
         <div className="flex flex-col items-end gap-1">
           {/* Your messages wear the bot's color. */}
-          <div
-            className="w-fit max-w-[560px] rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap"
-            style={{ background: bot.color, color: textOn(bot.color) }}
-          >
-            {run.prompt}
-          </div>
+          <ContextMenu>
+            <ContextMenuTrigger
+              render={
+                <div
+                  className="w-fit max-w-[560px] rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed whitespace-pre-wrap"
+                  style={{ background: bot.color, color: textOn(bot.color) }}
+                />
+              }
+            >
+              {run.prompt}
+            </ContextMenuTrigger>
+            <ContextMenuContent>
+              <ContextMenuItem onClick={() => copyToClipboard(run.prompt)}>
+                <Copy />
+                Copy text
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => onRetry(run.prompt)}>
+                <RotateCcw />
+                Send again
+              </ContextMenuItem>
+              {(run.status === "queued" || run.status === "running") && (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem variant="destructive" onClick={() => onCancel(run.id)}>
+                    <Square className="fill-current" />
+                    Stop this run
+                  </ContextMenuItem>
+                </>
+              )}
+            </ContextMenuContent>
+          </ContextMenu>
           {run.status === "queued" && (
             <span className="text-[11px] text-muted-foreground">
               Queued ·{" "}

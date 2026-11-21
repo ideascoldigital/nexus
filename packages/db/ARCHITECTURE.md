@@ -30,7 +30,7 @@ The rest of `src/generated/**` (`client.ts`, `models/`, `internal/`, …) *is* t
 
 ## Data model (domain clusters)
 
-- **Scoping:** `Workspace` — hard isolation boundary owning projects, agent/skill catalogs, credentials and key-prefixed settings; `ws-default` is seeded by migration
+- **Scoping:** `Workspace` — hard isolation boundary owning projects, agent/skill catalogs, credentials, bots and key-prefixed settings; `ws-default` is seeded by migration
 - **Project core:** `Project`, `Repository`, `RepositorySetup`, `ProjectEnvVar`, `StackNode`/`StackEdge`
 - **Planning:** `Feature`, `DevPhase`, `Phase`, `Plan`, `ProjectDocument`(+`Section`/`Revision`), `GitHubIssue`/`FeatureIssue`, `GitLabIssue`/`FeatureGitLabIssue`
 - **Agents & brains:** `Agent`, `Skill`, `ProjectAgent`, `ProjectSkill`, `AgentSkill`, `ProjectBrain`, `Tool`

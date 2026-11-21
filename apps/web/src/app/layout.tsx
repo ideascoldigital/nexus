@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import Script from "next/script";
+import { NativeMenuGuard } from "@/components/layout/native-menu-guard";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryProvider } from "@/providers/query-provider";
 import { Toaster } from "@/components/ui/toaster";
@@ -52,6 +53,7 @@ export default function RootLayout({
         </Script>
         <QueryProvider>
           <TooltipProvider>
+            <NativeMenuGuard />
             {children}
             <Toaster />
           </TooltipProvider>

@@ -4,29 +4,44 @@
 // An inbox of bots on the left (latest message, unread dot), the conversation
 // in the middle, the bot's panel on the right (activity, computer, settings).
 // The computer opens as a big live screen you can take control of.
+//
+// The inbox is one workspace's team (D-87); the title bar's switcher is how
+// you move between them.
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, Plus, Search, ShieldCheck, X } from "lucide-react";
+import { ArrowLeft, Loader2, MessageSquare, Pencil, Play, PowerOff, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
 import { BotChat } from "@/components/bots/bot-chat";
 import { ComputerDialog } from "@/components/bots/bot-computer";
 import { BotPanel } from "@/components/bots/bot-panel";
 import { NewBotDialog } from "@/components/bots/new-bot-dialog";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { WorkspaceSwitcher } from "@/components/layout/workspace-switcher";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { VaultSection } from "@/components/vault/vault-section";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { HANDBACK_PROMPT } from "@/lib/bot-prompts";
 import { cn } from "@/lib/utils";
 import {
+  deleteBot,
   getBotFeed,
   getBots,
   sendBotPrompt,
   startBotComputer,
   stopBotComputer,
+  updateBot,
   type BotFeed,
   type BotListItem,
 } from "@/services/bots";
@@ -77,12 +92,31 @@ export function BotsView() {
   const [creating, setCreating] = useState(false);
   const [vaultOpen, setVaultOpen] = useState(false);
   const [query, setQuery] = useState<string | null>(null);
+  // Right-click targets: the dialogs live here, one of each, rather than one per row.
+  const [renaming, setRenaming] = useState<BotListItem | null>(null);
+  const [deleting, setDeleting] = useState<BotListItem | null>(null);
   const { seen, markSeen } = useSeen();
 
   const { data: bots, isLoading } = useQuery({
     queryKey: ["bots"],
     queryFn: getBots,
     refetchInterval: 4000,
+  });
+
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteBot(id),
+    onSuccess: (_result, id) => {
+      if (selectedId === id) setSelectedId(null);
+      qc.invalidateQueries({ queryKey: ["bots"] });
+    },
+    onError: (err) =>
+      toast({
+        title: "Could not delete the bot",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      }),
   });
 
   const selected = bots?.find((b) => b.id === selectedId) ?? bots?.[0] ?? null;
@@ -103,6 +137,10 @@ export function BotsView() {
               <span data-tauri-drag-region className="flex-1 px-1 text-[14px] font-semibold">
                 <span className="titlebar-hide">Bots</span>
               </span>
+              {/* The inbox below is this workspace's team (D-87). Switching
+                  reloads /bots rather than the dashboard, so the simple view
+                  stays the simple view. */}
+              <WorkspaceSwitcher variant="compact" returnTo="/bots" />
               <Button size="icon-sm" variant="secondary" className="rounded-full" onClick={() => setQuery("")} aria-label="Search bots" title="Search">
                 <Search className="h-3.5 w-3.5" />
               </Button>
@@ -140,6 +178,8 @@ export function BotsView() {
               active={b.id === selected?.id}
               unread={b.id !== selected?.id && (isUnread(b, seen[b.id]) || b.needsInput)}
               onSelect={() => setSelectedId(b.id)}
+              onRename={() => setRenaming(b)}
+              onDelete={() => setDeleting(b)}
             />
           ))}
           {q && visible?.length === 0 && (
@@ -183,7 +223,72 @@ export function BotsView() {
           <VaultSection className="max-h-[70vh] overflow-y-auto px-6 pb-6" />
         </DialogContent>
       </Dialog>
+      {/* Keyed so the field starts from whichever bot was right-clicked,
+          without an effect that writes state on open. */}
+      <RenameBotDialog key={renaming?.id ?? "none"} bot={renaming} onClose={() => setRenaming(null)} />
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title={`Delete ${deleting?.name ?? "this bot"}?`}
+        description="Its computer and chat history go with it."
+        confirmLabel="Delete bot"
+        onConfirm={() => deleting && remove.mutate(deleting.id)}
+      />
     </div>
+  );
+}
+
+/** Rename from the inbox, without opening the bot's settings. */
+function RenameBotDialog({ bot, onClose }: { bot: BotListItem | null; onClose: () => void }) {
+  const [name, setName] = useState(bot?.name ?? "");
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const save = useMutation({
+    mutationFn: (next: string) => updateBot(bot!.id, { name: next }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["bots"] });
+      onClose();
+    },
+    onError: (err) =>
+      toast({
+        title: "Could not rename the bot",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      }),
+  });
+  const trimmed = name.trim();
+  return (
+    <Dialog open={bot !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-[420px]">
+        <DialogHeader>
+          <DialogTitle>Rename bot</DialogTitle>
+        </DialogHeader>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (trimmed && trimmed !== bot?.name) save.mutate(trimmed);
+            else onClose();
+          }}
+        >
+          <Input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Name"
+            maxLength={60}
+          />
+          <DialogFooter className="mt-4">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!trimmed || save.isPending}>
+              {save.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -192,31 +297,84 @@ function InboxRow({
   active,
   unread,
   onSelect,
+  onRename,
+  onDelete,
 }: {
   bot: BotListItem;
   active: boolean;
   unread: boolean;
   onSelect: () => void;
+  onRename: () => void;
+  onDelete: () => void;
 }) {
   const working = bot.activity === "working" || bot.activity === "starting";
+  const asleep = bot.activity === "off";
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const refresh = () => qc.invalidateQueries({ queryKey: ["bots"] });
+  const failed = (title: string) => (err: unknown) =>
+    toast({ title, description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+  const wake = useMutation({
+    mutationFn: () => startBotComputer(bot.id),
+    onSuccess: refresh,
+    onError: failed("Could not wake the computer"),
+  });
+  const sleep = useMutation({
+    mutationFn: () => stopBotComputer(bot.id),
+    onSuccess: refresh,
+    onError: failed("Could not put the computer to sleep"),
+  });
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={cn(
-        "group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors",
-        active ? "bg-accent" : "hover:bg-accent/50",
-      )}
-    >
-      <BotAvatar shape={bot.shape} color={bot.color} size={38} sleeping={bot.activity === "off"} looking={active} />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13.5px]">{bot.name}</span>
-        <span className={cn("block truncate text-[12px]", working ? "text-sky-400" : "text-muted-foreground")}>
-          {working ? (bot.activity === "starting" ? "Waking up…" : "Working…") : (bot.preview ?? bot.role ?? "No messages yet")}
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <button
+            type="button"
+            onClick={onSelect}
+            className={cn(
+              "group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors",
+              active ? "bg-accent" : "hover:bg-accent/50",
+            )}
+          />
+        }
+      >
+        <BotAvatar shape={bot.shape} color={bot.color} size={38} sleeping={asleep} looking={active} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13.5px]">{bot.name}</span>
+          <span className={cn("block truncate text-[12px]", working ? "text-sky-400" : "text-muted-foreground")}>
+            {working ? (bot.activity === "starting" ? "Waking up…" : "Working…") : (bot.preview ?? bot.role ?? "No messages yet")}
+          </span>
         </span>
-      </span>
-      {unread && <span className="h-2 w-2 shrink-0 rounded-full bg-sky-500" aria-label="Unread" />}
-    </button>
+        {unread && <span className="h-2 w-2 shrink-0 rounded-full bg-sky-500" aria-label="Unread" />}
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onClick={onSelect}>
+          <MessageSquare />
+          Open chat
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        {asleep ? (
+          <ContextMenuItem disabled={wake.isPending} onClick={() => wake.mutate()}>
+            <Play />
+            Wake the computer
+          </ContextMenuItem>
+        ) : (
+          <ContextMenuItem disabled={sleep.isPending} onClick={() => sleep.mutate()}>
+            <PowerOff />
+            Put the computer to sleep
+          </ContextMenuItem>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={onRename}>
+          <Pencil />
+          Rename…
+        </ContextMenuItem>
+        <ContextMenuItem variant="destructive" onClick={onDelete}>
+          <Trash2 />
+          Delete bot
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

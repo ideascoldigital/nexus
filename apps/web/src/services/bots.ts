@@ -7,6 +7,8 @@ export type BotActivity = "off" | "starting" | "idle" | "working" | "error";
 
 export type Bot = {
   id: string;
+  /** The workspace whose team it is on (D-87); set from the active one at creation. */
+  workspaceId: string;
   name: string;
   role: string | null;
   instructions: string;

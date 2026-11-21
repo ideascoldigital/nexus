@@ -4,12 +4,18 @@ import { enqueueBotPrompt } from "@/lib/bot-manager";
 import { buildIntroPrompt } from "@/lib/bot-intro";
 import { botActivity, botDataFor, botInputSchema, botPreview } from "@/lib/bot-view";
 import { missingEndpoint } from "@/lib/docker-endpoints";
+import { getActiveWorkspaceId } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 
-/** Every bot with what its computer is doing right now. */
+/** The active workspace's bots, with what each computer is doing right now. */
 export async function GET() {
   const bots = await prisma.bot.findMany({
+    // Strictly this workspace's team — unlike agents and skills, which are
+    // catalogs a workspace inherits from the default one. A bot is a running
+    // teammate with a computer and a chat history, so seeing it in a workspace
+    // it was not hired into would be a surprise, not a convenience.
+    where: { workspaceId: await getActiveWorkspaceId() },
     orderBy: { createdAt: "asc" },
     include: {
       sessions: { orderBy: { createdAt: "desc" }, take: 1 },
@@ -46,7 +52,10 @@ export async function POST(req: NextRequest) {
   if (await missingEndpoint(parsed.data.dockerEndpointId)) {
     return NextResponse.json({ error: "That Docker endpoint no longer exists." }, { status: 400 });
   }
-  const bot = await prisma.bot.create({ data: botDataFor(parsed.data, Prisma.DbNull) as Prisma.BotCreateInput });
+  const workspaceId = await getActiveWorkspaceId();
+  const bot = await prisma.bot.create({
+    data: { ...botDataFor(parsed.data, Prisma.DbNull), workspaceId } as Prisma.BotCreateInput,
+  });
   // `?intro=0` skips the greeting — imports create many bots at once, and each
   // greeting wakes a computer.
   if (req.nextUrl.searchParams.get("intro") === "0") return NextResponse.json(bot, { status: 201 });

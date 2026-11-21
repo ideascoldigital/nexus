@@ -330,11 +330,21 @@ export function shapeRoutine<R extends { cron: string }>(r: R): R & { label: str
  * Links to the user's own machine, as the bot's container can reach them:
  * inside it `localhost` is the container, the host is host.docker.internal.
  * Applied to prompts on their way to the bot; the chat keeps the original.
+ *
+ * `base` is Nexus as that computer reaches it (D-88). It differs from
+ * host.docker.internal only for a bot on another machine's daemon, where
+ * Nexus answers on a return tunnel's port rather than its own — so a link to
+ * Nexus needs the whole origin replaced, not just the hostname. Links to
+ * other ports keep the plain swap: they point at something on this machine
+ * that a remote computer has no route to either way, and silently sending
+ * them to Nexus instead would be worse than leaving them unreachable.
  */
-export function toContainerUrls(text: string): string {
+export function toContainerUrls(text: string, base?: string): string {
+  const nexusPort = process.env.PORT || "3000";
   return text.replace(
-    /\b(https?:\/\/)(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?=[:/]|\b)/gi,
-    "$1host.docker.internal",
+    /\b(https?:\/\/)(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?::(\d+))?\b/gi,
+    (_whole, scheme: string, port: string | undefined) =>
+      base && port === nexusPort ? base : `${scheme}host.docker.internal${port ? `:${port}` : ""}`,
   );
 }
 

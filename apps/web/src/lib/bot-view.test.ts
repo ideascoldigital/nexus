@@ -168,6 +168,30 @@ test("links to the user's machine are rewritten for the bot's container", () => 
   assert.equal(toContainerUrls("https://example.com/localhost"), "https://example.com/localhost");
 });
 
+test("a computer on another machine reaches Nexus on the tunnel's port, not Nexus's own", () => {
+  // D-88: for a remote daemon, host.docker.internal is that machine, and
+  // Nexus answers through a relay on a port of its own. Only Nexus's origin
+  // moves; another port on this machine is unreachable from there either way,
+  // and quietly pointing it at Nexus would be worse than leaving it broken.
+  const previous = process.env.PORT;
+  process.env.PORT = "3100";
+  try {
+    const base = "http://host.docker.internal:47600";
+    assert.equal(
+      toContainerUrls("mira http://localhost:3100/icon.svg y http://127.0.0.1:8080/x", base),
+      "mira http://host.docker.internal:47600/icon.svg y http://host.docker.internal:8080/x",
+    );
+    // Without a base — a computer on this machine — nothing changes.
+    assert.equal(
+      toContainerUrls("http://localhost:3100/icon.svg"),
+      "http://host.docker.internal:3100/icon.svg",
+    );
+  } finally {
+    if (previous === undefined) delete process.env.PORT;
+    else process.env.PORT = previous;
+  }
+});
+
 test("fresh-session context says why: new computer vs new instructions", () => {
   const h = [{ prompt: "hola", result: "hola!" }];
   assert.match(withEarlierContext("x", h), /computer was reset/);
