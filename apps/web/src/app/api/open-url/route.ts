@@ -7,6 +7,9 @@
  * user, it can hand the URL to the OS opener itself. Browser installs answer
  * 404 and the client falls back to window.open, which works there.
  *
+ * `pnpm dev:native` sets NEXUX_OPEN_URL=1: the same webview, without the
+ * packaged-only routes (self-install) that NEXUX_NATIVE also turns on.
+ *
  * http(s) only: the OS opener would happily run file:, and this endpoint is
  * reachable by anything that can reach the sidecar port.
  */
@@ -39,7 +42,7 @@ export function validateUrl(raw: unknown): string | null {
 }
 
 export async function POST(req: Request) {
-  if (process.env.NEXUX_NATIVE !== "1") {
+  if (process.env.NEXUX_NATIVE !== "1" && process.env.NEXUX_OPEN_URL !== "1") {
     return NextResponse.json(
       { error: "open-url is only available in the native app" },
       { status: 404 },

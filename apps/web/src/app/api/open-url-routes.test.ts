@@ -5,6 +5,7 @@ import { openerCommand, POST as openUrl, validateUrl } from "./open-url/route";
 
 afterEach(() => {
   delete process.env.NEXUX_NATIVE;
+  delete process.env.NEXUX_OPEN_URL;
 });
 
 test("validateUrl accepts http(s) only", () => {
