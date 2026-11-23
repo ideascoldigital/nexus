@@ -157,7 +157,12 @@ export function BotsView() {
               </Button>
             </>
           ) : (
-            <div className="flex flex-1 items-center gap-2 rounded-full bg-card px-3 py-1.5">
+            // Fixed height, the same as the buttons it replaces, so it stays
+            // centred on the traffic lights. Below 768px globals.css gives every
+            // input a 36px min-height (and 16px text, against iOS focus zoom),
+            // which made this pill taller than the title bar; the input keeps
+            // the 16px but not the min-height.
+            <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-full bg-card px-3">
               <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <input
                 autoFocus
@@ -165,7 +170,7 @@ export function BotsView() {
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Escape" && setQuery(null)}
                 placeholder="Search"
-                className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground"
+                className="h-full min-h-0! min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground"
               />
               <button type="button" onClick={() => setQuery(null)} aria-label="Close search" className="text-muted-foreground hover:text-foreground">
                 <X className="h-3.5 w-3.5" />

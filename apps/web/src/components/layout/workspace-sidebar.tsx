@@ -74,9 +74,13 @@ export function WorkspaceSidebar() {
     href === "/" ? pathname === "/" : pathname.startsWith(href);
 
   return (
+    // In the macOS app the traffic lights sit over this column's top-left
+    // corner: titlebar-inset-top moves the workspace switcher below them, and
+    // the strip it frees drags the window like the header beside it does.
     <aside
+      data-tauri-drag-region
       data-collapsed={collapsed ? "" : undefined}
-      className={`relative hidden shrink-0 flex-col gap-0.5 border-r border-border/60 bg-sidebar py-4 transition-[width] duration-200 ease-out md:flex ${
+      className={`titlebar-inset-top relative hidden shrink-0 flex-col gap-0.5 border-r border-border/60 bg-sidebar py-4 transition-[width] duration-200 ease-out md:flex ${
         collapsed ? "w-[60px] px-2" : "w-[210px] px-3"
       }`}
     >
