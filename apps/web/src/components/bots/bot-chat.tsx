@@ -11,6 +11,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import { useMutation } from "@tanstack/react-query";
@@ -109,7 +110,7 @@ export function BotChat({
   onChange: () => void;
 }) {
   const { toast } = useToast();
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useDraft(bot.id);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -385,6 +386,33 @@ export function BotChat({
       </div>
     </section>
   );
+}
+
+const DRAFT_KEY = "nexux:bot-draft:";
+
+/**
+ * The unsent text of one bot's composer. Kept in localStorage because the chat
+ * unmounts when you open another bot or leave the page, and a half-written
+ * message should still be there when you come back.
+ */
+function useDraft(botId: string) {
+  const [text, setText] = useState(() => {
+    try {
+      return window.localStorage.getItem(DRAFT_KEY + botId) ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const set = (next: string) => {
+    setText(next);
+    try {
+      if (next) window.localStorage.setItem(DRAFT_KEY + botId, next);
+      else window.localStorage.removeItem(DRAFT_KEY + botId);
+    } catch {
+      // Storage unavailable: the draft just lives for this visit.
+    }
+  };
+  return [text, set] as const;
 }
 
 const STEP_ICON: Record<string, typeof Globe> = {
@@ -1050,15 +1078,82 @@ type PendingFile = {
   error?: string;
 };
 
-/** Files picked, pasted or dropped for the next message, uploading as they come. */
+const FILES_KEY = "nexux:bot-draft-files:";
+
+type StoredFile = { key: string; name: string; size: number; url: string; image: boolean };
+
+// Outside React, like the draft text: the chat unmounts when you open another
+// bot or leave the page, and an upload still in flight has to land somewhere.
+let pendingFiles: PendingFile[] = [];
+const pendingListeners = new Set<() => void>();
+const pendingLoaded = new Set<string>();
+const NO_FILES: PendingFile[] = [];
+
+function subscribePending(listener: () => void) {
+  pendingListeners.add(listener);
+  return () => {
+    pendingListeners.delete(listener);
+  };
+}
+
+function setPending(botId: string, update: (xs: PendingFile[]) => PendingFile[]) {
+  pendingFiles = update(pendingFiles);
+  // Only what finished uploading is worth keeping: it is the URL that survives.
+  const ready: StoredFile[] = pendingFiles.flatMap((f) =>
+    f.botId === botId && f.status === "ready" && f.url
+      ? [{ key: f.key, name: f.name, size: f.size, url: f.url, image: f.preview !== null }]
+      : [],
+  );
+  try {
+    if (ready.length) window.localStorage.setItem(FILES_KEY + botId, JSON.stringify(ready));
+    else window.localStorage.removeItem(FILES_KEY + botId);
+  } catch {
+    // Storage unavailable: the files just live for this visit.
+  }
+  for (const l of pendingListeners) l();
+}
+
+function loadPending(botId: string) {
+  if (pendingLoaded.has(botId)) return;
+  pendingLoaded.add(botId);
+  let stored: StoredFile[];
+  try {
+    stored = JSON.parse(window.localStorage.getItem(FILES_KEY + botId) ?? "[]") as StoredFile[];
+  } catch {
+    return;
+  }
+  if (!Array.isArray(stored) || stored.length === 0) return;
+  pendingFiles = [
+    ...pendingFiles,
+    ...stored.map(
+      (f): PendingFile => ({
+        key: f.key,
+        botId,
+        name: f.name,
+        size: f.size,
+        // The local blob is gone after a reload; the uploaded file is its own preview.
+        preview: f.image ? f.url : null,
+        status: "ready",
+        url: f.url,
+      }),
+    ),
+  ];
+  for (const l of pendingListeners) l();
+}
+
+/**
+ * Files picked, pasted or dropped for the next message, uploading as they come.
+ * They stay with the bot's draft until sent or removed, across bots and reloads.
+ */
 function usePendingFiles(botId: string) {
-  const [all, setAll] = useState<PendingFile[]>([]);
+  const all = useSyncExternalStore(subscribePending, () => pendingFiles, () => NO_FILES);
+  useEffect(() => loadPending(botId), [botId]);
   const items = all.filter((f) => f.botId === botId);
   const patch = (key: string, p: Partial<PendingFile>) =>
-    setAll((xs) => xs.map((x) => (x.key === key ? { ...x, ...p } : x)));
+    setPending(botId, (xs) => xs.map((x) => (x.key === key ? { ...x, ...p } : x)));
   const drop = (keep: (f: PendingFile) => boolean) =>
-    setAll((xs) => {
-      for (const x of xs) if (!keep(x) && x.preview) URL.revokeObjectURL(x.preview);
+    setPending(botId, (xs) => {
+      for (const x of xs) if (!keep(x) && x.preview?.startsWith("blob:")) URL.revokeObjectURL(x.preview);
       return xs.filter(keep);
     });
 
@@ -1075,7 +1170,7 @@ function usePendingFiles(botId: string) {
       for (const file of ok) {
         const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const preview = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
-        setAll((xs) => [...xs, { key, botId, name: file.name, size: file.size, preview, status: "uploading" }]);
+        setPending(botId, (xs) => [...xs, { key, botId, name: file.name, size: file.size, preview, status: "uploading" }]);
         uploadBotFile(botId, file).then(
           (r) => patch(key, { status: "ready", url: r.url, name: r.name }),
           (err) => patch(key, { status: "error", error: err instanceof Error ? err.message : "Upload failed" }),
