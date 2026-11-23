@@ -30,6 +30,7 @@ test("each problem is named, for the user", () => {
   assert.match(err([]), /Expected/);
   assert.match(err({ browser: { command: "x" } }), /is used by Nexus/);
   assert.match(err({ vault: { command: "x" } }), /is used by Nexus/);
+  assert.match(err({ gmail: { command: "x" } }), /is used by Nexus/);
   assert.match(err({ "bad name": { command: "x" } }), /names are letters/);
   assert.match(err({ a: { args: ["x"] } }), /needs a command/);
   assert.match(err({ a: { type: "http" } }), /needs a url/);

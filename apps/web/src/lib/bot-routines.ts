@@ -10,6 +10,7 @@
 //   {"name": "Update the expense log", "delete": true}
 //   ```
 
+import { splitAttachments } from "@/lib/bot-attachments";
 import { parseChoices, type BotChoices } from "@/lib/bot-choices";
 import { handoffRun, parseHandoffBlocks, replyRun, type HandoffSpec } from "@/lib/bot-handoffs";
 import { mailRun, parseMailBlocks, type MailDraft } from "@/lib/bot-mail";
@@ -215,5 +216,6 @@ export function promptLabel(prompt: string): string {
   if (mail) return `${mail.mode === "send" ? "Sending" : "Saving a draft"} · ${mail.mail.subject || mail.mail.to}`;
   const back = replyRun(prompt);
   if (back) return `Continuing with ${back.teammateName}'s answer`;
-  return prompt;
+  const { text, attachments } = splitAttachments(prompt);
+  return attachments.length ? [text, `📎 ${attachments.map((a) => a.name).join(", ")}`].filter(Boolean).join(" ") : prompt;
 }

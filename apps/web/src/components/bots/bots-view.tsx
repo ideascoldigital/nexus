@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Loader2, MessageSquare, Pencil, Play, PowerOff, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
+import { ArrowLeft, Blocks, Loader2, MessageSquare, Pencil, Play, PowerOff, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
 import { BotChat } from "@/components/bots/bot-chat";
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ConnectAppsDialog } from "@/components/connectors/connect-apps";
 import { VaultSection } from "@/components/vault/vault-section";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -91,6 +92,7 @@ export function BotsView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [vaultOpen, setVaultOpen] = useState(false);
+  const [appsOpen, setAppsOpen] = useState(false);
   const [query, setQuery] = useState<string | null>(null);
   // Right-click targets: the dialogs live here, one of each, rather than one per row.
   const [renaming, setRenaming] = useState<BotListItem | null>(null);
@@ -143,6 +145,9 @@ export function BotsView() {
               <WorkspaceSwitcher variant="compact" returnTo="/bots" />
               <Button size="icon-sm" variant="secondary" className="rounded-full" onClick={() => setQuery("")} aria-label="Search bots" title="Search">
                 <Search className="h-3.5 w-3.5" />
+              </Button>
+              <Button size="icon-sm" variant="secondary" className="rounded-full" onClick={() => setAppsOpen(true)} aria-label="Connect apps" title="Connect apps">
+                <Blocks className="h-3.5 w-3.5" />
               </Button>
               <Button size="icon-sm" variant="secondary" className="rounded-full" onClick={() => setVaultOpen(true)} aria-label="Vault" title="Vault">
                 <ShieldCheck className="h-3.5 w-3.5" />
@@ -215,6 +220,7 @@ export function BotsView() {
       )}
 
       <NewBotDialog open={creating} onOpenChange={setCreating} onCreated={(id) => setSelectedId(id)} />
+      <ConnectAppsDialog open={appsOpen} onOpenChange={setAppsOpen} />
       <Dialog open={vaultOpen} onOpenChange={setVaultOpen}>
         <DialogContent className="gap-0 p-0 sm:max-w-[760px]">
           <DialogHeader className="px-6 pt-5 pb-3">

@@ -869,3 +869,22 @@ The last hop is the daemon host's own firewall, which we cannot fix from here an
 The menus themselves are a `ContextMenu` primitive on the same Base UI menu the dropdown already uses, so they inherit its styling and keyboard behaviour. The inbox rows offer open, wake or sleep the computer, rename and delete; the chat offers copy on a bot's bubble (the rendered text, not the Markdown source) and copy, send again and stop on your own.
 
 **Consequences:** a right click now does something useful everywhere it does anything at all, and the two places people most want it — a bot in the list, a message in the chat — no longer require a trip to the panel. Deliberately not done: there is no "delete message", because no endpoint deletes a run — `cancelBotRun` stops one — and offering a button with nothing behind it would be worse than leaving it out. The dashboard's own surfaces (projects, sandboxes, terminals, kanban) still fall through to no menu at all in the shell; they are suppressed but not yet replaced, which is a smaller regression than Back and Reload but is a gap.
+
+## D-90 — Gmail is reached through Nexus with the user's own OAuth app, not through the bot's browser (2026-11-22)
+
+**Context:** the bots that live in email kept asking the user to sign into Gmail. Their browser profiles persist and cookie sharing skips Google, yet those profiles held no Google session while another bot's did: Google signs out a Linux Chromium that shows up on a new machine each time the computer wakes. Fighting that (stable machine ids, fingerprints) is an arms race we would lose at Google's discretion.
+
+**Decision:** a Gmail connector (spec 34). The user creates a Desktop OAuth client in their own Google Cloud project, Internal to their Workspace — no verification, no 7-day expiry, any loopback port — and connects accounts through Google's consent screen in their own browser. Tokens are sealed in `OAuthToken` and never leave Nexus: the bot's `gmail` MCP server is a relay holding only the running prompt's token, the same grant the vault uses. Scopes are read + compose (drafts and send), not modify. An email card whose From is a connected account is sent by Nexus directly instead of queuing a bot run to click through Gmail.
+
+The user chose that bots may send on their own; the system prompt confines `gmail_send` to emails the user asked to have sent and keeps the card as the review path.
+
+**Consequences:** the mail card no longer depends on the bot's browser session for connected accounts, and sending takes a second instead of a bot run. A shared "Nexus" Google app is deliberately not built: Gmail's restricted scopes would need Google's security assessment, which belongs to the SaaS discussion. A bot that may send can send something wrong — mitigated by per-account bot access and the prompt rule, not prevented. Calendar and Drive would reuse the same app and consent with more scopes.
+
+
+## D-91 — Apps are connected once, globally, and reach bots as MCP servers (2026-11-22)
+
+**Context:** bots kept losing browser sign-ins (Google above all), and the alternative — per-bot MCP JSON plus a vault secret — was too much setup to be the normal path.
+
+**Decision:** a fixed catalog of apps (spec 35), each connected once with a token the user pastes, stored sealed in a `Connector` row and injected as an MCP server into the bots allowed to use it. Catalog entries are code, not data: each one's server definition, fields and token checks are reviewed, so a pasted value can only ever land in an env var, header or argument of a known server. Only token-based servers are in v1; OAuth-only MCP servers wait for an MCP OAuth client.
+
+**Consequences:** read-only is the default where the server supports it (databases, GitHub). A bot's own MCP server with the same name overrides the connector. Changing connectors changes the system prompt, so the bot's next message starts a fresh Claude session.

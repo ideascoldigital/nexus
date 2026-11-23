@@ -147,6 +147,16 @@ export const getBotFeed = (id: string) => call<BotFeed>(`/api/bots/${id}/runs`);
 export const sendBotPrompt = (id: string, prompt: string) =>
   call<BotRun>(`/api/bots/${id}/runs`, { method: "POST", body: JSON.stringify({ prompt }) });
 
+/** Attach a file to the next message: stored in Nexus, linked from the message. */
+export async function uploadBotFile(id: string, file: File): Promise<{ url: string; name: string; size: number }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`/api/bots/${id}/uploads`, { method: "POST", body: form });
+  const body = (await res.json().catch(() => ({}))) as { error?: unknown; url?: string; name?: string; size?: number };
+  if (!res.ok) throw new Error(typeof body.error === "string" ? body.error : `Upload failed (${res.status})`);
+  return body as { url: string; name: string; size: number };
+}
+
 /** Act on an email card in a reply: send it (or save a Gmail draft) as edited, or discard it. */
 export const actOnBotMail = (
   id: string,

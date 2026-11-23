@@ -19,13 +19,22 @@ export type MailDraft = {
   bcc?: string;
   subject: string;
   body: string;
+  /** A reply in an existing Gmail conversation (spec 34: sent by the connector). */
+  threadId?: string;
 };
 
 /** send: deliver it now. draft: leave it in Gmail's drafts. */
 export type MailMode = "send" | "draft";
 
 /** What happened to a card, kept on the run that wrote it (BotRun.mailState). */
-export type MailState = Record<string, { status: "discarded" } | { status: "sent"; runId: string; mode: MailMode }>;
+export type MailState = Record<
+  string,
+  | { status: "discarded" }
+  /** Handed to the bot: it sends from Gmail in its browser (runId is that run). */
+  | { status: "sent"; runId: string; mode: MailMode }
+  /** Done by Nexus through the Gmail connector (spec 34), as it went out. */
+  | { status: "delivered"; mode: MailMode; mail: MailDraft; at: string }
+>;
 
 const BLOCK = new RegExp("```" + MAIL_FENCE + "[ \\t]*\\n([\\s\\S]*?)\\n?```", "g");
 
@@ -42,7 +51,9 @@ export function toMailDraft(d: unknown): MailDraft | null {
   const from = str(o.from, 320);
   const cc = str(o.cc, 2000);
   const bcc = str(o.bcc, 2000);
+  const threadId = /^[A-Za-z0-9]{6,40}$/.test(str(o.threadId, 40)) ? str(o.threadId, 40) : "";
   return {
+    ...(threadId ? { threadId } : {}),
     ...(from ? { from } : {}),
     to,
     ...(cc ? { cc } : {}),

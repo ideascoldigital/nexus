@@ -1411,6 +1411,16 @@ model AssistantWatch {
 // (spec 32): a login, a secret (API key, connection string), a card, contact
 // details. `secret` is sealed (AES-256-GCM, key outside the database) and never
 // leaves the server; the rest is what lists and forms show.
+// An app from the connectors catalog (spec 35), offered to bots as an MCP
+// server. id = the catalog entry ("mongodb", "github", …).
+model Connector {
+  id        String   @id
+  config    Json // sealed: the values the user typed for the entry's fields (tokens included)
+  botIds    Json? // bots allowed to use it; null = every bot
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model VaultItem {
   id         String    @id @default(cuid())
   type       String // login | secret | card | contact

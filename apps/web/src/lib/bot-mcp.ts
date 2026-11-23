@@ -10,7 +10,7 @@
 export type BotMcpServers = Record<string, Record<string, unknown>>;
 
 /** Servers Nexus adds itself (the visible-Chromium MCP, the vault); a bot's own list can't replace them. */
-export const RESERVED_MCP_NAMES = ["browser", "vault"] as const;
+export const RESERVED_MCP_NAMES = ["browser", "vault", "gmail"] as const;
 
 const NAME = /^[A-Za-z0-9_-]{1,40}$/;
 const TYPES = ["stdio", "http", "sse"];
@@ -29,7 +29,7 @@ export function validateBotMcpServers(raw: unknown): { ok: true; servers: BotMcp
   for (const [name, def] of entries) {
     if (!NAME.test(name)) return { ok: false, error: `"${name}": names are letters, digits, - and _ (up to 40)` };
     if ((RESERVED_MCP_NAMES as readonly string[]).includes(name)) {
-      return { ok: false, error: `"${name}" is used by Nexus (the bot's browser / vault) — pick another name` };
+      return { ok: false, error: `"${name}" is used by Nexus (the bot's browser, vault or Gmail) — pick another name` };
     }
     if (!def || typeof def !== "object" || Array.isArray(def)) return { ok: false, error: `"${name}": expected an object` };
     const d = def as Record<string, unknown>;

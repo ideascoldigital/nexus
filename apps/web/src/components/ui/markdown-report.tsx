@@ -43,7 +43,7 @@ export function joinImageLines(markdown: string): string {
 type ReportImage = { src: string; alt: string };
 
 /** Full-size view of one image, with arrows (and ← →) through its siblings. */
-function ImageLightbox({
+export function ImageLightbox({
   images,
   index,
   onIndex,

@@ -248,6 +248,7 @@ export {
   botFileSize,
   botScreenPort,
   copyFromBot,
+  copyToBot,
   BOT_ROUTINE_FENCE,
   botImageTag,
   botReadiness,
@@ -272,3 +273,4 @@ export {
   writeBotVaultScripts,
   type VaultTypeResult,
 } from "./bot-vault";
+export { BOT_GMAIL_MCP_SCRIPT, botGmailMcpServer, renderGmailMcpScript, writeBotGmailScript } from "./bot-gmail";

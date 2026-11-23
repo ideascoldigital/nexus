@@ -1,6 +1,7 @@
 // What the dashboard sees of a bot. Pure shaping, no Prisma — shared by the
 // bot routes and kept free of server-only imports so it is cheap to test.
 
+import { splitAttachments } from "@/lib/bot-attachments";
 import { dockerHostKind, botVncUrl } from "@nexux/sandbox";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -205,7 +206,9 @@ export function botPreview(
     if (back) return `${back.teammateName} replied`;
     const mail = mailRun(run.prompt);
     if (mail) return `${mail.mode === "send" ? "Sending" : "Saving draft"} · ${clean(mail.mail.subject)}`;
-    return `You: ${clean(run.prompt)}`;
+    const { text, attachments } = splitAttachments(run.prompt);
+    const files = attachments.length ? `📎 ${attachments.length === 1 ? attachments[0]!.name : `${attachments.length} files`}` : "";
+    return `You: ${[clean(text), files].filter(Boolean).join(" ")}`;
   }
   if (run.status === "error") return run.error ? `Error: ${clean(run.error)}` : "Error";
   if (run.status === "canceled") return "Stopped";

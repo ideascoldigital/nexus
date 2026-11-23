@@ -707,6 +707,27 @@ export async function copyFromBot(
   return Boolean(res && res.code === 0);
 }
 
+/**
+ * Copy one file from this machine into a bot's computer, owned by the bot
+ * (files the user attached in the chat). `docker cp` streams through the
+ * daemon, so this works for a computer on another machine's daemon too.
+ */
+export async function copyToBot(
+  name: string,
+  src: string,
+  path: string,
+  target?: DockerTarget | null,
+): Promise<boolean> {
+  const dir = path.slice(0, path.lastIndexOf("/")) || "/";
+  const mk = await docker(target, ["exec", "-u", BOT_USER, name, "mkdir", "-p", dir], { timeoutMs: 15_000 }).catch(() => null);
+  if (!mk || mk.code !== 0) return false;
+  const cp = await docker(target, ["cp", src, `${name}:${path}`], { timeoutMs: 120_000 }).catch(() => null);
+  if (!cp || cp.code !== 0) return false;
+  // docker cp keeps the host's uid; the bot must be able to read and replace it.
+  await docker(target, ["exec", "-u", "root", name, "chown", `${BOT_USER}:${BOT_USER}`, path], { timeoutMs: 15_000 }).catch(() => null);
+  return true;
+}
+
 /** A cookie as DevTools reports it (Storage.getCookies). */
 export type BotCookie = {
   name: string;
@@ -817,6 +838,8 @@ export function renderBotSystemPrompt(bot: {
   skippedMcp?: string[];
   /** Vault entries it may use through vault_fill — never the secrets. */
   vault?: { type: string; name: string; websites?: string[]; username?: string | null; hint?: string | null }[];
+  /** Gmail addresses it reaches through the connector (spec 34), not the browser. */
+  gmail?: string[];
 }): string {
   const parts = [
     `You are "${bot.name}", an AI teammate${bot.role?.trim() ? ` whose job is: ${bot.role.trim()}` : ""}.`,
@@ -868,16 +891,31 @@ export function renderBotSystemPrompt(bot: {
     "",
     "# Emails",
     "",
-    "Never send an email on your own. When you write one for the user (a reply, a follow-up, a welcome…), put each email in a block at the end of your reply:",
+    bot.gmail?.length
+      ? "Don't send emails on your own initiative. When you write one for the user to review (a reply, a follow-up, a welcome…), put each email in a block at the end of your reply (for a reply, add the conversation's \"threadId\" so it goes out in the same thread):"
+      : "Never send an email on your own. When you write one for the user (a reply, a follow-up, a welcome…), put each email in a block at the end of your reply:",
     "",
     "```" + BOT_MAIL_FENCE,
     '{"from": "me@example.com", "to": "ana@example.com", "cc": "", "subject": "Welcome to Acme", "body": "Hi Ana,\\n\\nThanks for signing up…\\n\\nBest,\\nAlex"}',
     "```",
     "",
-    "- The app shows each block as an email card the user can edit, with Send and Discard. When they press Send, you get a message asking you to send it from Gmail in your browser, exactly as they left it — that is the only time you send.",
-    "- One block per email (several are fine). `body` is plain text with \\n line breaks, complete with greeting and signature. `from` is the Google account you are signed in with, if you know it. `cc`/`bcc` are optional, comma-separated.",
+    bot.gmail?.length
+      ? "- The app shows each block as an email card the user can edit, with Send and Discard. When they press Send, Nexus sends it from their Gmail itself — you don't have to do anything."
+      : "- The app shows each block as an email card the user can edit, with Send and Discard. When they press Send, you get a message asking you to send it from Gmail in your browser, exactly as they left it — that is the only time you send.",
+    `- One block per email (several are fine). \`body\` is plain text with \\n line breaks, complete with greeting and signature. \`from\` is ${bot.gmail?.length ? "the connected address it goes out from" : "the Google account you are signed in with, if you know it"}. \`cc\`/\`bcc\` are optional, comma-separated.`,
     "- In your text, say briefly what the emails are; don't paste them again outside the blocks.",
   );
+  if (bot.gmail?.length) {
+    parts.push(
+      "",
+      "# Gmail",
+      "",
+      `The user connected Gmail for you: ${bot.gmail.map((e) => `\`${e}\``).join(", ")}. Use the \`gmail\` MCP tools for it — \`gmail_search\` (Gmail's search syntax), \`gmail_read\`, \`gmail_draft\`, \`gmail_send\` — never Gmail in the browser: it is faster, it does not need a sign-in, and the browser's Google session is often signed out.`,
+      "- To review an email with the user, use the mail block above (the card). Save straight to Gmail with `gmail_draft` when the user or a routine asks for drafts.",
+      "- `gmail_send` sends at once and cannot be undone. Use it only when the user asked for that email to be sent — in this conversation or in a routine's instructions. When in doubt, show the card instead.",
+      "- Replies go in the same conversation: pass the `threadId` from `gmail_search`/`gmail_read`, and the subject stays as is (\"Re: …\").",
+    );
+  }
   parts.push(
     "",
     "# Your teammates",

@@ -251,3 +251,16 @@ test("a prompt makes its working directory before cd'ing into it", async () => {
     `no run cd'd into the folder: ${calls.join(" | ")}`,
   );
 });
+
+test("with Gmail connected, the bot is told to use the gmail tools and when it may send", () => {
+  const base = { name: "Isa", needsInputMarker: "NEEDS_INPUT:" };
+  const without = renderBotSystemPrompt(base);
+  assert.doesNotMatch(without, /# Gmail/);
+  assert.match(without, /Never send an email on your own/);
+  const withGmail = renderBotSystemPrompt({ ...base, gmail: ["me@example.com"] });
+  assert.match(withGmail, /# Gmail/);
+  assert.match(withGmail, /`me@example\.com`/);
+  assert.match(withGmail, /gmail_send` sends at once/);
+  assert.match(withGmail, /Nexus sends it from their Gmail itself/);
+  assert.doesNotMatch(withGmail, /send it from Gmail in your browser/);
+});

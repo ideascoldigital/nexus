@@ -57,9 +57,11 @@ export function MailCard({ botId, runId, index, draft, state, sendRun, onChange 
   // Sent (or being sent): what actually went out, read-only, with its progress.
   // A send that failed or was stopped opens the card again so you can retry.
   const sent = state?.status === "sent" ? state : null;
+  // Sent by Nexus through the Gmail connector: done, as it went out.
+  const delivered = state?.status === "delivered" ? state : null;
   const failed = sent && (sendRun?.status === "error" || sendRun?.status === "canceled");
-  const locked = Boolean(sent && !failed);
-  const shown = locked && sendRun ? (mailRun(sendRun.prompt)?.mail ?? mail) : mail;
+  const locked = Boolean((sent && !failed) || delivered);
+  const shown = delivered ? delivered.mail : locked && sendRun ? (mailRun(sendRun.prompt)?.mail ?? mail) : mail;
 
   const toOk = validAddresses(mail.to, { required: true });
   const ccOk = validAddresses(mail.cc);
@@ -119,7 +121,14 @@ export function MailCard({ botId, runId, index, draft, state, sendRun, onChange 
 
       <div className="flex items-center justify-end gap-3 pt-3">
         {locked ? (
-          <SendStatus mode={sent!.mode} run={sendRun} />
+          delivered ? (
+            <span className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
+              <Check className="h-3.5 w-3.5" />
+              {delivered.mode === "send" ? `Sent from ${delivered.mail.from}` : `Saved to Drafts in ${delivered.mail.from}`}
+            </span>
+          ) : (
+            <SendStatus mode={sent!.mode} run={sendRun} />
+          )
         ) : (
           <>
             {failed && (

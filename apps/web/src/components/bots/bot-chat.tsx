@@ -17,6 +17,7 @@ import { useMutation } from "@tanstack/react-query";
 import { format, isToday, isYesterday } from "date-fns";
 import {
   ArrowUp,
+  Check,
   Clock,
   Copy,
   FileText,
@@ -26,11 +27,13 @@ import {
   Mail,
   MonitorPlay,
   PanelRight,
+  Paperclip,
   RotateCcw,
   Search,
   Square,
   SquareTerminal,
   Wrench,
+  X,
 } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
@@ -43,8 +46,15 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { MarkdownReport } from "@/components/ui/markdown-report";
+import { ImageLightbox, MarkdownReport } from "@/components/ui/markdown-report";
 import { useToast } from "@/hooks/use-toast";
+import {
+  attachmentMarkdown,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS,
+  splitAttachments,
+  type Attachment,
+} from "@/lib/bot-attachments";
 import { CHOICE_LETTERS, type BotChoices } from "@/lib/bot-choices";
 import { findTeammate, handoffRun, replyRun } from "@/lib/bot-handoffs";
 import { mailRun, parseMailState } from "@/lib/bot-mail";
@@ -55,9 +65,11 @@ import { routineRun, splitReply } from "@/lib/bot-routines";
 // Mirrors agent-core's marker; that module is server-side.
 const NEEDS_INPUT_MARKER = "NEEDS_INPUT:";
 import { cn } from "@/lib/utils";
+import { openExternal } from "@/services/updates";
 import {
   cancelBotRun,
   sendBotPrompt,
+  uploadBotFile,
   type BotFeed,
   type BotListItem,
   type BotRun,
@@ -100,6 +112,10 @@ export function BotChat({
   const [prompt, setPrompt] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const files = usePendingFiles(bot.id);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const send = useMutation({
     mutationFn: (text: string) => sendBotPrompt(bot.id, text),
@@ -149,12 +165,47 @@ export function BotChat({
   }, [prompt]);
 
   const submit = () => {
-    const text = prompt.trim();
-    if (text && !send.isPending) send.mutate(text);
+    if (send.isPending || files.uploading) return;
+    const attached = files.ready.map(attachmentMarkdown).join("\n");
+    const text = [prompt.trim(), attached].filter(Boolean).join("\n\n");
+    // The attachments go with this message only (not with a picked option).
+    if (text) send.mutate(text, { onSuccess: files.clear });
+  };
+  const canSend = (prompt.trim().length > 0 || files.ready.length > 0) && !files.uploading;
+
+  const addFiles = (list: Iterable<File>) => {
+    const err = files.add(list);
+    if (err) toast({ title: err, variant: "destructive" });
   };
 
   return (
-    <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+    <section
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+      onDragEnter={(e) => {
+        if (e.dataTransfer.types.includes("Files")) setDragging(true);
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        setDragging(false);
+        addFiles(e.dataTransfer.files);
+        inputRef.current?.focus();
+      }}
+    >
+      {dragging && (
+        <div className="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-3xl border-2 border-dashed border-foreground/30 bg-background/80 text-[14px] font-medium backdrop-blur-sm">
+          <Paperclip className="mr-2 h-4 w-4" />
+          Drop to attach for {bot.name}
+        </div>
+      )}
       {/* Floating title */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-center bg-gradient-to-b from-background via-background/80 to-transparent px-4 pt-3 pb-6">
         {/* The top strip drags the window in the macOS app (overlay title bar). */}
@@ -260,12 +311,47 @@ export function BotChat({
       </div>
 
       <div className="shrink-0 px-6 pb-5">
-        <div className="mx-auto flex w-full max-w-[960px] items-end gap-2 rounded-[22px] border border-border bg-card/70 py-1.5 pr-1.5 pl-4 focus-within:border-foreground/25">
+        <div className="mx-auto w-full max-w-[960px] rounded-[22px] border border-border bg-card/70 py-1.5 pr-1.5 pl-1.5 focus-within:border-foreground/25">
+          {files.items.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-1.5 pt-1.5 pb-1">
+              {files.items.map((f) => (
+                <PendingFileChip key={f.key} file={f} onRemove={() => files.remove(f.key)} />
+              ))}
+            </div>
+          )}
+          <div className="flex items-end gap-1">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              if (e.target.files) addFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Attach files"
+            title="Attach files — or paste or drop them here"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <Paperclip className="h-4 w-4" />
+          </button>
           <textarea
             ref={inputRef}
             rows={1}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
+            onPaste={(e) => {
+              const pasted = filesFromClipboard(e.clipboardData);
+              if (pasted.length === 0) return;
+              // A copied screenshot has no text: keep it out of the box. A copied
+              // web page brings both — its text goes in as usual.
+              if (!e.clipboardData.getData("text/plain")) e.preventDefault();
+              addFiles(pasted);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -277,12 +363,12 @@ export function BotChat({
                 ? `${bot.name} is busy. This will run next…`
                 : `Message ${bot.name}`
             }
-            className="max-h-40 min-h-[30px] flex-1 resize-none bg-transparent py-1.5 text-[13.5px] leading-5 outline-none placeholder:text-muted-foreground"
+            className="max-h-40 min-h-[30px] flex-1 resize-none bg-transparent py-1.5 pl-1 text-[13.5px] leading-5 outline-none placeholder:text-muted-foreground"
           />
           <button
             type="button"
             onClick={submit}
-            disabled={!prompt.trim() || send.isPending}
+            disabled={!canSend || send.isPending}
             aria-label="Send"
             title="Send (Enter)"
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white transition-opacity disabled:opacity-40"
@@ -294,6 +380,7 @@ export function BotChat({
               <ArrowUp className="h-4 w-4" />
             )}
           </button>
+          </div>
         </div>
       </div>
     </section>
@@ -336,23 +423,48 @@ function Bubble({
   className,
   /** A typing indicator has nothing worth copying. */
   copyable = true,
+  /** What to copy when the bubble holds more than the reply (a button, say). */
+  copyText,
 }: {
   children: ReactNode;
   className?: string;
   copyable?: boolean;
+  copyText?: string | null;
 }) {
   // What the bubble reads as on screen, which is what "copy" should mean for
   // a reply rendered from Markdown.
   const body = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    copyToClipboard(copyText ?? body.current?.innerText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
   const bubble = (
     <div
       ref={body}
       className={cn(
         "w-fit max-w-[560px] rounded-2xl bg-card px-3.5 py-2.5 text-[13.5px] leading-relaxed",
+        copyable && "group/bubble relative",
         className,
       )}
     >
       {children}
+      {copyable && (
+        // On hover, top right — the same copy the right-click menu offers.
+        <button
+          type="button"
+          onClick={copy}
+          aria-label={copied ? "Copied" : "Copy text"}
+          title={copied ? "Copied" : "Copy"}
+          className={cn(
+            "absolute -top-2.5 -right-2.5 flex h-6 w-6 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-sm transition-opacity hover:text-foreground focus-visible:opacity-100",
+            copied ? "opacity-100" : "opacity-0 group-hover/bubble:opacity-100",
+          )}
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      )}
     </div>
   );
   if (!copyable) return bubble;
@@ -360,7 +472,7 @@ function Bubble({
     <ContextMenu>
       <ContextMenuTrigger render={bubble} />
       <ContextMenuContent>
-        <ContextMenuItem onClick={() => copyToClipboard(body.current?.innerText)}>
+        <ContextMenuItem onClick={copy}>
           <Copy />
           Copy text
         </ContextMenuItem>
@@ -690,6 +802,7 @@ const RunMessages = memo(function RunMessages({
   // The app sent it, not you (an intro, a routine, a teammate's answer coming
   // back, an email you approved on its card).
   const quiet = isIntro(run.prompt) || routine !== null || answerBack !== null || sending !== null;
+  const { text: ownText, attachments: attached } = splitAttachments(run.prompt);
   const mailState = parseMailState(run.mailState);
   const mails = reply?.mails.map((m, i) => (
     <MailCard
@@ -742,7 +855,9 @@ const RunMessages = memo(function RunMessages({
         </p>
       ) : hidden ? null : (
         <div className="flex flex-col items-end gap-1">
+          {attached.length > 0 && <SentAttachments files={attached} />}
           {/* Your messages wear the bot's color. */}
+          {ownText && (
           <ContextMenu>
             <ContextMenuTrigger
               render={
@@ -752,10 +867,10 @@ const RunMessages = memo(function RunMessages({
                 />
               }
             >
-              {run.prompt}
+              {ownText}
             </ContextMenuTrigger>
             <ContextMenuContent>
-              <ContextMenuItem onClick={() => copyToClipboard(run.prompt)}>
+              <ContextMenuItem onClick={() => copyToClipboard(ownText)}>
                 <Copy />
                 Copy text
               </ContextMenuItem>
@@ -774,6 +889,7 @@ const RunMessages = memo(function RunMessages({
               )}
             </ContextMenuContent>
           </ContextMenu>
+          )}
           {run.status === "queued" && (
             <span className="text-[11px] text-muted-foreground">
               Queued ·{" "}
@@ -862,7 +978,7 @@ const RunMessages = memo(function RunMessages({
           </>
         ) : run.needsInput && run.result?.includes(NEEDS_INPUT_MARKER) ? (
           <>
-            <Bubble className="space-y-2.5">
+            <Bubble className="space-y-2.5" copyText={reply?.body}>
               <div className="font-medium text-foreground/85 [&_p]:text-foreground/85">
                 {reply?.body ? (
                   <MarkdownReport>{reply.body}</MarkdownReport>
@@ -919,3 +1035,171 @@ const RunMessages = memo(function RunMessages({
     </>
   );
 });
+
+// ---- Attachments ------------------------------------------------------------
+
+type PendingFile = {
+  key: string;
+  botId: string;
+  name: string;
+  size: number;
+  /** A local preview while it uploads (images only). */
+  preview: string | null;
+  status: "uploading" | "ready" | "error";
+  url?: string;
+  error?: string;
+};
+
+/** Files picked, pasted or dropped for the next message, uploading as they come. */
+function usePendingFiles(botId: string) {
+  const [all, setAll] = useState<PendingFile[]>([]);
+  const items = all.filter((f) => f.botId === botId);
+  const patch = (key: string, p: Partial<PendingFile>) =>
+    setAll((xs) => xs.map((x) => (x.key === key ? { ...x, ...p } : x)));
+  const drop = (keep: (f: PendingFile) => boolean) =>
+    setAll((xs) => {
+      for (const x of xs) if (!keep(x) && x.preview) URL.revokeObjectURL(x.preview);
+      return xs.filter(keep);
+    });
+
+  return {
+    items,
+    ready: items.flatMap((f) => (f.status === "ready" && f.url ? [{ name: f.name, url: f.url }] : [])),
+    uploading: items.some((f) => f.status === "uploading"),
+    /** Returns why some files were not added, or null. */
+    add(list: Iterable<File>): string | null {
+      const files = [...list];
+      const room = MAX_ATTACHMENTS - items.length;
+      const tooBig = files.filter((f) => f.size > MAX_ATTACHMENT_BYTES);
+      const ok = files.filter((f) => f.size <= MAX_ATTACHMENT_BYTES && f.size > 0).slice(0, Math.max(room, 0));
+      for (const file of ok) {
+        const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const preview = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
+        setAll((xs) => [...xs, { key, botId, name: file.name, size: file.size, preview, status: "uploading" }]);
+        uploadBotFile(botId, file).then(
+          (r) => patch(key, { status: "ready", url: r.url, name: r.name }),
+          (err) => patch(key, { status: "error", error: err instanceof Error ? err.message : "Upload failed" }),
+        );
+      }
+      if (tooBig.length) return `${tooBig.map((f) => f.name).join(", ")}: files can be up to 25 MB`;
+      if (files.length > ok.length) return `Up to ${MAX_ATTACHMENTS} files per message`;
+      return null;
+    },
+    remove: (key: string) => drop((x) => x.key !== key),
+    clear: () => drop((x) => x.botId !== botId),
+  };
+}
+
+/** Files in a paste: a screenshot, an image copied from a page, files copied in Finder. */
+function filesFromClipboard(data: DataTransfer): File[] {
+  const files = data.files.length
+    ? [...data.files]
+    : [...data.items].flatMap((it) => (it.kind === "file" ? [it.getAsFile()].filter((f): f is File => f !== null) : []));
+  return files.map((f) => {
+    // Screenshots arrive as "image.png": give them a name that tells them apart.
+    if (!/^image\.\w+$/i.test(f.name) && f.name) return f;
+    const ext = (f.type.split("/")[1] ?? "png").replace("jpeg", "jpg").replace(/[^a-z0-9]/g, "");
+    return new File([f], `pasted-${format(new Date(), "HHmmss")}.${ext}`, { type: f.type });
+  });
+}
+
+function fileSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function PendingFileChip({ file, onRemove }: { file: PendingFile; onRemove: () => void }) {
+  const failed = file.status === "error";
+  return (
+    <div
+      className={cn(
+        "group/file relative flex items-center gap-2 rounded-xl border bg-background/60",
+        file.preview ? "p-0" : "py-1.5 pr-7 pl-2",
+        failed ? "border-destructive/60" : "border-border",
+      )}
+      title={failed ? file.error : file.name}
+    >
+      {file.preview ? (
+        // eslint-disable-next-line @next/next/no-img-element -- a local blob preview
+        <img src={file.preview} alt={file.name} className="h-16 w-16 rounded-xl object-cover" />
+      ) : (
+        <>
+          <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0">
+            <span className="block max-w-[180px] truncate text-[12.5px]">{file.name}</span>
+            <span className={cn("block text-[11px]", failed ? "text-destructive" : "text-muted-foreground")}>
+              {failed ? "Not uploaded" : fileSize(file.size)}
+            </span>
+          </span>
+        </>
+      )}
+      {file.status === "uploading" && (
+        <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-background/50">
+          <Loader2 className="h-4 w-4 animate-spin" />
+        </span>
+      )}
+      {failed && file.preview && (
+        <span className="absolute inset-x-0 bottom-0 rounded-b-xl bg-destructive/90 text-center text-[10px] text-white">
+          Failed
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${file.name}`}
+        className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-sm hover:text-foreground"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
+/** What you attached to a message, above its bubble: images to open, files to download. */
+function SentAttachments({ files }: { files: Attachment[] }) {
+  const [open, setOpen] = useState<number | null>(null);
+  const images = files.filter((f) => f.image).map((f) => ({ src: f.url, alt: f.name }));
+  const others = files.filter((f) => !f.image);
+  return (
+    <>
+      {images.length > 0 && (
+        <div className="flex max-w-[560px] flex-wrap justify-end gap-1.5">
+          {images.map((im, i) => (
+            <button
+              key={im.src}
+              type="button"
+              onClick={() => setOpen(i)}
+              className="cursor-zoom-in"
+              title={im.alt}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element -- served by Nexus, arbitrary size */}
+              <img
+                src={im.src}
+                alt={im.alt}
+                loading="lazy"
+                className={cn(
+                  "rounded-2xl border border-border/50 object-cover",
+                  images.length === 1 ? "max-h-64 max-w-[320px]" : "h-28 w-28",
+                )}
+              />
+            </button>
+          ))}
+        </div>
+      )}
+      {others.map((f) => (
+        <button
+          key={f.url}
+          type="button"
+          onClick={() => void openExternal(new URL(f.url, window.location.origin).toString())}
+          className="flex max-w-[320px] items-center gap-2 rounded-2xl border border-border bg-card/70 px-3 py-2 text-left hover:bg-card"
+          title="Open"
+        >
+          <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="truncate text-[12.5px]">{f.name}</span>
+        </button>
+      ))}
+      <ImageLightbox images={images} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />
+    </>
+  );
+}

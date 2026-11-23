@@ -19,6 +19,7 @@ export const SEALED_FIELDS: Record<string, Record<string, Kind>> = {
   sandboxConfig: { mcpServers: "json" },
   bot: { mcpServers: "json" },
   vaultItem: { secret: "json" },
+  connector: { config: "json" },
 };
 
 /** Settings rows the vault itself needs in the clear. */

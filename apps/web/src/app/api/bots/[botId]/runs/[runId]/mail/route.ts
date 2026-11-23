@@ -4,6 +4,8 @@ import { z } from "zod";
 import { cancelBotRun, enqueueBotPrompt } from "@/lib/bot-manager";
 import { parseMailState, renderMailPrompt, toMailDraft, validAddresses, type MailState } from "@/lib/bot-mail";
 import { splitReply } from "@/lib/bot-routines";
+import { addressOf } from "@/lib/gmail";
+import { createDraft, GmailError, googleAccountsFor, sendMail } from "@/services/google";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +19,11 @@ const schema = z.object({
 });
 
 /**
- * Act on an email card in a bot's reply. Send / draft queue a run on the same
- * bot carrying the final text — the bot does it from Gmail in its browser.
- * Each card is acted on once; a send that failed or was stopped can be retried.
+ * Act on an email card in a bot's reply. When the From address is a Gmail
+ * account connected for this bot (spec 34), Nexus sends or saves it itself,
+ * now. Otherwise send / draft queue a run on the same bot carrying the final
+ * text — the bot does it from Gmail in its browser. Each card is acted on
+ * once; a send that failed or was stopped can be retried.
  */
 export async function POST(req: NextRequest, { params }: Params) {
   const { botId, runId } = await params;
@@ -53,6 +57,33 @@ export async function POST(req: NextRequest, { params }: Params) {
     const mail = toMailDraft(parsed.data.mail);
     if (!mail || !validAddresses(mail.to, { required: true }) || !validAddresses(mail.cc) || !validAddresses(mail.bcc)) {
       return NextResponse.json({ error: "The email needs a valid To address and a subject or body" }, { status: 400 });
+    }
+    const accounts = await googleAccountsFor(botId);
+    const from = mail.from ? addressOf(mail.from) : accounts.length === 1 ? accounts[0]!.email : "";
+    const account = accounts.find((a) => a.email === from);
+    if (account) {
+      // Claim the card first, so a double click cannot send it twice.
+      const sent = { ...mail, from: account.email };
+      next = { ...state, [index]: { status: "delivered", mode: action, mail: sent, at: new Date().toISOString() } };
+      const claimed = await prisma.botRun.updateMany({
+        where: { id: run.id, mailState: run.mailState },
+        data: { mailState: JSON.stringify(next) },
+      });
+      if (claimed.count === 0) return NextResponse.json({ error: "This email was already handled" }, { status: 409 });
+      try {
+        const out = { ...sent, from: account.email };
+        if (action === "send") await sendMail(account.id, out);
+        else await createDraft(account.id, out);
+      } catch (err) {
+        // Give the card back so it can be retried.
+        await prisma.botRun.updateMany({
+          where: { id: run.id, mailState: JSON.stringify(next) },
+          data: { mailState: run.mailState },
+        });
+        const status = err instanceof GmailError ? err.status : 502;
+        return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: status >= 500 ? 502 : status });
+      }
+      return NextResponse.json({ ok: true, delivered: true });
     }
     try {
       const queued = await enqueueBotPrompt(botId, renderMailPrompt({ sourceRunId: run.id, index, mode: action, mail }));

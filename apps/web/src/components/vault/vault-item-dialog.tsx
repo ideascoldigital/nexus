@@ -318,7 +318,7 @@ function RefHint({ name }: { name: string }) {
 }
 
 /** Which bots may use the entry: every bot, or the ones picked. */
-function BotAccess({ value, onChange }: { value: string[] | null; onChange: (v: string[] | null) => void }) {
+export function BotAccess({ value, onChange }: { value: string[] | null; onChange: (v: string[] | null) => void }) {
   const { data: bots } = useQuery({ queryKey: ["bots"], queryFn: getBots });
   if (!bots?.length) return null;
   const all = value === null;

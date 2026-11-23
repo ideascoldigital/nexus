@@ -19,7 +19,9 @@ import {
   renderBotSystemPrompt,
   runBotPrompt,
   botScreenPort,
+  botGmailMcpServer,
   botVaultMcpServer,
+  writeBotGmailScript,
   writeBotVaultScripts,
   writeBotMcpConfig,
   stopBotClaudeRuns,
@@ -28,6 +30,8 @@ import {
 import { detectNeedsInput, NEEDS_INPUT_MARKER } from "@/lib/agent-core";
 import { parseChoices } from "@/lib/bot-choices";
 import { collectBotFiles } from "@/lib/bot-files";
+import { deliverAttachments } from "@/lib/bot-uploads";
+import { connectorServersFor } from "@/services/connector-store";
 import { probeColumns } from "@/lib/docker-endpoints";
 import { botNexusUrl, closeNexusReach } from "@/lib/bot-nexus-reach";
 import { botScreenLocalPort, closeBotScreenForward } from "@/lib/bot-screen";
@@ -47,6 +51,7 @@ import {
 import { mailForClaude, mailRun } from "@/lib/bot-mail";
 import { validateBotMcpServers } from "@/lib/bot-mcp";
 import { grantVault, revokeVault } from "@/lib/bot-vault-access";
+import { googleAccountsFor } from "@/services/google";
 import { botMayUse, FILLABLE, resolveSecretRefs, type VaultType } from "@/lib/vault-items";
 import { applyRoutineSpecs, hostTimezone, nextRoutineRun } from "@/lib/bot-routine-store";
 import { describeCron, parseRoutineBlocks, renderRoutinePrompt, splitReply } from "@/lib/bot-routines";
@@ -441,7 +446,13 @@ async function drain(sessionId: string): Promise<void> {
       return typeof value === "string" ? value : null;
     };
     const resolved = own.ok && own.servers ? resolveSecretRefs(own.servers, secretOf) : null;
-    const mcpServers = resolved && Object.keys(resolved.servers).length ? resolved.servers : null;
+    // Connected apps (spec 35) it may use; its own server of the same name wins.
+    const connected = await connectorServersFor(session.botId).catch((err) => {
+      console.warn(`[bots] ${session.bot.name}: connectors not loaded:`, err instanceof Error ? err.message : err);
+      return {};
+    });
+    const merged = { ...connected, ...(resolved?.servers ?? {}) };
+    const mcpServers = Object.keys(merged).length ? merged : null;
     for (const m of resolved?.missing ?? []) {
       console.warn(`[bots] ${session.bot.name}: MCP server "${m.server}" skipped — no vault secret "${m.secret}" it may use`);
     }
@@ -459,6 +470,14 @@ async function drain(sessionId: string): Promise<void> {
       nexusReachable = false;
       console.warn(`[bots] ${session.bot.name}: ${err instanceof Error ? err.message : err}`);
     }
+    // Gmail through the connector (spec 34): only when this computer can reach
+    // Nexus, since every call goes through it.
+    const gmail = nexusReachable
+      ? await googleAccountsFor(session.botId).catch((err) => {
+          console.warn(`[bots] ${session.bot.name}: Gmail accounts not loaded:`, err instanceof Error ? err.message : err);
+          return [];
+        })
+      : [];
     const systemPrompt = renderBotSystemPrompt({
       name: session.bot.name,
       role: session.bot.role,
@@ -477,6 +496,7 @@ async function drain(sessionId: string): Promise<void> {
         username: v.username,
         hint: v.hint,
       })),
+      gmail: gmail.map((a) => a.email),
     });
     const sysHash = promptHash(systemPrompt);
     const resume =
@@ -517,6 +537,20 @@ async function drain(sessionId: string): Promise<void> {
     // The user approved an email on its card: send (or save) it as written.
     const mail = mailRun(run.prompt);
     if (mail) prompt = prompt.replace(run.prompt, mailForClaude(mail));
+    // Files the user attached: copied into the computer, read by path.
+    if (prompt.includes(run.prompt)) {
+      const own = await deliverAttachments({
+        botId: session.botId,
+        prompt: run.prompt,
+        container: session.containerName,
+        dockerHost: session.dockerHost,
+        workdir: botWorkdir(session.bot.name),
+      }).catch((err) => {
+        console.warn("[bots] could not deliver attachments:", err instanceof Error ? err.message : err);
+        return run.prompt;
+      });
+      if (own !== run.prompt) prompt = prompt.replace(run.prompt, () => own);
+    }
     // Links to the user's machine, reachable from the container.
     prompt = absolutizeNexusLinks(toContainerUrls(prompt, nexusUrl), nexusUrl);
 
@@ -524,7 +558,7 @@ async function drain(sessionId: string): Promise<void> {
     aborts.set(run.id, abort);
     const log = createRunLog(run.id);
     // Valid only while this prompt runs.
-    const vaultToken = fillable.length ? grantVault({
+    const vaultToken = fillable.length || gmail.length ? grantVault({
           botId: session.botId,
           runId: run.id,
           container: session.containerName,
@@ -535,9 +569,13 @@ async function drain(sessionId: string): Promise<void> {
       let userMcp = false;
       try {
         const servers: Record<string, unknown> = { ...(mcpServers ?? {}) };
-        if (vaultToken && nexusReachable) {
+        if (vaultToken && nexusReachable && fillable.length) {
           await writeBotVaultScripts(session.containerName, { host: session.dockerHost });
           servers.vault = botVaultMcpServer({ nexusUrl, botId: session.botId, token: vaultToken });
+        }
+        if (vaultToken && gmail.length) {
+          await writeBotGmailScript(session.containerName, { host: session.dockerHost });
+          servers.gmail = botGmailMcpServer({ nexusUrl, botId: session.botId, token: vaultToken });
         }
         const any = Object.keys(servers).length > 0;
         await writeBotMcpConfig(session.containerName, any ? servers : null, {
