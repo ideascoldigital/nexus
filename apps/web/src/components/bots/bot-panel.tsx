@@ -5,7 +5,7 @@
 
 import { useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Clock, Loader2, Trash2, X } from "lucide-react";
+import { ChevronRight, Clock, Loader2, MonitorPlay, Trash2, X } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
 import { ComputerCard, computerState } from "@/components/bots/bot-computer";
@@ -45,6 +45,7 @@ export function BotPanel({
   width,
   onWidth,
   screenAnchored,
+  onShowScreen,
   onClose,
   onOpenComputer,
   onDeleted,
@@ -56,6 +57,11 @@ export function BotPanel({
   onWidth: (px: number) => void;
   /** The screen is kept here, under the details. */
   screenAnchored: boolean;
+  /**
+   * Set when the screen is anchored to the right: this panel is the other face
+   * of that column, so it can hand it back instead of only closing.
+   */
+  onShowScreen?: () => void;
   onClose: () => void;
   /** Show the big screen; with `true`, take control of it at the same time. */
   onOpenComputer: (takeControl?: boolean) => void;
@@ -78,16 +84,30 @@ export function BotPanel({
         onReset={() => onWidth(PANEL_DEFAULT_WIDTH)}
       />
       <div data-tauri-drag-region className="titlebar-only absolute inset-x-0 top-0 h-10" />
-      <Button
-        size="icon-sm"
-        variant="ghost"
-        className="absolute top-3 right-3 rounded-full"
-        onClick={onClose}
-        aria-label="Close panel"
-        title="Close panel"
-      >
-        <X className="h-4 w-4" />
-      </Button>
+      <div className="absolute top-3 right-3 flex items-center gap-1">
+        {onShowScreen && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="rounded-full px-2.5 text-[12px]"
+            onClick={onShowScreen}
+            title="Back to the anchored screen"
+          >
+            <MonitorPlay className="h-3.5 w-3.5" />
+            Screen
+          </Button>
+        )}
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="rounded-full"
+          onClick={onClose}
+          aria-label="Close panel"
+          title="Close panel"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
 
       <div className="flex flex-col items-center gap-3 px-6 pt-10 pb-4 text-center">
         <BotAvatar shape={bot.shape} color={bot.color} size={76} sleeping={asleep} />

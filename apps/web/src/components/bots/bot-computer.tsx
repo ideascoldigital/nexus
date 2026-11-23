@@ -11,6 +11,7 @@ import {
   ClipboardPaste,
   ExternalLink,
   Hand,
+  Info,
   Loader2,
   Maximize2,
   MousePointerClick,
@@ -274,6 +275,8 @@ type SurfaceProps = {
   onAnchor?: (mode: Exclude<DockMode, "off">) => void;
   /** Back to the dialog (from the anchored screen). */
   onExpand?: () => void;
+  /** Show the bot's details in this column instead, keeping the screen anchored. */
+  onShowDetails?: () => void;
   onClose: () => void;
 };
 
@@ -293,6 +296,7 @@ function ComputerSurface({
   busy,
   onAnchor,
   onExpand,
+  onShowDetails,
   onClose,
 }: SurfaceProps) {
   const state = computerState(feed);
@@ -417,6 +421,17 @@ function ComputerSurface({
             >
               <ExternalLink className="h-3.5 w-3.5" />
               Open in browser
+            </Button>
+          )}
+          {onShowDetails && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              title="Show the bot's details here (the screen stays anchored)"
+              aria-label="Show the bot's details"
+              onClick={onShowDetails}
+            >
+              <Info className="h-3.5 w-3.5" />
             </Button>
           )}
           {onExpand && (
@@ -655,7 +670,7 @@ function ComputerSurface({
   );
 }
 
-type ScreenProps = Omit<SurfaceProps, "docked" | "onAnchor" | "onExpand" | "onClose">;
+type ScreenProps = Omit<SurfaceProps, "docked" | "onAnchor" | "onExpand" | "onShowDetails" | "onClose">;
 
 /** The big screen, over the chat. */
 export function ComputerDialog({
@@ -701,6 +716,7 @@ export function ComputerDock({
   width,
   onWidth,
   onExpand,
+  onShowDetails,
   onClose,
   ...surface
 }: ScreenProps & {
@@ -708,6 +724,8 @@ export function ComputerDock({
   onWidth: (px: number) => void;
   /** Back to the big dialog. */
   onExpand: () => void;
+  /** Swap this column for the bot's details, keeping the screen anchored. */
+  onShowDetails: () => void;
   onClose: () => void;
 }) {
   // Keeps a remembered width honest after the window is resized smaller.
@@ -731,7 +749,13 @@ export function ComputerDock({
         onReset={() => onWidth(clampDockWidth(DOCK_DEFAULT_WIDTH, window.innerWidth))}
       />
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <ComputerSurface {...surface} docked onExpand={onExpand} onClose={onClose} />
+        <ComputerSurface
+          {...surface}
+          docked
+          onExpand={onExpand}
+          onShowDetails={onShowDetails}
+          onClose={onClose}
+        />
       </div>
     </aside>
   );

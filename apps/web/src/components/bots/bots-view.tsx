@@ -677,7 +677,10 @@ function BotWorkspace({
         team={team}
         onOpenBot={onOpenBot}
       />
-      {dockMode === "right" && (
+      {/* The right column has two faces when the screen is anchored there: the
+          screen, and the bot's details. Details does not unanchor the screen —
+          it swaps what the column shows, and either side hands it back. */}
+      {dockMode === "right" && !panelOpen && (
         <ComputerDock
           bot={bot}
           feed={feed}
@@ -690,6 +693,7 @@ function BotWorkspace({
             writeJson(BOTS_KEYS.dock, rememberDockMode(readJson(BOTS_KEYS.dock, {}), bot.id, "off"));
             setComputerOpen(true);
           }}
+          onShowDetails={() => showPanel(true)}
           onClose={() => anchorScreen("off")}
           onHandBack={onHandBack}
           onStart={() => start.mutate()}
@@ -697,7 +701,7 @@ function BotWorkspace({
           busy={start.isPending || stop.isPending}
         />
       )}
-      {panelOpen && dockMode !== "right" && (
+      {panelOpen && (
         <div className="absolute inset-y-0 right-0 z-20 flex shadow-2xl xl:static xl:shadow-none">
           <BotPanel
             bot={bot}
@@ -705,6 +709,7 @@ function BotWorkspace({
             width={panelWidth}
             onWidth={setPanelWidth}
             screenAnchored={dockMode === "panel"}
+            onShowScreen={dockMode === "right" ? () => showPanel(false) : undefined}
             onClose={togglePanel}
             onOpenComputer={(takeControl) => {
               if (takeControl) control.take();
