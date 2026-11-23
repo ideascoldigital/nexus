@@ -75,6 +75,15 @@ export async function registerNode() {
     console.error("[instrumentation] default workspace check failed:", err);
   }
 
+  // Native app: download and install newer releases in the background; the
+  // user restarts when it suits them. A no-op off native and on local builds.
+  try {
+    const { startAutoUpdater } = await import("@/lib/auto-update");
+    startAutoUpdater();
+  } catch (err) {
+    console.error("[instrumentation] auto-updater failed to start:", err);
+  }
+
   // Telegram notifications + remote control. Idles cheaply (30s polls of the
   // Settings table) until a bot token is configured.
   if (process.env.NEXUX_DISABLE_TELEGRAM !== "1") {

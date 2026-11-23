@@ -4,8 +4,9 @@
 
 import type { InstallResult } from "@/app/api/updates/install/route";
 import type { UpdateStatus } from "@/app/api/updates/route";
+import type { AutoUpdateState } from "@/lib/auto-update";
 
-export type { InstallResult, UpdateStatus };
+export type { AutoUpdateState, InstallResult, UpdateStatus };
 
 /**
  * Newest published release vs. this build. Null when the check cannot be
@@ -28,12 +29,45 @@ export async function checkUpdates(
 
 /** Download and install the newest release — native app only. Throws to the badge. */
 export async function installUpdate(): Promise<InstallResult> {
-  const res = await fetch("/api/updates/install", { method: "POST" });
+  // JSON content type: the route's cross-site guard (lib/local-request.ts).
+  const res = await fetch("/api/updates/install", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
   const body = (await res.json().catch(() => ({}))) as {
     error?: string;
   } & Partial<InstallResult>;
   if (!res.ok) throw new Error(body.error || `install failed (${res.status})`);
   return body as InstallResult;
+}
+
+/**
+ * What the native background auto-updater has done. Null off native (404) or
+ * when the sidecar cannot be reached — the notice just stays hidden.
+ */
+export async function getAutoUpdateState(): Promise<AutoUpdateState | null> {
+  try {
+    const res = await fetch("/api/updates/auto");
+    if (!res.ok) return null;
+    return (await res.json()) as AutoUpdateState;
+  } catch {
+    return null;
+  }
+}
+
+/** Quit and reopen the native app so an installed update takes effect. */
+export async function restartApp(): Promise<void> {
+  const res = await fetch("/api/updates/restart", {
+    method: "POST",
+    // The JSON content type is the route's cross-site guard — keep it.
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error || `restart failed (${res.status})`);
+  }
 }
 
 /**

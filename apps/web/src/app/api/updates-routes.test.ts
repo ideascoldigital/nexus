@@ -160,8 +160,36 @@ test("?fresh=1 goes back to GitHub instead of serving the cache", async () => {
 
 test("POST /install answers 404 outside the native app", async () => {
   assert.notEqual(process.env.NEXUX_NATIVE, "1");
-  const res = await installUpdate();
+  const res = await installUpdate(jsonPost("http://127.0.0.1/api/updates/install"));
   assert.equal(res.status, 404, "self-install must never run on a host/dev install");
+});
+
+function jsonPost(url: string, headers: Record<string, string> = {}): Request {
+  return new Request(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: "{}",
+  });
+}
+
+test("POST /install refuses a request another website could send", async () => {
+  // No auth on the sidecar (D-34): this is the only thing between any page in
+  // the user's browser and "download and replace the app".
+  process.env.NEXUX_NATIVE = "1";
+  try {
+    const simple = new Request("http://127.0.0.1/api/updates/install", {
+      method: "POST",
+      headers: { "content-type": "text/plain; x=application/json" },
+      body: "{}",
+    });
+    assert.equal((await installUpdate(simple)).status, 403, "a no-preflight POST");
+    const crossSite = jsonPost("http://127.0.0.1/api/updates/install", { "sec-fetch-site": "cross-site" });
+    assert.equal((await installUpdate(crossSite)).status, 403);
+    const rebound = jsonPost("http://evil.example/api/updates/install", { host: "evil.example:3030" });
+    assert.equal((await installUpdate(rebound)).status, 403, "DNS rebinding");
+  } finally {
+    delete process.env.NEXUX_NATIVE;
+  }
 });
 
 test("GET serves stale cache when GitHub goes down later", async () => {

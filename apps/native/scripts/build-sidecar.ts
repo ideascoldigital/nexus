@@ -279,6 +279,8 @@ try {
   if (info.version) process.env.NEXUX_VERSION ||= info.version;
   if (info.gitSha) process.env.NEXUX_GIT_SHA ||= info.gitSha;
   if (info.builtAt) process.env.NEXUX_BUILT_AT ||= info.builtAt;
+  // Only CI's tag builds update themselves — see lib/auto-update.ts.
+  if (info.release) process.env.NEXUX_RELEASE_BUILD ||= "1";
 } catch {}
 
 // Both set before requiring next: NODE_ENV picks the production app-page
@@ -361,6 +363,10 @@ function writeBuildInfo() {
     version,
     gitSha,
     builtAt: new Date().toISOString(),
+    // A tag build (CI sets NEXUX_VERSION from the tag) — the auto-updater's
+    // gate. A checkout build's version is package.json's, which lags the
+    // tags, so it would "update" to an older published release.
+    release: Boolean(process.env.NEXUX_VERSION),
   };
   writeFileSync(
     join(SIDECAR_OUT, "build-info.json"),
@@ -484,6 +490,9 @@ function copyNodeBinary() {
   const suffix = isWin ? ".exe" : "";
   const dest = join(BIN_OUT, `node-${triple}${suffix}`);
   log(`Copying ${nodePath} → ${dest}`);
+  // copyFileSync carries the source's mode over, and some installs ship node
+  // as r-x — so the copy from a previous build can't be overwritten (EACCES).
+  rmSync(dest, { force: true });
   copyFileSync(nodePath, dest);
   const mode = statSync(dest).mode;
   chmodSync(dest, mode | 0o111);

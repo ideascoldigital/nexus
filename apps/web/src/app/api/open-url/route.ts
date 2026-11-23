@@ -18,6 +18,8 @@ import { spawn } from "child_process";
 
 import { NextResponse } from "next/server";
 
+import { localRequestRejection } from "@/lib/local-request";
+
 export const dynamic = "force-dynamic";
 
 /** Opener argv per platform. Pure and exported for tests. */
@@ -48,6 +50,10 @@ export async function POST(req: Request) {
       { status: 404 },
     );
   }
+  // req.json() parses any body, so without this a text/plain POST from any
+  // website (no preflight) made the OS open the URL of its choosing.
+  const refused = localRequestRejection(req);
+  if (refused) return NextResponse.json({ error: refused }, { status: 403 });
   const body = (await req.json().catch(() => ({}))) as { url?: unknown };
   const url = validateUrl(body.url);
   if (!url) {

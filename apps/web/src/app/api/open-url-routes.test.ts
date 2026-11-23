@@ -55,6 +55,20 @@ test("POST rejects a non-http url even when native", async () => {
   assert.equal(res.status, 400);
 });
 
+test("POST refuses a no-preflight request from another website", async () => {
+  // req.json() parses any body, so a text/plain POST — which a page on any
+  // site can send without a preflight — used to open its URL.
+  process.env.NEXUX_NATIVE = "1";
+  const res = await openUrl(
+    new Request("http://127.0.0.1/api/open-url", {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: JSON.stringify({ url: "https://evil.example" }),
+    }),
+  );
+  assert.equal(res.status, 403);
+});
+
 test("POST rejects a body with no url", async () => {
   process.env.NEXUX_NATIVE = "1";
   const res = await openUrl(jsonReq({}));

@@ -111,7 +111,8 @@ export async function downloadAsset(asset: ReleaseAsset): Promise<string> {
     throw new Error(`asset download answered ${res.status}`);
   }
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nexux-update-"));
-  const dest = path.join(dir, asset.name);
+  // basename: the name comes from the release, and must not choose a path.
+  const dest = path.join(dir, path.basename(asset.name));
   await pipeline(
     Readable.fromWeb(res.body as import("stream/web").ReadableStream),
     createWriteStream(dest),
