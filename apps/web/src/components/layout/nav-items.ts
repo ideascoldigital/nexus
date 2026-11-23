@@ -1,5 +1,6 @@
 import {
   Bot,
+  BotMessageSquare,
   FolderKanban,
   Hash,
   LayoutDashboard,
@@ -19,6 +20,7 @@ export const NAV_ITEMS = [
   { icon: LayoutDashboard, label: "Dashboard", href: "/" },
   { icon: FolderKanban, label: "Projects", href: "/projects" },
   { icon: Bot, label: "Agents", href: "/agents" },
+  { icon: BotMessageSquare, label: "Bots", href: "/bots" },
   { icon: Hash, label: "Skills", href: "/skills" },
   { icon: Settings, label: "Settings", href: "/settings" },
 ] as const;

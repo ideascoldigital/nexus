@@ -72,10 +72,11 @@ export function DockerEndpointsSection() {
           Docker endpoints
         </CardTitle>
         <CardDescription>
-          Other machines on your network whose Docker can run local sandboxes —
-          their CPU and memory, this dashboard. Reached over SSH with this
-          machine&apos;s key; the SSH user must be in the <code>docker</code>{" "}
-          group there, which is root on that machine.
+          Docker daemons other than the one your <code>docker</code> context
+          points at, for sandboxes and for bots&apos; computers to run on. Another
+          machine over SSH — its CPU and memory, this dashboard, and the SSH user
+          must be in the <code>docker</code> group there, which is root on that
+          machine — or a daemon on this one behind its own socket.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -126,11 +127,11 @@ export function DockerEndpointsSection() {
             />
             <Input
               {...NO_AUTOFILL}
-              placeholder={isHost ? "ssh://user@192.168.1.35" : "ssh://user@host"}
+              placeholder={isHost ? "ssh://user@192.168.1.35" : "ssh://user@host or unix:///path/to.sock"}
               value={host}
               onChange={(e) => setHost(e.target.value)}
               className="font-mono text-xs"
-              aria-label="SSH host"
+              aria-label="Docker host"
             />
             <Button type="submit" disabled={add.isPending || !name.trim() || !host.trim()}>
               {add.isPending ? (
@@ -156,11 +157,23 @@ export function DockerEndpointsSection() {
               connection.
             </p>
           ) : (
-            <p className="text-[11px] text-muted-foreground">
-              Only <code>ssh://</code> — the browser session is forwarded through
-              the same connection. Key auth only; accept the host key once from a
-              terminal first.
-            </p>
+            <div className="space-y-1 text-[11px] text-muted-foreground">
+              <p>
+                <code>ssh://</code> for another machine — key auth only, and
+                accept its host key once from a terminal first. The browser
+                session is forwarded through the same connection.
+              </p>
+              <p>
+                <code>unix:///path/to.sock</code> for a daemon on this machine
+                that your docker context does not point at — an orchestrator&apos;s
+                dev cluster, say. Its socket only exists while the cluster runs.
+                Whether a mount from here reaches it is checked, not assumed.
+              </p>
+              <p>
+                No <code>tcp://</code>: it hands root on that machine to anyone
+                who reaches the port.
+              </p>
+            </div>
           )}
         </form>
       </CardContent>
@@ -202,6 +215,19 @@ function EndpointRow({
         />
         <span className="text-sm font-medium">{ep.name}</span>
         <code className="text-[11px] text-muted-foreground">{ep.host}</code>
+        {ep.kind && (
+          <Badge
+            variant={ep.kind === "remote" ? "secondary" : "outline"}
+            className="text-[10px]"
+            title={
+              ep.kind === "remote"
+                ? "Another machine: its paths and its ports are its own, so a sandbox there clones instead of mounting and its browser session is forwarded over SSH."
+                : "A daemon on this machine, behind its own socket."
+            }
+          >
+            {ep.kind === "remote" ? "remote" : "local"}
+          </Badge>
+        )}
         {ep.serverVersion && (
           <Badge variant="secondary" className="text-[10px]">
             Docker {ep.serverVersion}
@@ -225,6 +251,11 @@ function EndpointRow({
         {ep.hostCount > 0 && (
           <Badge variant="outline" className="text-[10px]">
             {ep.hostCount} Nexus host{ep.hostCount === 1 ? "" : "s"}
+          </Badge>
+        )}
+        {ep.botCount > 0 && (
+          <Badge variant="outline" className="text-[10px]">
+            {ep.botCount} bot computer{ep.botCount === 1 ? "" : "s"}
           </Badge>
         )}
         <div className="ml-auto flex items-center gap-1">
@@ -267,12 +298,12 @@ function EndpointRow({
             size="icon-sm"
             variant="ghost"
             title={
-              ep.sandboxCount + ep.hostCount > 0
+              ep.sandboxCount + ep.hostCount + ep.botCount > 0
                 ? "Destroy what runs on it first"
                 : "Remove endpoint"
             }
             onClick={onRemove}
-            disabled={removing || ep.sandboxCount + ep.hostCount > 0}
+            disabled={removing || ep.sandboxCount + ep.hostCount + ep.botCount > 0}
           >
             <Trash2 className="h-3.5 w-3.5 text-destructive" />
           </Button>

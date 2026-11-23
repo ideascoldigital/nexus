@@ -27,6 +27,7 @@ import {
   Plus,
   Save,
   ShieldCheck,
+  Blocks,
   Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -46,6 +47,8 @@ import { DockerEndpointsSection } from "@/components/settings/docker-endpoints";
 import { NexusHostsSection } from "@/components/settings/nexus-hosts";
 import { SandboxNamingSection } from "@/components/settings/sandbox-naming";
 import { TerminalShellSection } from "@/components/settings/terminal-shell";
+import { ConnectApps } from "@/components/connectors/connect-apps";
+import { VaultSection } from "@/components/vault/vault-section";
 import {
   ClaudeCredentialsSection,
   CloudCredentialsSection,
@@ -216,6 +219,8 @@ const SETTINGS_TABS = [
   "appearance",
   "desktop",
   "backup",
+  "vault",
+  "connectors",
 ] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 const TAB_STORAGE_KEY = "nexux:settings:tab";
@@ -302,6 +307,20 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
         icon: AppWindow,
         description:
           "Which database and data folder the desktop app opens — point it at your dev database to test the packaged app on real data.",
+      },
+      {
+        id: "vault",
+        label: "Vault",
+        icon: ShieldCheck,
+        description:
+          "Logins, API keys, cards and contact details bots use without seeing them. Encrypted on this machine; the key lives in your Keychain.",
+      },
+      {
+        id: "connectors",
+        label: "Connect apps",
+        icon: Blocks,
+        description:
+          "Apps your bots use as tools — Gmail, Slack, Notion, GitHub, databases and more. Connect once; tokens stay encrypted here.",
       },
       {
         id: "backup",
@@ -947,6 +966,10 @@ function SettingsPageContent() {
               {activeTab === "appearance" && <AppearanceSection />}
 
               {activeTab === "desktop" && <DesktopAppSection />}
+
+              {activeTab === "vault" && <VaultSection />}
+
+              {activeTab === "connectors" && <ConnectApps />}
 
               {activeTab === "backup" && (
                 <>

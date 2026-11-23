@@ -22,6 +22,7 @@ model Workspace {
   agents      Agent[]
   skills      Skill[]
   credentials CloudCredential[]
+  bots        Bot[]
 }
 
 model Project {
@@ -449,7 +450,7 @@ model Sandbox {
 model DockerEndpoint {
   id            String    @id @default(cuid())
   name          String
-  host          String    @unique // ssh://user@host[:port]
+  host          String    @unique // ssh://user@host[:port], or unix:///path/to.sock on this machine
   serverVersion String?
   arch          String? // the base image is built on the remote, natively
   memTotalMb    Int?
@@ -465,6 +466,7 @@ model DockerEndpoint {
   sandboxes      Sandbox[]
   nexusHosts     NexusHost[]
   sandboxConfigs SandboxConfig[]
+  bots           Bot[]
 }
 
 // SandboxProcess - one long-running command started on a sandbox instance
@@ -1183,6 +1185,116 @@ model TaskSchedule {
   @@index([enabled, nextRunAt])
 }
 
+// Bot - an AI teammate with a job (spec 31). It owns no machine: every session
+// runs in a fresh, ephemeral desktop container (Chromium + Claude Code on the
+// Claude subscription token) that is deleted when the session ends.
+model Bot {
+  id                 String    @id @default(cuid())
+  // Which workspace's team it is on (D-87), like Project/Agent/Skill before
+  // it. "ws-default" is the seeded workspace every bot created before this
+  // belongs to.
+  workspaceId        String    @default("ws-default")
+  workspace          Workspace @relation(fields: [workspaceId], references: [id])
+  name               String
+  role               String? // one-line job, shown under the name and given to Claude
+  instructions       String    @default("") // standing instructions appended to the system prompt
+  color              String    @default("#8b5cf6")
+  shape              String    @default("blob") // avatar shape id (apps/web bot-shapes)
+  model              String? // claude --model for its runs; null = CLI default
+  claudeCredentialId String? // saved "claude" credential to run on; null = the first one (resolveClaudeCodeToken)
+  idleMinutes        Int       @default(30) // the computer is deleted after this long without a prompt
+  mcpServers         Json? // its own MCP servers, Claude Code's native mcpServers shape — loaded next to the browser MCP
+  // Which Docker daemon its computers run on (spec 26, D-85). Null = this
+  // machine's docker context, which is where every bot ran before endpoints
+  // reached them. A remote endpoint means its workspace and its sign-ins live
+  // on that machine, so moving a bot gives it a fresh computer.
+  dockerEndpointId   String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  sessions       BotSession[]
+  runs           BotRun[]
+  routines       BotRoutine[]
+  dockerEndpoint DockerEndpoint? @relation(fields: [dockerEndpointId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+}
+
+// BotSession - one lifetime of a bot's ephemeral computer (one container).
+// Claude's memory (claudeSessionId) lives in the container, so a new session
+// starts with a clean slate even though the chat history stays on screen.
+model BotSession {
+  id              String    @id @default(cuid())
+  botId           String
+  status          String    @default("starting") // starting | ready | stopped | error
+  containerName   String
+  // The endpoint's host, copied at launch — the same reason Sandbox keeps one:
+  // every exec, stop and recovery path reaches the daemon the container is
+  // actually on, without a join, and it cannot drift when the bot is pointed
+  // somewhere else or the endpoint is removed. Null = this machine.
+  dockerHost      String?
+  vncPort         Int? // noVNC on the daemon's loopback; forwarded here when it is remote
+  vncPassword     String? // random per session; the container is gone when it ends
+  claudeSessionId String? // --resume target for the next prompt in this session
+  systemPromptHash String? // hash of the system prompt claudeSessionId began with; a change means a fresh Claude session
+  error           String?
+  lastActivityAt  DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  stoppedAt       DateTime?
+
+  bot  Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  runs BotRun[]
+
+  @@index([botId])
+  @@index([status])
+}
+
+// BotRun - one prompt to a bot, executed in its session's container.
+model BotRun {
+  id         String    @id @default(cuid())
+  botId      String
+  sessionId  String
+  prompt     String
+  status     String    @default("queued") // queued | running | completed | error | canceled
+  log        String    @default("")
+  result     String? // Claude's final message
+  needsInput Boolean   @default(false) // the reply ends asking the user for something
+  mailState  String? // JSON: what the user did with each email card in the reply (sent / discarded), by index
+  error      String?
+  costUsd    Float?
+  durationMs Int?
+  createdAt  DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  bot     Bot        @relation(fields: [botId], references: [id], onDelete: Cascade)
+  session BotSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([botId])
+  @@index([sessionId])
+}
+
+// BotRoutine - recurring work a bot does on its own (spec 31): on `cron` (host
+// timezone) it wakes its computer and runs `prompt`. Created from the chat
+// (the bot ends a reply with a `routine` block) or from the bot's panel.
+model BotRoutine {
+  id        String    @id @default(cuid())
+  botId     String
+  name      String // unique per bot by convention: the bot updates a routine by name
+  prompt    String // self-contained instructions for each run
+  cron      String // 5-field cron, host timezone
+  enabled   Boolean   @default(true)
+  lastRunAt DateTime?
+  nextRunAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId])
+  @@index([enabled, nextRunAt])
+}
+
 // StackLock - what a green validation passed against (spec 25 piece 3).
 //
 // Not a pin. Nothing reads this back to force a digest: pinning an image the
@@ -1293,4 +1405,35 @@ model AssistantWatch {
   thread AssistantThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
 
   @@index([status, kind, targetId])
+}
+
+// VaultItem - something the user keeps for bots to use without reading it
+// (spec 32): a login, a secret (API key, connection string), a card, contact
+// details. `secret` is sealed (AES-256-GCM, key outside the database) and never
+// leaves the server; the rest is what lists and forms show.
+// An app from the connectors catalog (spec 35), offered to bots as an MCP
+// server. id = the catalog entry ("mongodb", "github", …).
+model Connector {
+  id        String   @id
+  config    Json // sealed: the values the user typed for the entry's fields (tokens included)
+  botIds    Json? // bots allowed to use it; null = every bot
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model VaultItem {
+  id         String    @id @default(cuid())
+  type       String // login | secret | card | contact
+  name       String // display name; a secret is referenced by it ({{secret:name}}), unique per type
+  websites   Json? // login: ["facebook.com", …] — its fields are only typed on these hosts
+  username   String? // login: shown and typed freely; not secret
+  label      String? // card: "Visa •••• 4242"; contact: the person's name — what the list shows
+  hint       String? // when a bot should use it ("the company's ad account")
+  secret     Json // sealed: login { password } | secret { value } | card { number, expiry, cvc, holder } | contact { email, phone, address }
+  botIds     Json? // bots allowed to use it; null = every bot
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([type, name])
 }

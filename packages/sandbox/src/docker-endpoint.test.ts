@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   dockerHostArgs,
+  dockerHostKind,
   explainProbeFailure,
   parseDockerHost,
   parseDockerInfo,
@@ -27,9 +28,75 @@ test("accepts ssh endpoints and normalises them", () => {
   });
 });
 
+test("accepts a unix socket on this machine, path kept as typed", () => {
+  assert.deepEqual(parseDockerHost("unix:///var/run/docker.sock"), {
+    ok: true,
+    host: "unix:///var/run/docker.sock",
+  });
+  // An orchestrator's dev cluster: the case this exists for.
+  assert.deepEqual(parseDockerHost("  unix:///Users/me/.litek8s/docker.sock/ "), {
+    ok: true,
+    host: "unix:///Users/me/.litek8s/docker.sock",
+  });
+  // Only the scheme is normalised; a socket path is case-sensitive.
+  assert.deepEqual(parseDockerHost("UNIX:///var/run/Docker.sock"), {
+    ok: true,
+    host: "unix:///var/run/Docker.sock",
+  });
+  assert.deepEqual(dockerHostArgs({ host: "unix:///var/run/docker.sock" }), [
+    "-H",
+    "unix:///var/run/docker.sock",
+  ]);
+});
+
+test("refuses a socket path that is not absolute or could break argv", () => {
+  for (const bad of [
+    "unix://",
+    "unix://docker.sock",
+    "unix://./docker.sock",
+    "unix:///var/run/doc ker.sock",
+    "unix:///var/run/docker.sock\nrm -rf /",
+  ]) {
+    assert.deepEqual(parseDockerHost(bad), { ok: false, error: "bad-socket-path" }, bad);
+  }
+});
+
+test("a host's kind is whose filesystem the daemon has", () => {
+  // No endpoint: the daemon this machine's docker context points at.
+  assert.equal(dockerHostKind(null), "local");
+  assert.equal(dockerHostKind(undefined), "local");
+  assert.equal(dockerHostKind("unix:///Users/me/.litek8s/docker.sock"), "local");
+  assert.equal(dockerHostKind("ssh://dev@workstation"), "remote");
+  assert.equal(dockerHostKind("tcp://box:2375"), null);
+});
+
+test("a unix socket parses but has no ssh parts to forward through", () => {
+  assert.equal(sshUrlParts("unix:///var/run/docker.sock"), null);
+});
+
+test("a dead socket is explained as a socket, not as a closed ssh port", () => {
+  const sock = "unix:///Users/me/.litek8s/docker.sock";
+  assert.match(
+    explainProbeFailure(
+      "Cannot connect to the Docker daemon at unix:///Users/me/.litek8s/docker.sock.",
+      sock,
+    ),
+    /start the cluster first/,
+  );
+  // The same stderr against an ssh endpoint keeps the ssh reading.
+  assert.match(
+    explainProbeFailure("connection refused", "ssh://box"),
+    /accepting SSH/,
+  );
+  assert.match(explainProbeFailure("connection refused", sock), /not answering/);
+});
+
 test("refuses tcp, and anything that could pose as a flag or break argv", () => {
-  assert.deepEqual(parseDockerHost("tcp://box:2375"), { ok: false, error: "not-ssh" });
-  assert.deepEqual(parseDockerHost("box"), { ok: false, error: "not-ssh" });
+  assert.deepEqual(parseDockerHost("tcp://box:2375"), {
+    ok: false,
+    error: "unsupported-scheme",
+  });
+  assert.deepEqual(parseDockerHost("box"), { ok: false, error: "unsupported-scheme" });
   assert.deepEqual(parseDockerHost(""), { ok: false, error: "empty" });
   for (const bad of [
     "ssh://-oProxyCommand=x@box",

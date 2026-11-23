@@ -9,6 +9,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bot,
+  BotMessageSquare,
   FileCode2,
   FileText,
   FolderKanban,
@@ -42,6 +43,7 @@ const NAV = [
   { label: "Projects", href: "/projects", icon: FolderKanban },
   { label: "New Project", href: "/projects/new", icon: Plus },
   { label: "Agents", href: "/agents", icon: Bot },
+  { label: "Bots", href: "/bots", icon: BotMessageSquare },
   { label: "Skills", href: "/skills", icon: Sparkles },
   { label: "Terminal", href: "/terminal", icon: Terminal },
   { label: "Settings", href: "/settings", icon: Settings },

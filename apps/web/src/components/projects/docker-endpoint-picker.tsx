@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { Check, Container, Laptop } from "lucide-react";
@@ -16,11 +16,16 @@ export function DockerEndpointPicker({
   value,
   onChange,
   mountOnlyRepos,
+  title = "Which Docker",
+  description,
 }: {
   value: string | null;
   onChange: (endpointId: string | null) => void;
   /** Repos with a local folder and no clone URL — another machine can't see them. */
   mountOnlyRepos: string[];
+  /** The picker is used for sandboxes and for bots; each says what it means. */
+  title?: string;
+  description?: ReactNode;
 }) {
   const endpoints = useQuery({
     queryKey: ["docker-endpoints"],
@@ -47,7 +52,11 @@ export function DockerEndpointPicker({
     ) : null;
   }
 
-  const blocked = mountOnlyRepos.length > 0;
+  // Only another machine cannot see this one's folders. A daemon behind a
+  // socket here is on this machine, so a mount-only repo does not rule it out
+  // — whether its filesystem is really shared is what the endpoint's health
+  // check reports (D-85).
+  const mountOnly = mountOnlyRepos.length > 0;
   const options = [
     ...(isHost
       ? []
@@ -56,7 +65,8 @@ export function DockerEndpointPicker({
       id: ep.id as string | null,
       name: ep.name,
       detail: [
-        ep.host.replace(/^ssh:\/\//, ""),
+        ep.kind === "remote" ? ep.host.replace(/^ssh:\/\//, "") : ep.host,
+        ep.kind === "local" ? "on this machine" : null,
         ep.arch,
         ep.memTotalMb != null ? `${Math.round(ep.memTotalMb / 1024)} GB RAM` : null,
         ep.lastError ? "last check failed" : null,
@@ -64,16 +74,16 @@ export function DockerEndpointPicker({
         .filter(Boolean)
         .join(" · "),
       icon: Container,
-      disabled: blocked,
+      disabled: mountOnly && ep.kind === "remote",
     })),
   ];
 
   return (
     <div className="space-y-2">
       <div>
-        <h4 className="text-xs font-medium">Which Docker</h4>
+        <h4 className="text-xs font-medium">{title}</h4>
         <p className="text-[11px] text-muted-foreground">
-          Another machine&apos;s CPU and memory, this dashboard.{" "}
+          {description ?? "Another machine's CPU and memory, this dashboard."}{" "}
           <Link href="/settings?tab=cloud" className="underline underline-offset-2">
             Manage endpoints
           </Link>
@@ -108,7 +118,7 @@ export function DockerEndpointPicker({
           );
         })}
       </div>
-      {blocked && (
+      {mountOnly && list.some((ep) => ep.kind === "remote") && (
         <p className="text-[11px] text-amber-300/90">
           Other machines can&apos;t see local folders ({mountOnlyRepos.join(", ")}) —
           give {mountOnlyRepos.length === 1 ? "it" : "them"} a clone URL to run

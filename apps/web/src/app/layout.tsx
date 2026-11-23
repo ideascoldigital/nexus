@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import Script from "next/script";
+import { NativeMenuGuard } from "@/components/layout/native-menu-guard";
+import { UpdateReadyNotice } from "@/components/layout/update-ready-notice";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryProvider } from "@/providers/query-provider";
 import { Toaster } from "@/components/ui/toaster";
@@ -35,17 +38,25 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${inter.variable} ${jetbrainsMono.variable} dark h-full antialiased`}
-      // The boot script below sets data-layout, zoom and the theme class before hydration; React would
-      // otherwise warn that the attribute differs from what the server sent.
+      // The boot scripts below set data-layout, zoom, the theme class and data-titlebar before hydration;
+      // React would otherwise warn that the attribute differs from what the server sent.
       suppressHydrationWarning
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: APPEARANCE_BOOT_SCRIPT }} />
       </head>
       <body className="h-full bg-background text-foreground">
+        {/* In the macOS desktop app the title bar is an overlay: the traffic
+            lights sit inside the page, which leaves room for them and marks
+            drag regions. Runs before hydration so nothing jumps. */}
+        <Script id="titlebar-overlay" strategy="beforeInteractive">
+          {`try{if("__TAURI_INTERNALS__" in window&&/Mac/.test(navigator.userAgent))document.documentElement.dataset.titlebar="overlay"}catch(e){}`}
+        </Script>
         <QueryProvider>
           <TooltipProvider>
+            <NativeMenuGuard />
             {children}
+            <UpdateReadyNotice />
             <Toaster />
           </TooltipProvider>
         </QueryProvider>

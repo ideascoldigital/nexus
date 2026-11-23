@@ -85,6 +85,21 @@ test("the token alphabet avoids characters that misread when retyped", () => {
 
 // --- forwards to another machine's Docker (spec 26) -------------------------
 
+test("there is no ssh forward to build for a daemon on this machine", () => {
+  // A local socket's containers publish on this machine's loopback, so the
+  // session never reaches this builder; asking it anyway is a bug, not a case
+  // to handle quietly.
+  assert.throws(
+    () =>
+      endpointForwardArgs({
+        localPort: 1234,
+        remotePort: 6080,
+        dockerHost: "unix:///var/run/docker.sock",
+      }),
+    /Not a Docker endpoint host/,
+  );
+});
+
 test("an endpoint forward lands on the remote's loopback, through the user's own ssh", () => {
   const args = endpointForwardArgs({
     localPort: 51000,

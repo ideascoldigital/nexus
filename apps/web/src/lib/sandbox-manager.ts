@@ -17,6 +17,7 @@ import {
   execRemote,
   failedSteps,
   parseBootstrapReport,
+  dockerHostKind,
   launchLocalSandbox,
   localBootstrapComplete,
   localBootstrapFailure,
@@ -1085,7 +1086,11 @@ export async function launchSandbox(
   // A bind mount names a path on the daemon's disk. Another machine cannot see
   // this one's folders — Docker would mount an empty directory without a word
   // — so refuse, naming the repos, rather than drop them or guess a path.
-  if (endpoint) {
+  //
+  // An endpoint that is a socket on this machine is not another machine, so it
+  // is not refused here; whether its daemon shares this filesystem is what its
+  // health check reports.
+  if (endpoint && dockerHostKind(endpoint.target.host) === "remote") {
     const mountOnly = project.repositories.filter((r) => !r.repoUrl && r.localPath);
     if (mountOnly.length > 0) {
       throw new Error(

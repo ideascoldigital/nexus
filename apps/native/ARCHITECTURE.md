@@ -43,6 +43,13 @@ No native state beyond two mutexes (`SidecarChild`, `ZoomLevel`). All data lives
 ## Commands
 
 - `pnpm dev:native` — Tauri dev against :3100.
-- `pnpm build:native` — `tauri:build` (runs sidecar build first).
+- `pnpm build:native` — `tauri:build` → `scripts/build-app.ts`, which wraps
+  `tauri build` (runs sidecar build first) and finishes a DMG that
+  `bundle_dmg.sh` abandoned while unmounting. `tauri:build:raw` skips the
+  wrapper; `tauri:build --finish-dmg` only recovers, without rebuilding.
+
+## Updates
+
+Release builds update themselves (D-93). The sidecar's `lib/auto-update.ts` checks GitHub's latest release a minute after boot and every 6h, installs a newer one with `lib/self-update.ts` (macOS: replace the bundle in /Applications; Linux: AppImage in `~/.local/bin`; Windows: NSIS installer), and the root-layout notice offers Restart → `/api/updates/restart` → `lib/relaunch.ts` (detached script: quit by bundle id, wait for this shell's pid, reopen). The gate is `build-info.json`'s `release` flag, which is true only for CI tag builds; `start.js` turns it into `NEXUX_RELEASE_BUILD=1`. `NEXUX_AUTO_UPDATE=0` disables it.
 
 Rust backend uses `tauri-plugin-shell` + `tauri-plugin-opener`. Icons bundled for macOS/iOS/Android/Windows.

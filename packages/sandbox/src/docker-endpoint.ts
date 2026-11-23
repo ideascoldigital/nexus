@@ -1,9 +1,21 @@
-// Remote Docker endpoints (spec 26): another machine's daemon that local
-// sandboxes can run on, reached as `docker -H ssh://…`.
+// Docker endpoints (spec 26): a daemon other than the one this machine's
+// docker context points at, reached as `docker -H <host>`.
 //
-// ssh:// only. The browser session is forwarded through the same SSH (a
-// container publishes its VNC bridge on the remote's loopback), and plain
-// tcp:// hands root on the remote to anyone who reaches the port.
+// Two shapes, and the difference is which machine the daemon's filesystem
+// belongs to:
+//
+//   ssh://[user@]host[:port]  another machine. The browser session is
+//                             forwarded through the same SSH, since a
+//                             container publishes its bridge on the
+//                             remote's loopback.
+//   unix:///path/to.sock      a daemon on *this* machine behind its own
+//                             socket — an orchestrator's dev cluster
+//                             (litek8s, minikube, Colima) rather than
+//                             whatever the docker context selects.
+//
+// Plain tcp:// stays refused: it hands root on that machine to anyone who
+// reaches the port. A unix socket is not exposed to the network at all, so
+// that argument does not apply to it.
 import { spawn } from "child_process";
 
 /** Where docker commands go. `host: null` is this machine's default daemon. */
@@ -11,28 +23,45 @@ export type DockerTarget = { host: string | null };
 
 export type DockerHostError =
   | "empty"
-  | "not-ssh"
+  | "unsupported-scheme"
   | "malformed"
-  | "bad-port";
+  | "bad-port"
+  | "bad-socket-path";
 
 // user: POSIX-ish login names. host: a DNS name / IPv4, or a bracketed IPv6.
 // Neither admits spaces, quotes or a leading "-", so the value can never pose
 // as a flag to docker or ssh even though it is always passed as its own argv
 // element anyway.
+// An absolute socket path. No whitespace or control characters, and it can
+// never pose as a flag to docker because the scheme is always in front of it.
+const UNIX_SOCKET_RE = /^unix:\/\/(\/[^\s\0]{0,1023})$/i;
+
 const SSH_HOST_RE =
   /^ssh:\/\/(?:([a-z_][a-z0-9_.-]{0,31})@)?([a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?|\[[0-9a-f:.]{2,45}\])(?::(\d{1,5}))?$/i;
 
 /**
  * Validate and normalise an endpoint host as typed. Accepts
- * `ssh://[user@]host[:port]`; a trailing slash is forgiven, everything else
- * that is not exactly that shape is refused rather than repaired.
+ * `ssh://[user@]host[:port]` and `unix:///absolute/path.sock`; a trailing
+ * slash is forgiven, everything else that is not exactly one of those shapes
+ * is refused rather than repaired.
  */
 export function parseDockerHost(
   raw: string,
 ): { ok: true; host: string } | { ok: false; error: DockerHostError } {
-  const value = raw.trim().replace(/\/$/, "");
-  if (!value) return { ok: false, error: "empty" };
-  if (!/^ssh:\/\//i.test(value)) return { ok: false, error: "not-ssh" };
+  const trimmed = raw.trim();
+  if (!trimmed) return { ok: false, error: "empty" };
+  // The scheme is read before a trailing slash is forgiven, so a bare
+  // "unix://" is a missing path rather than an unknown scheme.
+  const value = trimmed.replace(/\/$/, "");
+  if (/^unix:\/\//i.test(trimmed)) {
+    const sock = UNIX_SOCKET_RE.exec(value);
+    // The path is the endpoint's identity, so it is kept exactly as typed —
+    // only the scheme is lowercased.
+    return sock
+      ? { ok: true, host: `unix://${sock[1]}` }
+      : { ok: false, error: "bad-socket-path" };
+  }
+  if (!/^ssh:\/\//i.test(value)) return { ok: false, error: "unsupported-scheme" };
   const m = SSH_HOST_RE.exec(value);
   if (!m) return { ok: false, error: "malformed" };
   const [, user, hostname, port] = m;
@@ -54,7 +83,9 @@ export function sshUrlParts(
 ): { user: string | null; hostname: string; port: number | null } | null {
   const parsed = parseDockerHost(raw);
   if (!parsed.ok) return null;
-  const m = SSH_HOST_RE.exec(parsed.host)!;
+  const m = SSH_HOST_RE.exec(parsed.host);
+  // A unix socket parses fine and has no ssh parts at all.
+  if (!m) return null;
   return {
     user: m[1] ?? null,
     // ssh takes an IPv6 literal bare, not bracketed as in a URL.
@@ -63,16 +94,38 @@ export function sshUrlParts(
   };
 }
 
+/**
+ * Whose filesystem the daemon behind `host` has. This is the question that
+ * decides everything else: a `local` daemon can be handed a path from this
+ * machine and may publish a container's port on this machine's loopback, a
+ * `remote` one cannot — its paths and its ports are its own, which is why a
+ * remote sandbox clones a repo instead of mounting it and why its browser
+ * session needs an SSH forward.
+ *
+ * No host at all is local: that is the daemon this machine's docker context
+ * already points at. Null means the host does not parse.
+ */
+export function dockerHostKind(
+  host: string | null | undefined,
+): "local" | "remote" | null {
+  if (!host) return "local";
+  const parsed = parseDockerHost(host);
+  if (!parsed.ok) return null;
+  return parsed.host.toLowerCase().startsWith("ssh://") ? "remote" : "local";
+}
+
 export function describeDockerHostError(error: DockerHostError): string {
   switch (error) {
     case "empty":
       return "A host is required.";
-    case "not-ssh":
-      return "Only ssh:// endpoints are supported — tcp:// exposes the daemon (root on that machine) to the network.";
+    case "unsupported-scheme":
+      return "Only ssh:// (another machine) and unix:// (a socket on this one) are supported — tcp:// exposes the daemon, which is root on that machine, to the network.";
     case "malformed":
       return "Expected ssh://user@host or ssh://user@host:port.";
     case "bad-port":
       return "The port must be between 1 and 65535.";
+    case "bad-socket-path":
+      return "Expected unix:// followed by an absolute path, like unix:///var/run/docker.sock.";
   }
 }
 
@@ -128,10 +181,33 @@ export function parseDockerInfo(stdout: string): DockerEndpointInfo | null {
 /**
  * Turn a failed probe's stderr into something the user can act on. The raw
  * tail always comes along — a hint is a guess, the stderr is the fact.
+ *
+ * `host` is optional and only selects which hints can apply: the same
+ * "connection refused" means a closed SSH port on one kind of endpoint and a
+ * dead daemon behind a socket on the other, so the socket hints go in front
+ * when the endpoint is one.
  */
-export function explainProbeFailure(stderr: string): string {
+export function explainProbeFailure(stderr: string, host?: string): string {
   const tail = stderr.trim().split("\n").slice(-3).join("\n").slice(-400);
+  const socket: Array<[RegExp, string]> =
+    host && dockerHostKind(host) === "local" && /^unix:\/\//i.test(host.trim())
+      ? [
+          [
+            /no such file or directory|cannot connect to the docker daemon at unix:/i,
+            "There is nothing listening on that socket. If it belongs to a dev cluster (litek8s, minikube, Colima), start the cluster first — the socket only exists while it runs.",
+          ],
+          [
+            /connection refused/i,
+            "The socket is there but the daemon behind it is not answering.",
+          ],
+          [
+            /permission denied/i,
+            "This user cannot open that socket — check its owner and mode.",
+          ],
+        ]
+      : [];
   const hints: Array<[RegExp, string]> = [
+    ...socket,
     [
       /permission denied while trying to connect to the docker daemon/i,
       "The SSH user can't talk to Docker there — add it to the docker group on that machine.",
@@ -241,7 +317,9 @@ export async function probeDockerEndpoint(
     };
   }
 
-  if (res.code !== 0) return { ok: false, error: explainProbeFailure(res.stderr) };
+  if (res.code !== 0) {
+    return { ok: false, error: explainProbeFailure(res.stderr, parsed.host) };
+  }
 
   const info = parseDockerInfo(res.stdout);
   if (!info) {
@@ -250,7 +328,7 @@ export async function probeDockerEndpoint(
   // `docker info` exits 0 even when it only reached the client half; a
   // missing server version means there was no daemon behind it.
   if (!info.serverVersion) {
-    return { ok: false, error: explainProbeFailure(res.stderr) };
+    return { ok: false, error: explainProbeFailure(res.stderr, parsed.host) };
   }
   if (info.rootless) {
     return {
@@ -260,4 +338,29 @@ export async function probeDockerEndpoint(
     };
   }
   return { ok: true, ...info };
+}
+
+/**
+ * `docker build` leaves the image in a daemon's store only when the active
+ * buildx builder uses the `docker` driver. A `docker-container` builder —
+ * what `docker buildx create` gives you, and what a dev cluster can leave
+ * selected — keeps the result in the build cache instead and only warns about
+ * it on stderr. The build then "succeeds", `docker run` finds no such image,
+ * falls back to Docker Hub and fails with a 401 on a name that was never
+ * published there.
+ *
+ * `--load` moves the result into the store. It is a no-op for the `docker`
+ * driver and unknown to the pre-buildx builder, so a build that is refused
+ * for the flag is retried without it rather than failing on an older Docker.
+ */
+export const LOAD_FLAG = "--load";
+
+export const IMAGE_NOT_IN_STORE =
+  "the image built but is not in this daemon's image store — its buildx builder is probably a " +
+  '"docker-container" one, which keeps the result in the build cache. Select a builder that ' +
+  "loads: docker buildx use default";
+
+/** Did docker reject the flag itself, rather than fail the build? */
+export function rejectedBuildFlag(stderr: string): boolean {
+  return /unknown flag|flag provided but not defined|unknown shorthand/i.test(stderr);
 }

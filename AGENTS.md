@@ -22,7 +22,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 pnpm dev            # web dashboard → :3333 (terminal WS :3002)
 pnpm dev:native     # Tauri dev (web on :3100, no sidecar)
 pnpm build          # turbo build all
-pnpm build:native   # tauri:build (bundles web as Node sidecar)
+pnpm build:native   # tauri:build → build-app.ts (bundles web as Node sidecar)
 pnpm test           # turbo test (packages use `tsx --test`)
 pnpm typecheck      # tsc --noEmit everywhere (depends on ^build)
 pnpm lint
@@ -36,7 +36,7 @@ Run a single package's tests: `pnpm --filter @nexux/<pkg> test`.
 | Path | What | Doc |
 |---|---|---|
 | `apps/web` | The product: dashboard, ~80 API routes, sandbox/task orchestration, Telegram | [ARCHITECTURE.md](apps/web/ARCHITECTURE.md) |
-| `apps/native` | Tauri v2 shell, web app as Node sidecar :3030 | [ARCHITECTURE.md](apps/native/ARCHITECTURE.md) |
+| `apps/native` | Tauri v2 shell, web app as Node sidecar (ephemeral port) | [ARCHITECTURE.md](apps/native/ARCHITECTURE.md) |
 | `packages/config` | Env/mode config — dep-graph root | [ARCHITECTURE.md](packages/config/ARCHITECTURE.md) |
 | `packages/core` | Shared types only (Claude stream, WS protocol, enums) | [ARCHITECTURE.md](packages/core/ARCHITECTURE.md) |
 | `packages/db` | Prisma + SQLite, ~34 models | [ARCHITECTURE.md](packages/db/ARCHITECTURE.md) |

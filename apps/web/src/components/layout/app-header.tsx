@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { BotMessageSquare } from "lucide-react";
 
 import { ActivityIndicator } from "@/components/layout/activity-indicator";
 import { CommandPalette } from "@/components/layout/command-palette";
@@ -30,7 +31,8 @@ export function AppHeader({ title }: { title?: string }) {
   const breadcrumb = title && title !== "Dashboard" ? title : null;
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3.5 border-b border-border/60 bg-sidebar px-5">
+    // Also the window's title bar in the macOS app: drag on any empty spot.
+    <header data-tauri-drag-region className="flex h-12 shrink-0 items-center gap-3.5 border-b border-border/60 bg-sidebar px-5">
       {/* The only way to reach another page below md, where the sidebar is
           hidden. */}
       <MobileNav />
@@ -48,6 +50,15 @@ export function AppHeader({ title }: { title?: string }) {
       )}
 
       <div className="ml-auto flex items-center gap-2.5">
+        {/* The simple view (spec 31): bots only, outside this shell. */}
+        <Link
+          href="/bots"
+          className="flex items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-3 py-1.5 text-[12px] font-medium text-accent-foreground transition-colors hover:bg-primary/20"
+          title="Open the simple view: your bots and nothing else"
+        >
+          <BotMessageSquare className="h-3.5 w-3.5" strokeWidth={1.75} />
+          Bots
+        </Link>
         <button
           type="button"
           onClick={() => setPaletteOpen(true)}

@@ -27,6 +27,19 @@ export async function registerNode() {
   process.once("exit", lock.release);
   console.log(`[instrumentation] holding ${lock.path}`);
 
+  // The vault (spec 32): check the key against the database and seal any
+  // secret still stored in plaintext — before anything reads one. A wrong key
+  // is fatal: every credential read would fail, and nothing was changed.
+  try {
+    const { ensureVault } = await import("@nexux/db");
+    const report = await ensureVault();
+    const sealed = Object.entries(report.sealed).map(([m, n]) => `${m} ${n}`).join(", ");
+    console.log(`[vault] key from ${report.keySource}${sealed ? `; sealed ${sealed}` : ""}`);
+  } catch (err) {
+    console.error("[vault]", err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
+
   // In dev, `pnpm dev` may already run the standalone terminal server; let an
   // explicit opt-out skip the in-process one to avoid a port clash.
   if (process.env.NEXUX_DISABLE_INPROC_TERMINAL !== "1") {
@@ -46,7 +59,9 @@ export async function registerNode() {
           return endpoint?.host ?? null;
         },
       });
-      console.log(`[instrumentation] terminal server up on :${handle.port}`);
+      console.log(
+        `[instrumentation] terminal server up on :${await handle.ready}`,
+      );
     } catch (err) {
       console.error("[instrumentation] terminal server failed to start:", err);
     }
@@ -58,6 +73,15 @@ export async function registerNode() {
     await ensureDefaultWorkspace();
   } catch (err) {
     console.error("[instrumentation] default workspace check failed:", err);
+  }
+
+  // Native app: download and install newer releases in the background; the
+  // user restarts when it suits them. A no-op off native and on local builds.
+  try {
+    const { startAutoUpdater } = await import("@/lib/auto-update");
+    startAutoUpdater();
+  } catch (err) {
+    console.error("[instrumentation] auto-updater failed to start:", err);
   }
 
   // Telegram notifications + remote control. Idles cheaply (30s polls of the
@@ -122,6 +146,10 @@ export async function registerNode() {
       // nothing. Left alone the tab offers an iframe that can never connect.
       const { reapForwards } = await import("@/lib/browser-session");
       void reapForwards();
+      // Bots: a dead process leaves unsupervised desktop containers behind —
+      // delete them, settle their rows, then start the idle reaper.
+      const { recoverBots } = await import("@/lib/bot-manager");
+      void recoverBots();
     } catch (err) {
       console.error("[instrumentation] launch recovery failed:", err);
     }

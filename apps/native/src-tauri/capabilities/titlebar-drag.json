@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "titlebar-drag",
+  "description": "The title bar is an overlay on macOS, so the page marks drag regions (data-tauri-drag-region). This only lets the page start a window drag \u2014 from the app's own server (dev or sidecar), never from other sites.",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://localhost:*",
+      "http://localhost:*/*",
+      "http://127.0.0.1:*",
+      "http://127.0.0.1:*/*"
+    ]
+  },
+  "permissions": [
+    "core:window:allow-start-dragging"
+  ]
+}

@@ -24,6 +24,7 @@ import {
   checkUpdates,
   installUpdate,
   openExternal,
+  restartApp,
   type UpdateStatus,
 } from "@/services/updates";
 
@@ -102,6 +103,16 @@ function UpdateBadge({ native }: { native: boolean }) {
     }
   };
 
+  // After an install the badge becomes the restart button.
+  const restart = async () => {
+    try {
+      await restartApp();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setPhase("error");
+    }
+  };
+
   const label =
     phase === "installing"
       ? "installing…"
@@ -114,14 +125,14 @@ function UpdateBadge({ native }: { native: boolean }) {
     phase === "error"
       ? `Update failed: ${error}`
       : phase === "done"
-        ? (doneMessage ?? "Installed — quit and relaunch Nexus.")
+        ? `${doneMessage ?? "Installed."} Click to restart now.`
         : `Download and install ${status.tag} (currently ${status.current}).`;
 
   return (
     <button
       type="button"
-      onClick={phase === "installing" || phase === "done" ? undefined : run}
-      disabled={phase === "installing" || phase === "done"}
+      onClick={phase === "installing" ? undefined : phase === "done" ? restart : run}
+      disabled={phase === "installing"}
       className={`tap-target flex items-center gap-1 rounded-sm px-1 font-medium hover:bg-accent ${
         phase === "error"
           ? "text-destructive"

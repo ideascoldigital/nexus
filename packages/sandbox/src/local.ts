@@ -22,7 +22,14 @@ import {
   safeSlug,
 } from "./template";
 import { DEFAULT_WS_PORT } from "./template-browser";
-import { dockerHostArgs, type DockerTarget } from "./docker-endpoint";
+import {
+  dockerHostArgs,
+  dockerHostKind,
+  IMAGE_NOT_IN_STORE,
+  LOAD_FLAG,
+  rejectedBuildFlag,
+  type DockerTarget,
+} from "./docker-endpoint";
 
 /**
  * What a sandbox container starts from when nothing has been prebuilt.
@@ -116,9 +123,10 @@ export async function dockerAvailable(
   target?: DockerTarget | null,
 ): Promise<boolean> {
   try {
-    // Longer for a remote daemon: the first call pays the SSH handshake.
+    // Longer for a remote daemon: the first call pays the SSH handshake. A
+    // daemon behind a local socket pays nothing, endpoint or not.
     const res = await docker(target, ["info"], {
-      timeoutMs: target?.host ? 30_000 : 15_000,
+      timeoutMs: dockerHostKind(target?.host) === "remote" ? 30_000 : 15_000,
     });
     return res.code === 0;
   } catch {
@@ -178,16 +186,29 @@ export async function buildSandboxBaseImage(
     onLog?.(`[nexux] building ${BASE_IMAGE_TAG} (first run takes a few minutes)\n`);
     // Over -H the build context is uploaded, so the image is built on — and
     // native to — the daemon that will run the sandboxes.
-    const res = await docker(
-      opts.target,
-      ["build", "-t", BASE_IMAGE_TAG, "--label", `org.nexux.base-version=${BASE_IMAGE_VERSION}`, dir],
-      { onLog, timeoutMs: 20 * 60_000 },
-    );
+    // --load for the reason docker-endpoint.ts gives: a docker-container
+    // builder would leave this in the build cache, and the launch that
+    // follows would go looking for it on Docker Hub.
+    const argv = (load: boolean) => [
+      "build",
+      ...(load ? [LOAD_FLAG] : []),
+      "-t",
+      BASE_IMAGE_TAG,
+      "--label",
+      `org.nexux.base-version=${BASE_IMAGE_VERSION}`,
+      dir,
+    ];
+    let res = await docker(opts.target, argv(true), { onLog, timeoutMs: 20 * 60_000 });
+    if (res.code !== 0 && rejectedBuildFlag(res.stderr)) {
+      res = await docker(opts.target, argv(false), { onLog, timeoutMs: 20 * 60_000 });
+    }
     if (res.code !== 0) {
       throw new Error(
         `base image build failed: ${res.stderr.trim().slice(-400) || res.stdout.trim().slice(-400)}`,
       );
     }
+    const landed = await docker(opts.target, ["image", "inspect", BASE_IMAGE_TAG], { timeoutMs: 15_000 });
+    if (landed.code !== 0) throw new Error(`base image build failed: ${IMAGE_NOT_IN_STORE}`);
     return { tag: BASE_IMAGE_TAG, built: true };
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -252,7 +273,11 @@ export async function launchLocalSandbox(opts: {
   // remote daemon that is an empty directory Docker creates without a word —
   // a sandbox working on nothing. The launch route refuses this with a
   // friendlier message; this is the backstop.
-  if (target?.host) {
+  //
+  // By kind, not by "has an endpoint": a daemon behind a local socket is on
+  // this machine, and whether it shares this filesystem is a question its
+  // health check answers rather than one to assume the worst of here.
+  if (target?.host && dockerHostKind(target.host) === "remote") {
     const unmountable = spec.repos.filter((r) => !r.repoUrl && r.mountPath);
     if (unmountable.length > 0) {
       throw new Error(
