@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 
-import { appImageDest, pickAsset } from "./self-update";
+import { appImageDest, pickAsset, windowsInstallerCommand } from "./self-update";
 
 // The exact asset list release-native.yml produced for v0.1.3 — the contract
 // this picker exists to match.
@@ -63,4 +63,12 @@ test("appImageDest keeps updating a legacy Nexux.AppImage in place", () => {
     appImageDest(dir, ["Nexus.AppImage"]),
     path.join(dir, "Nexus.AppImage"),
   );
+});
+
+test("a Windows installer is launched directly, never through cmd.exe", () => {
+  // `cmd /c start "" <file>` re-parses the path: an `&` in it ran a command.
+  const exe = "C:\\Temp\\nexux-update-a&b\\Nexus_0.3.6_x64-setup.exe";
+  assert.deepEqual(windowsInstallerCommand(exe), [exe]);
+  const msi = "C:\\Temp\\Nexus_0.3.6_x64_en-US.MSI";
+  assert.deepEqual(windowsInstallerCommand(msi), ["msiexec", "/i", msi]);
 });

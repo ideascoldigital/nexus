@@ -22,14 +22,26 @@ import { localRequestRejection } from "@/lib/local-request";
 
 export const dynamic = "force-dynamic";
 
-/** Opener argv per platform. Pure and exported for tests. */
+/**
+ * Opener argv per platform — for a URL (here) or a folder (sandbox reveal).
+ * Pure and exported for tests.
+ *
+ * Windows never goes through cmd.exe: `cmd /c start "" <target>` re-parses its
+ * argument line, so the `&` in `https://x.com/?a&calc` ran `calc` — a URL,
+ * or a folder name, could run any command. rundll32's FileProtocolHandler
+ * and explorer.exe take the target as one argument and parse nothing.
+ */
 export function openerCommand(
   platform: NodeJS.Platform,
-  url: string,
+  target: string,
 ): string[] {
-  if (platform === "darwin") return ["open", url];
-  if (platform === "win32") return ["cmd", "/c", "start", "", url];
-  return ["xdg-open", url];
+  if (platform === "darwin") return ["open", target];
+  if (platform === "win32") {
+    return /^https?:\/\//i.test(target)
+      ? ["rundll32", "url.dll,FileProtocolHandler", target]
+      : ["explorer.exe", target];
+  }
+  return ["xdg-open", target];
 }
 
 export function validateUrl(raw: unknown): string | null {

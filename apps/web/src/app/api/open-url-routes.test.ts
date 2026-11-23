@@ -24,16 +24,26 @@ test("validateUrl accepts http(s) only", () => {
 test("openerCommand picks the platform opener", () => {
   assert.deepEqual(openerCommand("darwin", "https://x"), ["open", "https://x"]);
   assert.deepEqual(openerCommand("win32", "https://x"), [
-    "cmd",
-    "/c",
-    "start",
-    "",
+    "rundll32",
+    "url.dll,FileProtocolHandler",
     "https://x",
   ]);
+  assert.deepEqual(openerCommand("win32", "C:\\repos\\app"), ["explorer.exe", "C:\\repos\\app"]);
   assert.deepEqual(openerCommand("linux", "https://x"), [
     "xdg-open",
     "https://x",
   ]);
+});
+
+test("Windows never hands a URL or folder to cmd.exe", () => {
+  // cmd re-parses its argument line: with `cmd /c start "" <url>`, the `&`
+  // here ran calc. Nothing in the argv may be cmd, and the target must stay
+  // one untouched argument.
+  for (const target of ["https://x.com/?a&calc", "C:\\work\\a&calc"]) {
+    const argv = openerCommand("win32", target);
+    assert.ok(!argv.some((a) => /^cmd(\.exe)?$/i.test(a)), target);
+    assert.equal(argv.at(-1), target);
+  }
 });
 
 function jsonReq(body: unknown): Request {

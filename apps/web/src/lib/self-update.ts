@@ -121,6 +121,16 @@ export async function downloadAsset(asset: ReleaseAsset): Promise<string> {
 }
 
 /**
+ * How to launch a downloaded Windows installer. Directly, never through
+ * `cmd /c start`, which re-parses the path and would run whatever follows an
+ * `&` in it. An .msi (pickAsset's fallback) is not executable on its own;
+ * msiexec opens it. Pure so it is testable off Windows.
+ */
+export function windowsInstallerCommand(file: string): string[] {
+  return file.toLowerCase().endsWith(".msi") ? ["msiexec", "/i", file] : [file];
+}
+
+/**
  * Install a downloaded asset. Returns a user-facing message; throws with a
  * user-facing message on failure. `platform` is a parameter for tests only.
  */
@@ -132,10 +142,8 @@ export async function installAsset(
   if (platform === "win32") {
     // Detached so the NSIS window outlives this request — it will ask the
     // user to close the running app itself.
-    spawn("cmd", ["/c", "start", "", file], {
-      detached: true,
-      stdio: "ignore",
-    }).unref();
+    const [bin, ...args] = windowsInstallerCommand(file);
+    spawn(bin, args, { detached: true, stdio: "ignore" }).unref();
     return "Installer launched — follow its steps, then relaunch Nexus.";
   }
   if (platform === "linux") return installAppImage(file);
