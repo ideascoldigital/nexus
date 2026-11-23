@@ -1,6 +1,6 @@
 # Spec 35 — Connect Apps
 
-**Status:** shipped (v1) · 2026-11-22 · see D-91
+**Status:** shipped (v1) · 2026-11-22 · see D-92
 
 ## Problem
 

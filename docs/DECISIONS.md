@@ -870,7 +870,19 @@ The menus themselves are a `ContextMenu` primitive on the same Base UI menu the 
 
 **Consequences:** a right click now does something useful everywhere it does anything at all, and the two places people most want it — a bot in the list, a message in the chat — no longer require a trip to the panel. Deliberately not done: there is no "delete message", because no endpoint deletes a run — `cancelBotRun` stops one — and offering a button with nothing behind it would be worse than leaving it out. The dashboard's own surfaces (projects, sandboxes, terminals, kanban) still fall through to no menu at all in the shell; they are suppressed but not yet replaced, which is a smaller regression than Back and Reload but is a gap.
 
-## D-90 — Gmail is reached through Nexus with the user's own OAuth app, not through the bot's browser (2026-11-22)
+## D-90 — A built image is not an image until the daemon has it (2026-11-21)
+
+**Context:** Nexus builds the bot image rather than pulling it — `ensureBotImage` inspects, and on a miss runs `docker build -t <tag> -` with the Dockerfile on stdin. On a second Mac that runs only the Docker CLI and litek8s, waking a bot failed with a 401 from Docker Hub for `nexux-bot:<tag>`, a name that has never been published anywhere.
+
+The cause was one line of build output: `No output specified with docker-container driver. Build result will only remain in the build cache.` `docker build` puts the image in the daemon's store only when the selected buildx builder uses the `docker` driver. litek8s does not implement Docker's build endpoint, so buildx works around it by running BuildKit in a container — a `docker-container` builder — and that driver keeps the result in the cache and merely warns. The build exits 0, the image is nowhere, `docker run` falls back to the registry, and the registry says 401.
+
+This is not specific to litek8s. Any machine where `docker buildx create --use` has been run — the usual recipe for multi-arch builds and registry pushes — has the same builder selected against an ordinary daemon, and would have failed the same way.
+
+**Decision:** both places that build (`ensureBotImage`, and the sandbox base image in `local.ts`) pass `--load`, which is what moves the result into the store. It is a no-op for the `docker` driver and unknown to the pre-buildx builder, so a build refused for the flag is retried without it rather than breaking an older Docker. After any successful build the image is inspected again, and a miss raises a message naming the driver instead of letting the launch discover it as a registry error.
+
+**Consequences:** a daemon whose only builder is a container one — which is the only kind litek8s offers, since its `default` builder cannot connect without `/var/run/docker.sock` — now works. Verified on the machine that failed: `docker build --load` there exports, sends the tarball and imports into the daemon, and the image is inspectable afterwards. The second inspect costs one call per build, which is nothing beside a build. The same assumption may live in other tools that shell out to `docker build`; only these two were ours to fix.
+
+## D-91 — Gmail is reached through Nexus with the user's own OAuth app, not through the bot's browser (2026-11-22)
 
 **Context:** the bots that live in email kept asking the user to sign into Gmail. Their browser profiles persist and cookie sharing skips Google, yet those profiles held no Google session while another bot's did: Google signs out a Linux Chromium that shows up on a new machine each time the computer wakes. Fighting that (stable machine ids, fingerprints) is an arms race we would lose at Google's discretion.
 
@@ -881,7 +893,7 @@ The user chose that bots may send on their own; the system prompt confines `gmai
 **Consequences:** the mail card no longer depends on the bot's browser session for connected accounts, and sending takes a second instead of a bot run. A shared "Nexus" Google app is deliberately not built: Gmail's restricted scopes would need Google's security assessment, which belongs to the SaaS discussion. A bot that may send can send something wrong — mitigated by per-account bot access and the prompt rule, not prevented. Calendar and Drive would reuse the same app and consent with more scopes.
 
 
-## D-91 — Apps are connected once, globally, and reach bots as MCP servers (2026-11-22)
+## D-92 — Apps are connected once, globally, and reach bots as MCP servers (2026-11-22)
 
 **Context:** bots kept losing browser sign-ins (Google above all), and the alternative — per-bot MCP JSON plus a vault secret — was too much setup to be the normal path.
 
