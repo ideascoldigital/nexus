@@ -2,7 +2,7 @@
 // bot routes and kept free of server-only imports so it is cheap to test.
 
 import { splitAttachments } from "@/lib/bot-attachments";
-import { dockerHostKind, botVncUrl } from "@nexux/sandbox";
+import { BOT_SCREEN, dockerHostKind, botVncUrl } from "@nexux/sandbox";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { handoffRun, replyRun } from "@/lib/bot-handoffs";
@@ -63,6 +63,8 @@ export type BotSessionView = {
   vncFullUrl: string | null;
   /** What the boot is doing right now (image build step, waiting for the desktop). */
   progress: string | null;
+  /** The desktop's own pixel size, which the dashboard scales its screen to. */
+  screen: { width: number; height: number };
   /**
    * Which machine this computer is on (D-85) — worth showing, because it is
    * where the bot's files and sign-ins live, and on a remote daemon its screen
@@ -108,6 +110,7 @@ export function shapeSession(
     vncUrl: live ? botVncUrl(s.vncPort!, s.vncPassword!) : null,
     vncFullUrl: live ? botVncUrl(s.vncPort!, s.vncPassword!, { full: true }) : null,
     progress: s.status === "starting" ? progress : null,
+    screen: { width: BOT_SCREEN.width, height: BOT_SCREEN.height },
     runsOn: describeRunsOn(s.dockerHost),
     createdAt: s.createdAt,
     stoppedAt: s.stoppedAt,

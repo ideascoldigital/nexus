@@ -2,7 +2,7 @@
 
 Live project state. Update when closing each significant PR/session: move items between sections and add a line to the timeline. Detail of long sessions → `specs/` (like `15-roadmap-definicion-features.md`).
 
-_Last updated: 2026-09-26._
+_Last updated: 2026-11-23._
 
 ## Status by module
 
@@ -23,6 +23,7 @@ _Last updated: 2026-09-26._
 
 ## Milestones (timeline by PR)
 
+- **2026-11-23** — The bot's screen can be anchored instead of only opening as a dialog (D-94): full height to the right of the chat, or under the bot's details in the panel, picked from the dialog's header or the chat's Screen menu. Where it sits is remembered per bot and off by default; the dock, the details panel and the inbox all resize by dragging their edge (one `ResizeHandle`), and the inbox also collapses to a rail of faces. The screen is scaled to whatever box holds it, so it no longer crops. A stray click on a watched screen answers with a hint that fades and a double-click asks before the mouse changes hands; "Take control of the computer" in the chat hands control over instead of only opening the screen. 8 tests.
 - **2026-11-22** — Connect Apps (spec 35, D-92): a catalog of apps bots use as tools — Gmail plus Slack, Notion, Airtable, GitHub, MongoDB, PostgreSQL, Supabase, HubSpot, Stripe and Brave Search — connected once (token sealed in `Connector`), offered to all or some bots, and added to their computer as MCP servers on every prompt. Read-only by default for databases and GitHub. In the bots view (blocks button) and Settings → Connect apps; Gmail moved there from the Vault. 6 tests.
 - **2026-11-23** — The native app updates itself (D-93). A release build checks GitHub a minute after launch and every six hours, downloads and installs a newer release in the background, and shows "Nexus vX is installed — Restart" on every page, the bots app included; Restart quits and reopens it. Local `pnpm build:native` bundles never auto-update over themselves.
 - **2026-11-22** — Attachments in the bot chat: a paperclip, drag and drop, or paste (a screenshot goes straight in). Files upload to Nexus and ride in the message as links, so your bubble shows the images and files; when the message runs they are copied into the bot's computer under `/workspace/<bot>/attachments/` (also over a remote Docker endpoint) and the bot reads them by path. `pnpm dev:native` can now open external links (NEXUX_OPEN_URL), and the window lets the page take file drops. 5 tests.

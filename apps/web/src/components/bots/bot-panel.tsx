@@ -13,7 +13,9 @@ import { RoutineDialog } from "@/components/bots/bot-routine-dialog";
 import { Button } from "@/components/ui/button";
 import { DockerEndpointPicker } from "@/components/projects/docker-endpoint-picker";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { ResizeHandle } from "@/components/ui/resize-handle";
 import { useToast } from "@/hooks/use-toast";
+import { PANEL_DEFAULT_WIDTH, clampPanelWidth } from "@/lib/bot-layout";
 import { parseBotMcpJson } from "@/lib/bot-mcp";
 import { promptLabel } from "@/lib/bot-routines";
 import { BOT_COLORS, BOT_SHAPES } from "@/lib/bot-shapes";
@@ -40,14 +42,23 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 export function BotPanel({
   bot,
   feed,
+  width,
+  onWidth,
+  screenAnchored,
   onClose,
   onOpenComputer,
   onDeleted,
 }: {
   bot: BotListItem;
   feed: BotFeed | undefined;
+  /** In CSS pixels: the panel widens when it holds the bot's screen. */
+  width: number;
+  onWidth: (px: number) => void;
+  /** The screen is kept here, under the details. */
+  screenAnchored: boolean;
   onClose: () => void;
-  onOpenComputer: () => void;
+  /** Show the big screen; with `true`, take control of it at the same time. */
+  onOpenComputer: (takeControl?: boolean) => void;
   onDeleted: () => void;
 }) {
   const [tab, setTab] = useState<"activity" | "settings">("activity");
@@ -56,7 +67,16 @@ export function BotPanel({
   const asleep = computerState(feed) === "asleep";
 
   return (
-    <aside className="relative flex w-full shrink-0 flex-col overflow-y-auto border-l border-border bg-background lg:w-[340px] xl:w-[380px]">
+    <aside
+      style={{ width }}
+      className="relative flex shrink-0 flex-col overflow-y-auto border-l border-border bg-background"
+    >
+      <ResizeHandle
+        side="left"
+        label="Resize the panel"
+        onResize={(x) => onWidth(clampPanelWidth(window.innerWidth - x))}
+        onReset={() => onWidth(PANEL_DEFAULT_WIDTH)}
+      />
       <div data-tauri-drag-region className="titlebar-only absolute inset-x-0 top-0 h-10" />
       <Button
         size="icon-sm"
@@ -116,7 +136,7 @@ export function BotPanel({
             </Section>
             <Routines bot={bot} routines={feed?.routines ?? []} />
             <Section title="Computer">
-              <ComputerCard bot={bot} feed={feed} onOpen={onOpenComputer} />
+              <ComputerCard bot={bot} feed={feed} anchored={screenAnchored} onOpen={onOpenComputer} />
             </Section>
           </>
         ) : (

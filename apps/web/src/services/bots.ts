@@ -46,6 +46,8 @@ export type BotSession = {
   vncFullUrl: string | null;
   /** Boot progress while `starting` (image build step, waiting for the desktop). */
   progress: string | null;
+  /** The desktop's pixel size; the screen is scaled to fit whatever box it is in. */
+  screen: { width: number; height: number };
   /** Which machine this computer is on — where its files and sign-ins live. */
   runsOn: { kind: "local" | "remote"; label: string };
   createdAt: string;

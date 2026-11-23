@@ -19,6 +19,7 @@ import { format, isToday, isYesterday } from "date-fns";
 import {
   ArrowUp,
   Check,
+  ChevronDown,
   Clock,
   Copy,
   FileText,
@@ -26,7 +27,9 @@ import {
   Hand,
   Loader2,
   Mail,
+  Maximize2,
   MonitorPlay,
+  PanelBottom,
   PanelRight,
   Paperclip,
   RotateCcw,
@@ -47,6 +50,13 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ImageLightbox, MarkdownReport } from "@/components/ui/markdown-report";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -59,6 +69,7 @@ import {
 import { CHOICE_LETTERS, type BotChoices } from "@/lib/bot-choices";
 import { findTeammate, handoffRun, replyRun } from "@/lib/bot-handoffs";
 import { mailRun, parseMailState } from "@/lib/bot-mail";
+import { type DockMode } from "@/lib/bot-layout";
 import { isHandback, isIntro } from "@/lib/bot-prompts";
 import { textOn } from "@/lib/bot-shapes";
 import { routineRun, splitReply } from "@/lib/bot-routines";
@@ -93,6 +104,8 @@ export function BotChat({
   firstUnreadId,
   panelOpen,
   onTogglePanel,
+  dockMode,
+  onDockMode,
   onOpenComputer,
   onChange,
   team,
@@ -106,7 +119,11 @@ export function BotChat({
   firstUnreadId: string | null;
   panelOpen: boolean;
   onTogglePanel: () => void;
-  onOpenComputer: () => void;
+  /** Where this bot's screen is kept, if anywhere. */
+  dockMode: DockMode;
+  onDockMode: (mode: DockMode) => void;
+  /** Show the screen; with `true`, take control of it at the same time. */
+  onOpenComputer: (takeControl?: boolean) => void;
   onChange: () => void;
 }) {
   const { toast } = useToast();
@@ -222,17 +239,59 @@ export function BotChat({
           <BotAvatar shape={bot.shape} color={bot.color} size={24} />
           {bot.name}
         </button>
-        {!panelOpen && (
-          <Button
-            variant="secondary"
-            size="sm"
-            className="pointer-events-auto absolute top-3 right-4 rounded-full px-3"
-            onClick={onTogglePanel}
-          >
-            <PanelRight className="h-3.5 w-3.5" />
-            Details
-          </Button>
-        )}
+        <div className="pointer-events-auto absolute top-3 right-4 flex items-center gap-1.5">
+          {/* Where to keep the screen: nowhere (it opens as a dialog), beside
+              the chat, or under the bot's details — so you can watch it work
+              while you type. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant={dockMode === "off" ? "secondary" : "default"}
+                  size="sm"
+                  className="rounded-full px-3"
+                  title="Where to keep the bot's screen"
+                />
+              }
+            >
+              <MonitorPlay className="h-3.5 w-3.5" />
+              Screen
+              <ChevronDown className="h-3 w-3 opacity-70" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuItem onClick={() => onOpenComputer()}>
+                <Maximize2 />
+                Open the big screen
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => onDockMode("right")}>
+                <PanelRight />
+                <span className="flex-1">Anchor right of the chat</span>
+                {dockMode === "right" && <Check className="h-3.5 w-3.5 text-primary" />}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onDockMode("panel")}>
+                <PanelBottom />
+                <span className="flex-1">Anchor under the details</span>
+                {dockMode === "panel" && <Check className="h-3.5 w-3.5 text-primary" />}
+              </DropdownMenuItem>
+              {dockMode !== "off" && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => onDockMode("off")}>
+                    <X />
+                    Put the screen away
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {!panelOpen && (
+            <Button variant="secondary" size="sm" className="rounded-full px-3" onClick={onTogglePanel}>
+              <PanelRight className="h-3.5 w-3.5" />
+              Details
+            </Button>
+          )}
+        </div>
       </div>
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
@@ -784,7 +843,7 @@ const RunMessages = memo(function RunMessages({
   onCancel: (runId: string) => void;
   /** Send the same prompt again, as a new run. */
   onRetry: (prompt: string) => void;
-  onOpenComputer: () => void;
+  onOpenComputer: (takeControl?: boolean) => void;
   onChoose: (option: string) => void;
   onSomethingElse: () => void;
 }) {
@@ -955,7 +1014,7 @@ const RunMessages = memo(function RunMessages({
             <>
               <button
                 type="button"
-                onClick={onOpenComputer}
+                onClick={() => onOpenComputer()}
                 className="shrink-0 text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
               >
                 Watch
@@ -1016,7 +1075,7 @@ const RunMessages = memo(function RunMessages({
               </div>
               <button
                 type="button"
-                onClick={onOpenComputer}
+                onClick={() => onOpenComputer(true)}
                 className="inline-flex h-9 items-center gap-2 rounded-full border border-border bg-background/60 py-1 pr-4 pl-1.5 text-[13px] font-medium text-foreground shadow-sm transition-colors hover:border-foreground/25 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none active:scale-[0.98]"
               >
                 <span

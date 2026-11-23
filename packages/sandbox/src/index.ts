@@ -244,6 +244,7 @@ export {
   BOT_USER_MCP_CONFIG,
   type BotCookie,
   BOT_OUTBOX,
+  BOT_SCREEN,
   BOT_WORKSPACE,
   botFileSize,
   botScreenPort,

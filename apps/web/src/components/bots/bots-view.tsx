@@ -3,7 +3,11 @@
 // Bots (spec 31): AI teammates, each with its own ephemeral computer.
 // An inbox of bots on the left (latest message, unread dot), the conversation
 // in the middle, the bot's panel on the right (activity, computer, settings).
-// The computer opens as a big live screen you can take control of.
+// The computer opens as a big live screen you can take control of, or anchored
+// to the right of the chat so you can watch while you type (D-94).
+//
+// Both sides fold away: the inbox collapses to a rail of faces, and the right
+// side holds either the panel or the computer, never both.
 //
 // The inbox is one workspace's team (D-87); the title bar's switcher is how
 // you move between them.
@@ -11,11 +15,26 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Blocks, Loader2, MessageSquare, Pencil, Play, PowerOff, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Blocks,
+  Loader2,
+  MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pencil,
+  Play,
+  PowerOff,
+  Plus,
+  Search,
+  ShieldCheck,
+  Trash2,
+  X,
+} from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
 import { BotChat } from "@/components/bots/bot-chat";
-import { ComputerDialog } from "@/components/bots/bot-computer";
+import { ComputerDialog, ComputerDock, useComputerControl } from "@/components/bots/bot-computer";
 import { BotPanel } from "@/components/bots/bot-panel";
 import { NewBotDialog } from "@/components/bots/new-bot-dialog";
 import { WorkspaceSwitcher } from "@/components/layout/workspace-switcher";
@@ -30,9 +49,22 @@ import {
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ConnectAppsDialog } from "@/components/connectors/connect-apps";
+import { ResizeHandle } from "@/components/ui/resize-handle";
 import { VaultSection } from "@/components/vault/vault-section";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import {
+  BOTS_KEYS,
+  DOCK_DEFAULT_WIDTH,
+  INBOX_DEFAULT_WIDTH,
+  PANEL_DEFAULT_WIDTH,
+  clampDockWidth,
+  clampInboxWidth,
+  clampPanelWidth,
+  dockModeFor,
+  rememberDockMode,
+  type DockMode,
+} from "@/lib/bot-layout";
 import { HANDBACK_PROMPT } from "@/lib/bot-prompts";
 import { cn } from "@/lib/utils";
 import {
@@ -48,9 +80,6 @@ import {
 } from "@/services/bots";
 
 // ---- Per-viewer memory (browser storage: a convenience, never required) -------
-
-const SEEN_KEY = "nexux:bots-seen";
-const PANEL_KEY = "nexux:bots-panel";
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -71,12 +100,12 @@ function writeJson(key: string, value: unknown) {
 
 /** When each bot's latest message was last seen, to show unread dots and the NEW line. */
 function useSeen() {
-  const [seen, setSeen] = useState<Record<string, string>>(() => readJson(SEEN_KEY, {}));
+  const [seen, setSeen] = useState<Record<string, string>>(() => readJson(BOTS_KEYS.seen, {}));
   const markSeen = (botId: string, at: string | null) => {
     if (!at || seen[botId] === at) return;
     const next = { ...seen, [botId]: at };
     setSeen(next);
-    writeJson(SEEN_KEY, next);
+    writeJson(BOTS_KEYS.seen, next);
   };
   return { seen, markSeen };
 }
@@ -94,6 +123,22 @@ export function BotsView() {
   const [vaultOpen, setVaultOpen] = useState(false);
   const [appsOpen, setAppsOpen] = useState(false);
   const [query, setQuery] = useState<string | null>(null);
+  // The inbox folds to a rail of faces, so the chat and the bot's computer get
+  // the whole window when you are watching one bot work.
+  const [inboxOpen, setInboxOpen] = useState(() => readJson(BOTS_KEYS.inbox, true));
+  const [inboxWidth, setInboxWidth] = useState(() =>
+    clampInboxWidth(readJson(BOTS_KEYS.inboxWidth, INBOX_DEFAULT_WIDTH)),
+  );
+  const showInbox = (next: boolean) => {
+    setInboxOpen(next);
+    writeJson(BOTS_KEYS.inbox, next);
+    if (!next) setQuery(null);
+  };
+  // Written back once the drag settles, not on every pointer move.
+  useEffect(() => {
+    const t = setTimeout(() => writeJson(BOTS_KEYS.inboxWidth, inboxWidth), 300);
+    return () => clearTimeout(t);
+  }, [inboxWidth]);
   // Right-click targets: the dialogs live here, one of each, rather than one per row.
   const [renaming, setRenaming] = useState<BotListItem | null>(null);
   const [deleting, setDeleting] = useState<BotListItem | null>(null);
@@ -130,29 +175,66 @@ export function BotsView() {
   return (
     <div className="flex min-h-0 flex-1">
       {/* Inbox */}
-      <aside className="flex w-[280px] shrink-0 flex-col border-r border-border bg-sidebar xl:w-[320px]">
+      <aside
+        style={inboxOpen ? { width: inboxWidth } : undefined}
+        className={cn(
+          "relative flex shrink-0 flex-col border-r border-border bg-sidebar",
+          !inboxOpen && "w-[60px]",
+        )}
+      >
+        {inboxOpen && (
+          <ResizeHandle
+            side="right"
+            label="Resize the inbox"
+            onResize={(x) => setInboxWidth(clampInboxWidth(x))}
+            onReset={() => setInboxWidth(INBOX_DEFAULT_WIDTH)}
+          />
+        )}
         {/* Doubles as the window's title bar in the macOS app: traffic lights
-            on the left, drag anywhere that is not a button. */}
-        <div data-tauri-drag-region className="titlebar-inset-left flex h-14 shrink-0 items-center gap-2 px-3">
-          {query === null ? (
+            on the left, drag anywhere that is not a button. Collapsed, the rail
+            is narrower than the traffic lights, so it starts below them. */}
+        {/* Wraps rather than squashes: at a narrow width — or behind the 88px
+            the traffic lights need in the macOS app — the buttons drop to a
+            second line instead of overlapping each other. */}
+        <div
+          data-tauri-drag-region
+          className={cn(
+            "flex shrink-0 flex-wrap items-center gap-2",
+            inboxOpen
+              ? "titlebar-inset-left min-h-14 px-3 py-2"
+              : "titlebar-inset-top justify-center px-2 py-3",
+          )}
+        >
+          {!inboxOpen ? (
+            <Button
+              size="icon-sm"
+              variant="secondary"
+              className="rounded-full"
+              onClick={() => showInbox(true)}
+              aria-label="Expand the inbox"
+              title="Expand the inbox"
+            >
+              <PanelLeftOpen className="h-3.5 w-3.5" />
+            </Button>
+          ) : query === null ? (
             <>
-              <span data-tauri-drag-region className="flex-1 px-1 text-[14px] font-semibold">
+              <span data-tauri-drag-region className="min-w-0 flex-1 truncate px-1 text-[14px] font-semibold">
                 <span className="titlebar-hide">Bots</span>
               </span>
               {/* The inbox below is this workspace's team (D-87). Switching
                   reloads /bots rather than the dashboard, so the simple view
                   stays the simple view. */}
               <WorkspaceSwitcher variant="compact" returnTo="/bots" />
-              <Button size="icon-sm" variant="secondary" className="rounded-full" onClick={() => setQuery("")} aria-label="Search bots" title="Search">
+              <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setQuery("")} aria-label="Search bots" title="Search">
                 <Search className="h-3.5 w-3.5" />
               </Button>
-              <Button size="icon-sm" variant="secondary" className="rounded-full" onClick={() => setAppsOpen(true)} aria-label="Connect apps" title="Connect apps">
+              <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setAppsOpen(true)} aria-label="Connect apps" title="Connect apps">
                 <Blocks className="h-3.5 w-3.5" />
               </Button>
-              <Button size="icon-sm" variant="secondary" className="rounded-full" onClick={() => setVaultOpen(true)} aria-label="Vault" title="Vault">
+              <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setVaultOpen(true)} aria-label="Vault" title="Vault">
                 <ShieldCheck className="h-3.5 w-3.5" />
               </Button>
-              <Button size="icon-sm" variant="secondary" className="rounded-full" onClick={() => setCreating(true)} aria-label="New bot" title="New bot">
+              <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setCreating(true)} aria-label="New bot" title="New bot">
                 <Plus className="h-4 w-4" />
               </Button>
             </>
@@ -185,6 +267,7 @@ export function BotsView() {
             <InboxRow
               key={b.id}
               bot={b}
+              collapsed={!inboxOpen}
               active={b.id === selected?.id}
               unread={b.id !== selected?.id && (isUnread(b, seen[b.id]) || b.needsInput)}
               onSelect={() => setSelectedId(b.id)}
@@ -192,21 +275,42 @@ export function BotsView() {
               onDelete={() => setDeleting(b)}
             />
           ))}
-          {q && visible?.length === 0 && (
+          {inboxOpen && q && visible?.length === 0 && (
             <p className="px-3 py-6 text-center text-[12px] text-muted-foreground">No bots match “{query}”.</p>
           )}
         </nav>
 
-        <div className="flex h-14 shrink-0 items-center border-t border-border px-3">
+        <div
+          className={cn(
+            "flex h-14 shrink-0 items-center border-t border-border",
+            inboxOpen ? "px-3" : "justify-center px-2",
+          )}
+        >
           {/* The only way out of the simple view — kept small on purpose. */}
           <Link
             href="/"
-            className="flex items-center gap-2 rounded-full px-2 py-1.5 text-[12.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className={cn(
+              "flex items-center gap-2 rounded-full py-1.5 text-[12.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+              inboxOpen ? "px-2" : "px-2.5",
+            )}
             title="Back to the Nexus dashboard"
+            aria-label="Back to the Nexus dashboard"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            Nexus dashboard
+            {inboxOpen && "Nexus dashboard"}
           </Link>
+          {inboxOpen && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="ml-auto rounded-full"
+              onClick={() => showInbox(false)}
+              aria-label="Collapse the inbox"
+              title="Collapse the inbox"
+            >
+              <PanelLeftClose className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </div>
       </aside>
 
@@ -305,6 +409,7 @@ function RenameBotDialog({ bot, onClose }: { bot: BotListItem | null; onClose: (
 
 function InboxRow({
   bot,
+  collapsed,
   active,
   unread,
   onSelect,
@@ -312,6 +417,8 @@ function InboxRow({
   onDelete,
 }: {
   bot: BotListItem;
+  /** The rail: just the face, with its name in the tooltip. */
+  collapsed: boolean;
   active: boolean;
   unread: boolean;
   onSelect: () => void;
@@ -342,21 +449,41 @@ function InboxRow({
           <button
             type="button"
             onClick={onSelect}
+            title={collapsed ? bot.name : undefined}
             className={cn(
-              "group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors",
+              "group flex w-full items-center rounded-xl text-left transition-colors",
+              collapsed ? "justify-center px-0 py-1.5" : "gap-3 px-2.5 py-2",
               active ? "bg-accent" : "hover:bg-accent/50",
             )}
           />
         }
       >
-        <BotAvatar shape={bot.shape} color={bot.color} size={38} sleeping={asleep} looking={active} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13.5px]">{bot.name}</span>
-          <span className={cn("block truncate text-[12px]", working ? "text-sky-400" : "text-muted-foreground")}>
-            {working ? (bot.activity === "starting" ? "Waking up…" : "Working…") : (bot.preview ?? bot.role ?? "No messages yet")}
-          </span>
+        <span className="relative shrink-0">
+          <BotAvatar
+            shape={bot.shape}
+            color={bot.color}
+            size={collapsed ? 34 : 38}
+            sleeping={asleep}
+            looking={active}
+          />
+          {collapsed && unread && (
+            <span
+              className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-sky-500 ring-2 ring-sidebar"
+              aria-label="Unread"
+            />
+          )}
         </span>
-        {unread && <span className="h-2 w-2 shrink-0 rounded-full bg-sky-500" aria-label="Unread" />}
+        {!collapsed && (
+          <>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13.5px]">{bot.name}</span>
+              <span className={cn("block truncate text-[12px]", working ? "text-sky-400" : "text-muted-foreground")}>
+                {working ? (bot.activity === "starting" ? "Waking up…" : "Working…") : (bot.preview ?? bot.role ?? "No messages yet")}
+              </span>
+            </span>
+            {unread && <span className="h-2 w-2 shrink-0 rounded-full bg-sky-500" aria-label="Unread" />}
+          </>
+        )}
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem onClick={onSelect}>
@@ -429,7 +556,22 @@ function BotWorkspace({
   const { toast } = useToast();
   const qc = useQueryClient();
   const feedKey = ["bot-feed", bot.id];
-  const [panelOpen, setPanelOpen] = useState(() => readJson(PANEL_KEY, true));
+  // The screen opens as a dialog unless you anchor it: full height right of
+  // the chat, or under the bot's details in the panel. The choice is per bot
+  // and off by default — only some bots work in a browser — and this component
+  // is keyed by bot id, so the state starts fresh on each one.
+  const [panelOpen, setPanelOpen] = useState(() => readJson(BOTS_KEYS.panel, true));
+  const [dockMode, setDockMode] = useState<DockMode>(() =>
+    dockModeFor(readJson(BOTS_KEYS.dock, {}), bot.id),
+  );
+  const [panelWidth, setPanelWidth] = useState(() =>
+    clampPanelWidth(readJson(BOTS_KEYS.panelWidth, PANEL_DEFAULT_WIDTH)),
+  );
+  const [dockWidth, setDockWidth] = useState(() =>
+    typeof window === "undefined"
+      ? DOCK_DEFAULT_WIDTH
+      : clampDockWidth(readJson(BOTS_KEYS.dockWidth, DOCK_DEFAULT_WIDTH), window.innerWidth),
+  );
   const [computerOpen, setComputerOpen] = useState(false);
   // Frozen when the chat opens, so the NEW line stays put while you read.
   const [seenAtOpen] = useState(seenAt);
@@ -455,11 +597,44 @@ function BotWorkspace({
     ? (feed?.runs.find((r) => r.finishedAt && new Date(r.finishedAt) > new Date(seenAtOpen))?.id ?? null)
     : null;
 
-  const togglePanel = () => {
-    const next = !panelOpen;
+  // Driving the computer is remembered above the screen, so moving it between
+  // the dialog and the dock does not quietly hand it back to the bot.
+  const control = useComputerControl(feed?.session?.id ?? null);
+
+  const showPanel = (next: boolean) => {
     setPanelOpen(next);
-    writeJson(PANEL_KEY, next);
+    writeJson(BOTS_KEYS.panel, next);
   };
+  /** Where the screen lives. Leaving the anchored screen while driving hands
+   *  the computer back, the same as closing it. */
+  const anchorScreen = (mode: DockMode) => {
+    if (dockMode === "right" && mode !== "right" && control.inControl) {
+      control.release();
+      onHandBack();
+    }
+    setDockMode(mode);
+    writeJson(BOTS_KEYS.dock, rememberDockMode(readJson(BOTS_KEYS.dock, {}), bot.id, mode));
+    // Anchoring takes the screen out of the dialog, and the panel is where the
+    // "under the details" one lives, so it has to be open.
+    if (mode !== "off") setComputerOpen(false);
+    if (mode === "right") showPanel(false);
+    if (mode === "panel") showPanel(true);
+  };
+  const togglePanel = () => {
+    // Closing the panel takes its screen with it.
+    if (panelOpen && dockMode === "panel") anchorScreen("off");
+    else showPanel(!panelOpen);
+  };
+
+  // A dragged width is written back once the drag settles, not 60 times a second.
+  useEffect(() => {
+    const t = setTimeout(() => writeJson(BOTS_KEYS.dockWidth, dockWidth), 300);
+    return () => clearTimeout(t);
+  }, [dockWidth]);
+  useEffect(() => {
+    const t = setTimeout(() => writeJson(BOTS_KEYS.panelWidth, panelWidth), 300);
+    return () => clearTimeout(t);
+  }, [panelWidth]);
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: feedKey });
@@ -489,27 +664,63 @@ function BotWorkspace({
         firstUnreadId={firstUnreadId}
         panelOpen={panelOpen}
         onTogglePanel={togglePanel}
-        onOpenComputer={() => setComputerOpen(true)}
+        dockMode={dockMode}
+        onDockMode={(mode) => anchorScreen(dockMode === mode ? "off" : mode)}
+        onOpenComputer={(takeControl) => {
+          // "Take control of the computer" in the chat means exactly that — it
+          // is the step people forget, so the button does it for them.
+          if (takeControl) control.take();
+          // The anchored screen to the right is already the big one.
+          if (dockMode !== "right") setComputerOpen(true);
+        }}
         onChange={refresh}
         team={team}
         onOpenBot={onOpenBot}
       />
-      {panelOpen && (
+      {dockMode === "right" && (
+        <ComputerDock
+          bot={bot}
+          feed={feed}
+          control={control}
+          width={dockWidth}
+          onWidth={setDockWidth}
+          onExpand={() => {
+            // Same screen, bigger frame: control and the session stay as they are.
+            setDockMode("off");
+            writeJson(BOTS_KEYS.dock, rememberDockMode(readJson(BOTS_KEYS.dock, {}), bot.id, "off"));
+            setComputerOpen(true);
+          }}
+          onClose={() => anchorScreen("off")}
+          onHandBack={onHandBack}
+          onStart={() => start.mutate()}
+          onStop={() => stop.mutate()}
+          busy={start.isPending || stop.isPending}
+        />
+      )}
+      {panelOpen && dockMode !== "right" && (
         <div className="absolute inset-y-0 right-0 z-20 flex shadow-2xl xl:static xl:shadow-none">
           <BotPanel
             bot={bot}
             feed={feed}
+            width={panelWidth}
+            onWidth={setPanelWidth}
+            screenAnchored={dockMode === "panel"}
             onClose={togglePanel}
-            onOpenComputer={() => setComputerOpen(true)}
+            onOpenComputer={(takeControl) => {
+              if (takeControl) control.take();
+              setComputerOpen(true);
+            }}
             onDeleted={onDeleted}
           />
         </div>
       )}
       <ComputerDialog
-        open={computerOpen}
+        open={computerOpen && dockMode !== "right"}
         onOpenChange={setComputerOpen}
+        onDock={anchorScreen}
         bot={bot}
         feed={feed}
+        control={control}
         onHandBack={onHandBack}
         onStart={() => start.mutate()}
         onStop={() => stop.mutate()}

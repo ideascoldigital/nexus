@@ -39,6 +39,8 @@ test("a ready session exposes its noVNC page; any other state does not", () => {
   assert.equal(shapeSession(null), null);
   // The password only ever travels inside the URL.
   assert.ok(!("vncPassword" in (ready as object)));
+  // The desktop's own size: the dashboard scales its screen to fit by it.
+  assert.deepEqual(ready?.screen, { width: 1440, height: 900 });
 });
 
 test("logTail keeps the last non-empty lines", () => {
