@@ -266,6 +266,18 @@ test("with Gmail connected, the bot is told to use the gmail tools and when it m
   assert.doesNotMatch(withGmail, /send it from Gmail in your browser/);
 });
 
+test("with Calendar connected, the bot is told to use the calendar tools, check the slot, and never invite on its own", () => {
+  const base = { name: "Isa", needsInputMarker: "NEEDS_INPUT:", timezone: "America/Bogota" };
+  assert.doesNotMatch(renderBotSystemPrompt(base), /# Google Calendar/);
+  const withCal = renderBotSystemPrompt({ ...base, calendar: ["me@example.com"] });
+  assert.match(withCal, /# Google Calendar/);
+  assert.match(withCal, /`me@example\.com`/);
+  assert.match(withCal, /America\/Bogota/);
+  assert.match(withCal, /calendar_freebusy/);
+  assert.match(withCal, /`notify: true`.*only when the user asked for invitations/);
+  assert.match(withCal, /Never add guests the user did not name/);
+});
+
 /** A `docker` on PATH that records its argv and answers from a script. */
 function fakeDocker(behaviour: string): { dir: string; calls: () => string[] } {
   const dir = mkdtempSync(path.join(tmpdir(), "nexux-fake-docker-"));

@@ -24,10 +24,13 @@ import {
   GOOGLE_REVOKE_URL,
   GOOGLE_TOKEN_URL,
   GOOGLE_USERINFO_URL,
+  grantedApps,
   missingScopes,
+  parseApps,
   readable,
   summarize,
   type GmailMessage,
+  type GoogleApp,
   type OutgoingMail,
 } from "@/lib/gmail";
 
@@ -61,7 +64,7 @@ export async function saveGoogleApp(clientId: string, clientSecret: string): Pro
 
 // ---- The round-trip -----------------------------------------------------------
 
-export async function createGoogleState(verifier: string, redirectUri: string): Promise<string> {
+export async function createGoogleState(verifier: string, redirectUri: string, apps: GoogleApp[] = ["gmail"]): Promise<string> {
   await prisma.oAuthState.deleteMany({ where: { provider: PROVIDER, expiresAt: { lt: new Date() } } });
   const state = randomBytes(24).toString("hex");
   await prisma.oAuthState.create({
@@ -69,22 +72,26 @@ export async function createGoogleState(verifier: string, redirectUri: string): 
       state,
       provider: PROVIDER,
       codeVerifier: verifier,
-      metadata: { redirectUri },
+      metadata: { redirectUri, apps },
       expiresAt: new Date(Date.now() + STATE_TTL_MS),
     },
   });
   return state;
 }
 
-/** Single use. Returns the PKCE verifier and the redirect_uri the round-trip started with. */
-export async function consumeGoogleState(state: string): Promise<{ verifier: string; redirectUri: string }> {
+/** Single use. Returns the PKCE verifier, the redirect_uri and the apps the round-trip started with. */
+export async function consumeGoogleState(
+  state: string,
+): Promise<{ verifier: string; redirectUri: string; apps: GoogleApp[] }> {
   const row = await prisma.oAuthState.findUnique({ where: { state } });
   if (!row || row.provider !== PROVIDER) throw new Error("This sign-in link is not valid any more. Start again from Nexus.");
   await prisma.oAuthState.delete({ where: { id: row.id } });
   if (row.expiresAt < new Date()) throw new Error("This sign-in took too long. Start again from Nexus.");
-  const redirectUri = (row.metadata as { redirectUri?: string } | null)?.redirectUri;
+  const meta = row.metadata as { redirectUri?: string; apps?: unknown } | null;
+  const redirectUri = meta?.redirectUri;
   if (!row.codeVerifier || !redirectUri) throw new Error("This sign-in link is incomplete. Start again from Nexus.");
-  return { verifier: row.codeVerifier, redirectUri };
+  // A state from before Calendar carries no apps: it was a Gmail connection.
+  return { verifier: row.codeVerifier, redirectUri, apps: parseApps(meta?.apps) };
 }
 
 type TokenResponse = {
@@ -112,8 +119,24 @@ async function tokenRequest(params: Record<string, string>): Promise<TokenRespon
   return json;
 }
 
-/** Code → tokens → the account, created or reconnected. Returns its email. */
-export async function connectGoogleAccount(code: string, verifier: string, redirectUri: string): Promise<string> {
+const APP_NAMES: Record<GoogleApp, string> = { gmail: "Gmail", calendar: "Google Calendar" };
+
+/** "Gmail and Google Calendar" — for messages. */
+export function appNames(apps: GoogleApp[]): string {
+  return apps.map((a) => APP_NAMES[a]).join(" and ");
+}
+
+/**
+ * Code → tokens → the account, created or reconnected. Returns its email and
+ * every app the new token covers — with incremental consent that includes the
+ * ones granted on an earlier connection.
+ */
+export async function connectGoogleAccount(
+  code: string,
+  verifier: string,
+  redirectUri: string,
+  apps: GoogleApp[] = ["gmail"],
+): Promise<{ email: string; apps: GoogleApp[] }> {
   const app = await getGoogleApp();
   if (!app) throw new Error("The Google OAuth app is not set up in Nexus.");
   const tok = await tokenRequest({
@@ -124,9 +147,10 @@ export async function connectGoogleAccount(code: string, verifier: string, redir
     client_id: app.clientId,
     client_secret: app.clientSecret,
   });
-  const missing = missingScopes(tok.scope);
+  const missing = missingScopes(tok.scope, apps);
   if (missing.length) {
-    throw new Error("Google did not grant access to Gmail. Connect again and leave every Gmail permission ticked.");
+    const names = appNames(apps);
+    throw new Error(`Google did not grant access to ${names}. Connect again and leave every ${names} permission ticked.`);
   }
   if (!tok.refresh_token) throw new Error("Google did not hand back a refresh token. Connect again.");
 
@@ -166,7 +190,7 @@ export async function connectGoogleAccount(code: string, verifier: string, redir
     // Top-level create, so the vault extension seals both tokens.
     await prisma.oAuthToken.create({ data: { accountId: account.id, ...tokenData } });
   }
-  return email;
+  return { email, apps: grantedApps(tok.scope) };
 }
 
 // ---- Accounts -----------------------------------------------------------------
@@ -176,35 +200,55 @@ export type GoogleAccount = {
   email: string;
   status: string;
   botIds: string[] | null;
+  /** The apps its token was granted (spec 36): read off the token's scopes. */
+  apps: GoogleApp[];
   createdAt: string;
 };
 
-function toAccount(a: { id: string; status: string; metadata: unknown; createdAt: Date }): GoogleAccount {
+type AccountRow = {
+  id: string;
+  status: string;
+  metadata: unknown;
+  createdAt: Date;
+  oauthTokens?: { scope: string | null }[];
+};
+
+function toAccount(a: AccountRow): GoogleAccount {
   const ids = (a.metadata as { botIds?: unknown } | null)?.botIds;
   return {
     id: a.id,
     email: accountEmail(a.metadata),
     status: a.status,
     botIds: Array.isArray(ids) && ids.length ? (ids as string[]) : null,
+    apps: grantedApps(a.oauthTokens?.[0]?.scope),
     createdAt: a.createdAt.toISOString(),
   };
 }
 
+// The scope only: tokens stay sealed and unread unless a call needs one.
+const withScope = { oauthTokens: { select: { scope: true }, orderBy: { createdAt: "desc" as const }, take: 1 } };
+
 export async function listGoogleAccounts(): Promise<GoogleAccount[]> {
-  const rows = await prisma.connectedAccount.findMany({ where: { providerType: PROVIDER }, orderBy: { createdAt: "asc" } });
+  const rows = await prisma.connectedAccount.findMany({
+    where: { providerType: PROVIDER },
+    orderBy: { createdAt: "asc" },
+    include: withScope,
+  });
   return rows.map(toAccount);
 }
 
-/** The connected accounts a bot may use. */
-export async function googleAccountsFor(botId: string): Promise<GoogleAccount[]> {
-  return (await listGoogleAccounts()).filter((a) => a.status === "connected" && botMayUseAccount({ botIds: a.botIds }, botId));
+/** The connected accounts a bot may use for one app (Gmail unless said). */
+export async function googleAccountsFor(botId: string, app: GoogleApp = "gmail"): Promise<GoogleAccount[]> {
+  return (await listGoogleAccounts()).filter(
+    (a) => a.status === "connected" && a.apps.includes(app) && botMayUseAccount({ botIds: a.botIds }, botId),
+  );
 }
 
 export async function setGoogleAccountBots(id: string, botIds: string[] | null): Promise<GoogleAccount | null> {
   const row = await prisma.connectedAccount.findFirst({ where: { id, providerType: PROVIDER } });
   if (!row) return null;
   const metadata = { ...((row.metadata as Record<string, unknown> | null) ?? {}), botIds: botIds?.length ? botIds : null };
-  return toAccount(await prisma.connectedAccount.update({ where: { id }, data: { metadata } }));
+  return toAccount(await prisma.connectedAccount.update({ where: { id }, data: { metadata }, include: withScope }));
 }
 
 /** Revoke at Google (best effort) and forget it here. */
@@ -228,19 +272,22 @@ export async function disconnectGoogleAccount(id: string): Promise<boolean> {
 
 // ---- Calls --------------------------------------------------------------------
 
-export class GmailError extends Error {
+/** A Google API call that failed, with the status to answer the bot with. */
+export class GoogleApiError extends Error {
   constructor(message: string, readonly status = 502) {
     super(message);
   }
 }
+/** Gmail's name for it, from before Calendar shared the class. */
+export { GoogleApiError as GmailError };
 
 /** A live access token, refreshed when it is about to expire. */
-async function accessToken(accountId: string): Promise<string> {
+export async function accessToken(accountId: string): Promise<string> {
   const token = await prisma.oAuthToken.findFirst({ where: { accountId }, orderBy: { createdAt: "desc" } });
-  if (!token) throw new GmailError("This Google account is not connected any more. Reconnect it in Nexus → Vault.", 409);
+  if (!token) throw new GoogleApiError("This Google account is not connected any more. Reconnect it in Nexus → Vault.", 409);
   if (token.expiresAt && token.expiresAt.getTime() - EXPIRY_SLACK_MS > Date.now()) return token.accessToken;
   const app = await getGoogleApp();
-  if (!app || !token.refreshToken) throw new GmailError("Reconnect this Google account in Nexus → Vault.", 409);
+  if (!app || !token.refreshToken) throw new GoogleApiError("Reconnect this Google account in Nexus → Vault.", 409);
   try {
     const tok = await tokenRequest({
       grant_type: "refresh_token",
@@ -261,9 +308,9 @@ async function accessToken(accountId: string): Promise<string> {
     // Revoked by the user at Google, or the app's secret changed.
     if ((err as { code?: string }).code === "invalid_grant") {
       await prisma.connectedAccount.update({ where: { id: accountId }, data: { status: "expired" } });
-      throw new GmailError("Google revoked Nexus's access to this account. Reconnect it in Nexus → Vault.", 409);
+      throw new GoogleApiError("Google revoked Nexus's access to this account. Reconnect it in Nexus → Vault.", 409);
     }
-    throw new GmailError(`Could not refresh the Google token: ${err instanceof Error ? err.message : err}`);
+    throw new GoogleApiError(`Could not refresh the Google token: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -277,7 +324,7 @@ async function gmail<T>(accountId: string, path: string, init?: { method?: strin
     body: init?.body ? JSON.stringify(init.body) : undefined,
   });
   const json = (await res.json().catch(() => ({}))) as T & { error?: { message?: string } };
-  if (!res.ok) throw new GmailError(`Gmail: ${json.error?.message ?? `HTTP ${res.status}`}`, res.status === 404 ? 404 : 502);
+  if (!res.ok) throw new GoogleApiError(`Gmail: ${json.error?.message ?? `HTTP ${res.status}`}`, res.status === 404 ? 404 : 502);
   return json;
 }
 

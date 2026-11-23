@@ -3,7 +3,7 @@
 // Connect Apps (spec 35): the catalog of apps bots can use as tools. A list
 // to browse — search, categories, what is connected — and, for one app, how
 // to connect it: the steps to get a token, the fields, which bots may use it.
-// Gmail has its own setup (spec 34) and shows it here.
+// Gmail and Google Calendar have their own setup (specs 34, 36) and show it here.
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -13,6 +13,7 @@ import {
   siBrave,
   siGithub,
   siGmail,
+  siGooglecalendar,
   siHubspot,
   siMongodb,
   siNotion,
@@ -25,7 +26,7 @@ import { Button } from "@/components/ui/button";
 import { BRAND_PATHS } from "@/components/ui/brand-icon";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { GmailAccounts } from "@/components/vault/gmail-accounts";
+import { GoogleAccounts } from "@/components/vault/google-accounts";
 import { BotAccess } from "@/components/vault/vault-item-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { CONNECTOR_CATEGORIES, CONNECTORS, type ConnectorCategory, type ConnectorDef } from "@/lib/connectors";
@@ -35,6 +36,7 @@ import { openExternal } from "@/services/updates";
 
 const ICONS: Record<string, { path: string; hex: string }> = {
   gmail: siGmail,
+  "google-calendar": siGooglecalendar,
   slack: { path: BRAND_PATHS.slack, hex: "4A154B" },
   notion: siNotion,
   airtable: siAirtable,
@@ -211,7 +213,7 @@ function AppDetail({ def, status, onBack }: { def: ConnectorDef; status: Connect
         {status?.connected && <span className="text-[12.5px] font-medium text-emerald-500">Connected</span>}
       </div>
       {def.kind === "native" ? (
-        <GmailAccounts />
+        <GoogleAccounts app={def.id === "google-calendar" ? "calendar" : "gmail"} />
       ) : (
         <McpSetup key={status?.updatedAt ?? "new"} def={def} status={status} onDisconnected={onBack} />
       )}

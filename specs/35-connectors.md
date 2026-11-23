@@ -17,7 +17,7 @@ A catalog of apps (`lib/connectors.ts`), connected once from **Connect apps**
 
 | Kind | Apps |
 |---|---|
-| Built into Nexus | Gmail (spec 34) |
+| Built into Nexus | Gmail (spec 34), Google Calendar (spec 36) |
 | MCP in the bot's computer (`npx`) | Slack, Notion, Airtable, MongoDB, PostgreSQL, Supabase, HubSpot, Brave Search |
 | Remote MCP over HTTP with a token | GitHub, Stripe |
 
@@ -42,7 +42,8 @@ GitHub), and which bots may use it (all by default, like the vault).
 
 ## Not in v1
 
-- Apps whose MCP needs OAuth (Vercel, Linear, Cloudflare, Figma, Google Drive /
-  Calendar): an MCP OAuth client in Nexus, or more scopes on the Google app.
+- Apps whose MCP needs OAuth (Vercel, Linear, Cloudflare, Figma, Google Drive):
+  an MCP OAuth client in Nexus, or more scopes on the Google app (as Calendar
+  did, spec 36).
 - Checking a token works before saving (each app has its own "who am I").
 - The Mac's own apps (Messages, Notes, …): bots run in Linux computers.

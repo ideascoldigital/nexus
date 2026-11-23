@@ -859,6 +859,8 @@ export function renderBotSystemPrompt(bot: {
   vault?: { type: string; name: string; websites?: string[]; username?: string | null; hint?: string | null }[];
   /** Gmail addresses it reaches through the connector (spec 34), not the browser. */
   gmail?: string[];
+  /** Google accounts whose calendars it reaches through the connector (spec 36). */
+  calendar?: string[];
 }): string {
   const parts = [
     `You are "${bot.name}", an AI teammate${bot.role?.trim() ? ` whose job is: ${bot.role.trim()}` : ""}.`,
@@ -933,6 +935,18 @@ export function renderBotSystemPrompt(bot: {
       "- To review an email with the user, use the mail block above (the card). Save straight to Gmail with `gmail_draft` when the user or a routine asks for drafts.",
       "- `gmail_send` sends at once and cannot be undone. Use it only when the user asked for that email to be sent — in this conversation or in a routine's instructions. When in doubt, show the card instead.",
       "- Replies go in the same conversation: pass the `threadId` from `gmail_search`/`gmail_read`, and the subject stays as is (\"Re: …\").",
+    );
+  }
+  if (bot.calendar?.length) {
+    parts.push(
+      "",
+      "# Google Calendar",
+      "",
+      `The user connected Google Calendar for you: ${bot.calendar.map((e) => `\`${e}\``).join(", ")}. Use the \`calendar\` MCP tools — \`calendar_events\` to read the agenda, \`calendar_freebusy\` to find a free slot, \`calendar_create_event\` / \`calendar_update_event\` / \`calendar_delete_event\` to change it — never Google Calendar in the browser.`,
+      `- Times are in the user's timezone (${bot.timezone ?? "the host's"}) unless they say otherwise. Write a time without an offset (2026-11-24T10:00) and it is read in that zone; reading windows (timeMin/timeMax) need the offset.`,
+      "- Before creating or moving an event, check the slot with `calendar_freebusy` or `calendar_events`, and say if it clashes with something.",
+      "- Create, change or delete events when the user asked for it — in this conversation or in a routine's instructions — and say in your reply exactly what you put on the calendar (title, day, time).",
+      "- Guests: adding someone in `attendees` puts the event on their calendar. Set `notify: true` (which emails them the invitation, the change or the cancellation) only when the user asked for invitations to go out. Never add guests the user did not name.",
     );
   }
   parts.push(

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { connectGoogleAccount, consumeGoogleState } from "@/services/google";
+import { appNames, connectGoogleAccount, consumeGoogleState } from "@/services/google";
 
 export const dynamic = "force-dynamic";
 
@@ -21,10 +21,14 @@ export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code");
   if (!state) return page("Something went wrong", "The sign-in came back without its state. Start again from Nexus.", false);
   try {
-    const { verifier, redirectUri } = await consumeGoogleState(state);
+    const { verifier, redirectUri, apps } = await consumeGoogleState(state);
     if (!code) return page("Not connected", "You cancelled on Google's screen. You can close this tab.", false);
-    const email = await connectGoogleAccount(code, verifier, redirectUri);
-    return page("Gmail connected", `${email} is connected to Nexus. You can close this tab and go back to the app.`, true);
+    const account = await connectGoogleAccount(code, verifier, redirectUri, apps);
+    return page(
+      `${appNames(apps)} connected`,
+      `${account.email} is connected to Nexus for ${appNames(account.apps)}. You can close this tab and go back to the app.`,
+      true,
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[google] oauth callback failed:", message);

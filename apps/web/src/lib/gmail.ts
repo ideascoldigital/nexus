@@ -16,13 +16,41 @@ export const GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 export const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
 export const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
-/** Read + drafts + send (compose covers both). No label or delete rights. */
-export const GOOGLE_SCOPES = [
-  "openid",
-  "email",
-  "https://www.googleapis.com/auth/gmail.readonly",
-  "https://www.googleapis.com/auth/gmail.compose",
-];
+/** Which Google apps an account is connected for (spec 34 Gmail, spec 36 Calendar). */
+export type GoogleApp = "gmail" | "calendar";
+export const GOOGLE_APPS: GoogleApp[] = ["gmail", "calendar"];
+
+/** Who the account is — asked on every connection. */
+const IDENTITY_SCOPES = ["openid", "email"];
+
+/** What each app needs. */
+export const APP_SCOPES: Record<GoogleApp, string[]> = {
+  // Read + drafts + send (compose covers both). No label or delete rights.
+  gmail: ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.compose"],
+  // Events read/write on every calendar the user has; readonly adds the
+  // calendar list and free/busy. No calendar settings, sharing or deletion of
+  // calendars themselves.
+  calendar: ["https://www.googleapis.com/auth/calendar.events", "https://www.googleapis.com/auth/calendar.readonly"],
+};
+
+/** Gmail's scopes plus identity — what a plain connection asked for before Calendar. */
+export const GOOGLE_SCOPES = [...IDENTITY_SCOPES, ...APP_SCOPES.gmail];
+
+export function scopesFor(apps: GoogleApp[]): string[] {
+  return [...IDENTITY_SCOPES, ...apps.flatMap((a) => APP_SCOPES[a])];
+}
+
+/** The apps a token's granted scopes cover. */
+export function grantedApps(granted: string | null | undefined): GoogleApp[] {
+  const have = new Set((granted ?? "").split(/\s+/).filter(Boolean));
+  return GOOGLE_APPS.filter((a) => APP_SCOPES[a].every((s) => have.has(s)));
+}
+
+/** A list of apps from untrusted input; unknown names dropped, Gmail when empty. */
+export function parseApps(v: unknown): GoogleApp[] {
+  const list = Array.isArray(v) ? v.filter((x): x is GoogleApp => GOOGLE_APPS.includes(x as GoogleApp)) : [];
+  return list.length ? [...new Set(list)] : ["gmail"];
+}
 
 /** The callback path; Desktop OAuth clients accept any loopback port. */
 export const GOOGLE_CALLBACK_PATH = "/api/google/oauth/callback";
@@ -40,12 +68,17 @@ export function googleAuthUrl(opts: {
   state: string;
   challenge: string;
   loginHint?: string;
+  /** Which apps to ask for. Default Gmail, as before Calendar existed. */
+  apps?: GoogleApp[];
 }): string {
   const url = new URL(GOOGLE_AUTHORIZE_URL);
   url.searchParams.set("client_id", opts.clientId);
   url.searchParams.set("redirect_uri", opts.redirectUri);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", GOOGLE_SCOPES.join(" "));
+  url.searchParams.set("scope", scopesFor(opts.apps ?? ["gmail"]).join(" "));
+  // Incremental consent: adding Calendar to a Gmail account keeps Gmail, and
+  // the new token carries both.
+  url.searchParams.set("include_granted_scopes", "true");
   url.searchParams.set("state", opts.state);
   url.searchParams.set("code_challenge", opts.challenge);
   url.searchParams.set("code_challenge_method", "S256");
@@ -56,10 +89,10 @@ export function googleAuthUrl(opts: {
   return url.toString();
 }
 
-/** Every Gmail scope we need was granted (the consent screen lets the user untick some). */
-export function missingScopes(granted: string | null | undefined): string[] {
+/** The scopes the asked-for apps need that were not granted (the consent screen lets the user untick some). */
+export function missingScopes(granted: string | null | undefined, apps: GoogleApp[] = ["gmail"]): string[] {
   const have = new Set((granted ?? "").split(/\s+/).filter(Boolean));
-  return GOOGLE_SCOPES.filter((s) => s.startsWith("https://") && !have.has(s));
+  return apps.flatMap((a) => APP_SCOPES[a]).filter((s) => !have.has(s));
 }
 
 /** The client id Google shows for a Desktop / Web OAuth client. */

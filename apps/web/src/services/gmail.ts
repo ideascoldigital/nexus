@@ -1,4 +1,4 @@
-// Client fetchers for the Gmail connector (spec 34). Tokens never reach the browser.
+// Client fetchers for the Google connector — Gmail (spec 34) and Calendar (spec 36). Tokens never reach the browser.
 
 import type { GoogleAccount } from "@/services/google";
 
@@ -16,8 +16,9 @@ export const getGoogleApp = () => call<GoogleApp>("/api/google/app");
 export const saveGoogleApp = (clientId: string, clientSecret: string) =>
   call<GoogleApp>("/api/google/app", { method: "PUT", body: JSON.stringify({ clientId, clientSecret }) });
 
-export const startGoogleConnect = (loginHint?: string) =>
-  call<{ url: string }>("/api/google/oauth/start", { method: "POST", body: JSON.stringify({ loginHint }) });
+/** `apps`: which Google apps to ask for (Gmail by default). `loginHint` pre-picks the account. */
+export const startGoogleConnect = (opts: { loginHint?: string; apps?: ("gmail" | "calendar")[] } = {}) =>
+  call<{ url: string }>("/api/google/oauth/start", { method: "POST", body: JSON.stringify(opts) });
 
 export const listGoogleAccounts = () => call<GoogleAccount[]>("/api/google/accounts");
 

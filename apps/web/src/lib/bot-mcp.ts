@@ -10,7 +10,7 @@
 export type BotMcpServers = Record<string, Record<string, unknown>>;
 
 /** Servers Nexus adds itself (the visible-Chromium MCP, the vault); a bot's own list can't replace them. */
-export const RESERVED_MCP_NAMES = ["browser", "vault", "gmail"] as const;
+export const RESERVED_MCP_NAMES = ["browser", "vault", "gmail", "calendar"] as const;
 
 const NAME = /^[A-Za-z0-9_-]{1,40}$/;
 const TYPES = ["stdio", "http", "sse"];

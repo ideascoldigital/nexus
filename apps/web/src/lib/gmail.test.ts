@@ -8,14 +8,18 @@ import {
   botMayUseAccount,
   buildRawMessage,
   encodeHeader,
+  GOOGLE_SCOPES,
   googleAuthUrl,
+  grantedApps,
   htmlToText,
   looksLikeClientId,
   messageText,
   missingScopes,
+  parseApps,
   pkcePair,
   readable,
   replySubject,
+  scopesFor,
   summarize,
   type GmailMessage,
 } from "./gmail";
@@ -45,6 +49,34 @@ test("unticked scopes are noticed", () => {
   assert.deepEqual(missingScopes(null).length, 2);
   assert.equal(looksLikeClientId("123-abc.apps.googleusercontent.com"), true);
   assert.equal(looksLikeClientId("nope"), false);
+});
+
+test("Calendar is asked for on its own, and incrementally keeps what was granted", () => {
+  const url = new URL(googleAuthUrl({ clientId: "1-a.apps.googleusercontent.com", redirectUri: "http://localhost/cb", state: "s", challenge: "c", apps: ["calendar"] }));
+  const scope = url.searchParams.get("scope")!;
+  assert.match(scope, /calendar\.events/);
+  assert.match(scope, /calendar\.readonly/);
+  assert.doesNotMatch(scope, /gmail/, "only what this connection is for");
+  assert.match(scope, /\bemail\b/, "always who the account is");
+  assert.equal(url.searchParams.get("include_granted_scopes"), "true");
+});
+
+test("which apps a token covers is read off its scopes", () => {
+  const gmailOnly = "openid email https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose";
+  assert.deepEqual(grantedApps(gmailOnly), ["gmail"]);
+  const both = `${gmailOnly} https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.readonly`;
+  assert.deepEqual(grantedApps(both), ["gmail", "calendar"]);
+  assert.deepEqual(grantedApps(`${gmailOnly} https://www.googleapis.com/auth/calendar.events`), ["gmail"], "half of Calendar is not Calendar");
+  assert.deepEqual(grantedApps(null), []);
+  assert.deepEqual(missingScopes(gmailOnly, ["calendar"]).length, 2);
+  assert.deepEqual(missingScopes(both, ["gmail", "calendar"]), []);
+});
+
+test("apps from the browser: known names only, Gmail when none", () => {
+  assert.deepEqual(parseApps(["calendar", "calendar", "drive"]), ["calendar"]);
+  assert.deepEqual(parseApps(undefined), ["gmail"]);
+  assert.deepEqual(parseApps("calendar"), ["gmail"]);
+  assert.deepEqual(scopesFor(["gmail"]), GOOGLE_SCOPES);
 });
 
 test("a message is RFC 2822, UTF-8, and no header can be injected", () => {

@@ -275,3 +275,4 @@ export {
   type VaultTypeResult,
 } from "./bot-vault";
 export { BOT_GMAIL_MCP_SCRIPT, botGmailMcpServer, renderGmailMcpScript, writeBotGmailScript } from "./bot-gmail";
+export { BOT_CALENDAR_MCP_SCRIPT, botCalendarMcpServer, renderCalendarMcpScript, writeBotCalendarScript } from "./bot-calendar";

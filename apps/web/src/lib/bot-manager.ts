@@ -19,8 +19,10 @@ import {
   renderBotSystemPrompt,
   runBotPrompt,
   botScreenPort,
+  botCalendarMcpServer,
   botGmailMcpServer,
   botVaultMcpServer,
+  writeBotCalendarScript,
   writeBotGmailScript,
   writeBotVaultScripts,
   writeBotMcpConfig,
@@ -470,14 +472,16 @@ async function drain(sessionId: string): Promise<void> {
       nexusReachable = false;
       console.warn(`[bots] ${session.bot.name}: ${err instanceof Error ? err.message : err}`);
     }
-    // Gmail through the connector (spec 34): only when this computer can reach
-    // Nexus, since every call goes through it.
-    const gmail = nexusReachable
-      ? await googleAccountsFor(session.botId).catch((err) => {
-          console.warn(`[bots] ${session.bot.name}: Gmail accounts not loaded:`, err instanceof Error ? err.message : err);
-          return [];
-        })
-      : [];
+    // Gmail (spec 34) and Calendar (spec 36) through the connector: only when
+    // this computer can reach Nexus, since every call goes through it.
+    const googleFor = (app: "gmail" | "calendar") =>
+      nexusReachable
+        ? googleAccountsFor(session.botId, app).catch((err) => {
+            console.warn(`[bots] ${session.bot.name}: ${app} accounts not loaded:`, err instanceof Error ? err.message : err);
+            return [];
+          })
+        : Promise.resolve([]);
+    const [gmail, calendar] = await Promise.all([googleFor("gmail"), googleFor("calendar")]);
     const systemPrompt = renderBotSystemPrompt({
       name: session.bot.name,
       role: session.bot.role,
@@ -497,6 +501,7 @@ async function drain(sessionId: string): Promise<void> {
         hint: v.hint,
       })),
       gmail: gmail.map((a) => a.email),
+      calendar: calendar.map((a) => a.email),
     });
     const sysHash = promptHash(systemPrompt);
     const resume =
@@ -558,7 +563,7 @@ async function drain(sessionId: string): Promise<void> {
     aborts.set(run.id, abort);
     const log = createRunLog(run.id);
     // Valid only while this prompt runs.
-    const vaultToken = fillable.length || gmail.length ? grantVault({
+    const vaultToken = fillable.length || gmail.length || calendar.length ? grantVault({
           botId: session.botId,
           runId: run.id,
           container: session.containerName,
@@ -576,6 +581,10 @@ async function drain(sessionId: string): Promise<void> {
         if (vaultToken && gmail.length) {
           await writeBotGmailScript(session.containerName, { host: session.dockerHost });
           servers.gmail = botGmailMcpServer({ nexusUrl, botId: session.botId, token: vaultToken });
+        }
+        if (vaultToken && calendar.length) {
+          await writeBotCalendarScript(session.containerName, { host: session.dockerHost });
+          servers.calendar = botCalendarMcpServer({ nexusUrl, botId: session.botId, token: vaultToken });
         }
         const any = Object.keys(servers).length > 0;
         await writeBotMcpConfig(session.containerName, any ? servers : null, {

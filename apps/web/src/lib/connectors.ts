@@ -1,6 +1,7 @@
 // The connectors catalog (spec 35): apps a user connects once and their bots
 // then use as tools — an MCP server Nexus adds to each bot's computer on every
-// prompt, next to the browser. Gmail is the one built into Nexus (spec 34);
+// prompt, next to the browser. Gmail (spec 34) and Google Calendar (spec 36)
+// are built into Nexus;
 // the rest are the apps' own MCP servers, run in the computer (npx) or reached
 // over HTTP, with the token the user pasted. What the user typed is sealed in
 // the Connector row; this file only describes the entries and turns typed
@@ -40,7 +41,7 @@ export type ConnectorDef = {
   category: ConnectorCategory;
   /** One line under the name: what bots can do with it. */
   tagline: string;
-  /** Built into Nexus with its own setup (Gmail), or an MCP server built from the fields. */
+  /** Built into Nexus with its own setup (Gmail, Calendar), or an MCP server built from the fields. */
   kind: "native" | "mcp";
   /** How to get what the fields ask for, step by step. */
   steps?: { text: string; url?: string; label?: string }[];
@@ -56,6 +57,14 @@ export const CONNECTORS: ConnectorDef[] = [
     name: "Gmail",
     category: "Communication",
     tagline: "Search, read, draft and send email",
+    kind: "native",
+    fields: [],
+  },
+  {
+    id: "google-calendar",
+    name: "Google Calendar",
+    category: "Productivity",
+    tagline: "Read the agenda, find free time, schedule and move events",
     kind: "native",
     fields: [],
   },

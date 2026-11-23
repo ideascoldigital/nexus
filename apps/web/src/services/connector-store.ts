@@ -27,7 +27,7 @@ export type ConnectorStatus = {
   values: Record<string, string>;
   /** Which secret fields hold a value. */
   secretsSet: string[];
-  /** Gmail: how many accounts. */
+  /** Gmail, Google Calendar: how many accounts have the app. */
   accounts?: number;
   updatedAt: string | null;
 };
@@ -43,8 +43,11 @@ const storedValues = (config: unknown): Record<string, string> => {
 export async function listConnectors(): Promise<ConnectorStatus[]> {
   const [rows, google] = await Promise.all([prisma.connector.findMany(), listGoogleAccounts()]);
   return CONNECTORS.map((def) => {
-    if (def.id === "gmail") {
-      return { id: def.id, connected: google.length > 0, botIds: null, values: {}, secretsSet: [], accounts: google.length, updatedAt: null };
+    // The Google apps: connected when some account carries the app's scopes.
+    const googleApp = def.id === "gmail" ? "gmail" : def.id === "google-calendar" ? "calendar" : null;
+    if (googleApp) {
+      const n = google.filter((a) => a.status === "connected" && a.apps.includes(googleApp)).length;
+      return { id: def.id, connected: n > 0, botIds: null, values: {}, secretsSet: [], accounts: n, updatedAt: null };
     }
     const row = rows.find((r) => r.id === def.id);
     const shown = row ? publicValues(def, storedValues(row.config)) : { values: {}, secretsSet: [] };

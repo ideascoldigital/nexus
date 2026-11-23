@@ -68,7 +68,7 @@ once; Nexus keeps the token; the bot asks Nexus.
 
 ## Not done
 
-- Calendar, Drive: same app and consent, more scopes — next.
+- Drive: same app and consent, more scopes — next. (Calendar shipped this way: spec 36.)
 - Attachments: listed when reading, not downloadable or sendable yet.
 - HTML email: bots send plain text.
 - The browser's Google sign-in problem itself (a per-bot stable machine
