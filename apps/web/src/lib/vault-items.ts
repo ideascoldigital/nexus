@@ -3,6 +3,7 @@
 // share it. The secret part is sealed in the database and never sent to the
 // browser; `toPublicItem` is the only shape that leaves the server.
 
+import { normalizeDbUri } from "@/lib/db-uri";
 import { z } from "zod";
 
 export const VAULT_TYPES = ["login", "secret", "card", "contact"] as const;
@@ -259,7 +260,8 @@ export function resolveSecretRefs(
       continue;
     }
     const sub = (v: unknown): unknown => {
-      if (typeof v === "string") return v.replace(REF, (_, n: string) => lookup(n)!);
+      // A database URL pasted with its raw password is encoded here (db-uri.ts).
+      if (typeof v === "string") return normalizeDbUri(v.replace(REF, (_, n: string) => lookup(n)!));
       if (Array.isArray(v)) return v.map(sub);
       if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, sub(x)]));
       return v;
