@@ -1,6 +1,6 @@
 {
   "name": "@nexux/native",
-  "version": "0.1.8",
+  "version": "0.4.0",
   "private": true,
   "scripts": {
     "dev": "tauri dev",
