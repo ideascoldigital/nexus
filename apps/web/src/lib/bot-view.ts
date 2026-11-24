@@ -179,6 +179,20 @@ export function botSteps(log: string, max = 12): BotStep[] {
   return steps.slice(-max);
 }
 
+/**
+ * When a bot last did anything the user would notice: its latest message or
+ * reply (sent, started or finished), else when it was created. The bots list
+ * is sorted by it, newest first, like a chat inbox.
+ */
+export function botActiveAt(bot: { createdAt: Date }, last: { createdAt: Date; finishedAt: Date | null } | null): number {
+  return Math.max(bot.createdAt.getTime(), last?.createdAt.getTime() ?? 0, last?.finishedAt?.getTime() ?? 0);
+}
+
+/** Newest activity first; equal ones keep the order they were hired in. */
+export function byRecentActivity<T extends { activeAt: number; createdAt: Date }>(a: T, b: T): number {
+  return b.activeAt - a.activeAt || a.createdAt.getTime() - b.createdAt.getTime();
+}
+
 /** The one-line preview under a bot's name in the list. */
 export function botPreview(
   run: {
