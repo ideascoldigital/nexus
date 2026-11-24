@@ -114,6 +114,20 @@ nexus_millis() {
   esac
 }
 
+# Elapsed milliseconds, never negative. Two things make a raw subtraction go
+# backwards. nexus_millis has a precise path and a whole-second fallback, so a
+# step whose two samples land on different ones takes a truncated end minus a
+# precise start — up to -999ms. And the wall clock both samples read can step
+# backwards on its own, which is what NTP does to a cloud VM. CI reported
+# -713ms for a step that really took ~125ms. A coarse duration is a trade we
+# already accept here; a negative one is a lie about causality.
+nexus_elapsed() {
+  local d
+  d=$(( \${2:-0} - \${1:-0} ))
+  if [ "$d" -lt 0 ]; then d=0; fi
+  echo "$d"
+}
+
 nexus_step_status() {
   # $1 step name, $2 severity (fatal|warn), $3 exit code, $4 duration ms
   mkdir -p ${SANDBOX_ROOT} 2>/dev/null || true
@@ -134,7 +148,7 @@ nexus_step() {
   started=$(nexus_millis)
   "$@" || rc=$?
   ended=$(nexus_millis)
-  nexus_step_status "$name" "$severity" "$rc" "$((ended - started))"
+  nexus_step_status "$name" "$severity" "$rc" "$(nexus_elapsed "$started" "$ended")"
   return 0
 }
 
@@ -151,7 +165,7 @@ nexus_step_run() {
   if [ "$rc" -ne 0 ] && [ -n "$on_fail" ]; then
     eval "$on_fail"
   fi
-  nexus_step_status "$name" "$severity" "$rc" "$((ended - started))"
+  nexus_step_status "$name" "$severity" "$rc" "$(nexus_elapsed "$started" "$ended")"
   return 0
 }
 # ------------------------------------------------------------------------`;

@@ -167,6 +167,8 @@ repository to be public. To try a build without releasing, run **Release native
 app** by hand from the Actions tab: it uploads the bundles as workflow artifacts
 (14 days) and publishes nothing.
 
+The full walkthrough, with a pipeline diagram, is in [docs/RELEASING.md](docs/RELEASING.md).
+
 ## Docs
 
 - [AGENTS.md](AGENTS.md) — agent guide (rules, commands, conventions)
@@ -174,6 +176,7 @@ app** by hand from the Actions tab: it uploads the bundles as workflow artifacts
 - [docs/PROGRESS.md](docs/PROGRESS.md) — state & timeline
 - [docs/DECISIONS.md](docs/DECISIONS.md) — decision log
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — running it on a 24/7 host (read the security notes first)
+- [docs/RELEASING.md](docs/RELEASING.md) — cutting a release (tag → draft → publish → Homebrew, with a diagram)
 - `specs/` — design specs (sandbox provisioning, embeddings, harness, OpenCode brain, bots, vault, connectors, …)
 
 ## Security

@@ -13,6 +13,7 @@ import {
   botRunArgs,
   botVncUrl,
   buildBotClaudeCommand,
+  dockerRun,
   ensureBotImage,
   parsePublishedPort,
   runBotPrompt,
@@ -309,6 +310,18 @@ async function withFakeDocker<T>(behaviour: string, fn: (calls: () => string[]) 
     process.env.PATH = realPath;
   }
 }
+
+test("docker exiting before it reads stdin is an exit code, not a crash", async () => {
+  // ensureBotImage pipes the Dockerfile in on stdin, so a docker that fails
+  // fast — or our own SIGKILL on timeout — leaves nobody reading it. A payload
+  // past the pipe buffer makes the EPIPE certain instead of a race, which is
+  // how it reached CI: an uncaughtException in these very tests, not a
+  // rejected promise.
+  const r = await withFakeDocker("exit 125", () =>
+    dockerRun(null, ["build", "-f", "-", "."], { stdin: "x".repeat(1_000_000) }),
+  );
+  assert.equal(r.code, 125);
+});
 
 test("the image is built with --load, and a build that never lands is caught", async () => {
   // A docker-container buildx builder keeps the result in the build cache and

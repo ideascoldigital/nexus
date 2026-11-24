@@ -47,7 +47,7 @@ Run a single package's tests: `pnpm --filter @nexux/<pkg> test`.
 | `packages/storage` | FS adapter + `.claude` context builder | [ARCHITECTURE.md](packages/storage/ARCHITECTURE.md) |
 | `packages/terminal` | Human WS terminal (node-pty, SSH) | [ARCHITECTURE.md](packages/terminal/ARCHITECTURE.md) |
 | `specs/` | Numbered design specs (source of truth for in-flight work) | — |
-| `docs/` | Central architecture, progress, decisions | — |
+| `docs/` | Central architecture, progress, decisions, releasing | — |
 
 ## Conventions
 
