@@ -8,12 +8,56 @@
   <strong>Local-first AI dev orchestrator.</strong><br/>
   Define projects, queue features on a board, and let coding agents implement them on
   disposable sandboxes — cloud or Docker — with PRs, live previews and Telegram/Slack
-  control. No cloud account required to start.
+  control. Or hand everyday work to bots: AI teammates with a job and a computer of
+  their own. No cloud account required to start.
 </p>
 
 ---
 
+## Install
+
+**macOS (Apple Silicon)** — with Homebrew:
+
+```bash
+brew tap ideascoldigital/tap
+brew trust ideascoldigital/tap
+brew install --cask ideascoldigital/tap/nexus
+```
+
+Keep `--cask` and the full name: `brew install nexus` installs an unrelated
+formula from homebrew/core.
+
+**Windows and Linux** (and macOS without Homebrew) — download the latest build
+from [Releases](https://github.com/ideascoldigital/nexus/releases/latest):
+`Nexus_<version>_x64-setup.exe` or `.msi` for Windows, `.AppImage`, `.deb` or
+`.rpm` for Linux, `Nexus_<version>_aarch64.dmg` for macOS. The macOS bundle is
+ad-hoc signed and not notarized; the cask clears the quarantine flag for you,
+and after a manual install `xattr -dr com.apple.quarantine /Applications/Nexus.app`
+does the same.
+
+**Updates install themselves.** A release build checks GitHub a minute after
+launch and every six hours, downloads and installs a newer release in the
+background, and shows *Nexus vX is installed — Restart*; nothing restarts until
+you click it, so a bot is never cut off mid-task. On Windows the installer takes
+over and reopens the app; on Linux this covers the AppImage (a `.deb` or `.rpm`
+install updates by installing the new package). To turn it off, give the app `NEXUX_AUTO_UPDATE=0` — an app
+opened from the Finder does not see your shell's variables, so on macOS use
+`launchctl setenv NEXUX_AUTO_UPDATE 0` and reopen it. `brew upgrade --cask nexus`
+works too.
+
+**A 24/7 server** — run the image `ghcr.io/ideascoldigital/nexus` on a VM; see
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Or build from source: [Quick start](#quick-start).
+
 ## What it does
+
+**Bots — AI teammates with a computer of their own**
+
+- **A team, each with a job** — a simple `/bots` view, away from the dashboard: ask a bot for something in a chat and it works on **its own Linux desktop with Chromium**, a Docker container (local or on a remote Docker endpoint) that you watch live — in a dialog, beside the chat, or under its details — and can take over to type a password yourself.
+- **Teamwork** — bots hand parts of a task to the teammate whose job it is, share a workspace folder you see on your Mac, and share browser sign-ins (except Google, which refuses shared sessions).
+- **Routines** — a bot takes on recurring work on a cron schedule in your time zone, created from the chat.
+- **In the chat** — attachments (paperclip, drag and drop, paste a screenshot), choice buttons when it needs a decision, email cards you edit and send, images and files it hands back.
+- **Vault** — passwords, API keys and notes **sealed at rest** (AES-256-GCM, the key in the macOS Keychain or a `vault.key` file on Linux hosts); bots fill a login form from the vault without ever reading the secret, and only the bots you choose may use each entry.
+- **Connect Apps** — apps connected once, used by every bot you allow: **Gmail** and **Google Calendar** built in (through your own Google OAuth app — bots search, draft and send mail, read the agenda, find free time and schedule; tokens never leave Nexus), plus Slack, Notion, Airtable, MongoDB, PostgreSQL, Supabase, HubSpot, Brave Search, GitHub and Stripe as MCP servers.
 
 **Projects & planning**
 
@@ -59,7 +103,7 @@
 
 **Desktop & 24/7 deployment**
 
-- **Native app** — Tauri v2 shell for macOS, Windows and Linux bundling the dashboard as a Node sidecar, with version statusbar and **one-click self-update**.
+- **Native app** — Tauri v2 shell for macOS, Windows and Linux bundling the dashboard as a Node sidecar, with a version statusbar and **automatic updates**: new releases download and install in the background, then wait for you to restart (see [Install](#install)).
 - **Nexus hosts** — run the server image (`ghcr.io/ideascoldigital/nexus`) on a VM via docker-compose, ideally bound to a **Tailscale address** (the dashboard has no auth — see [SECURITY.md](SECURITY.md)); hosts report their build, self-update from the UI, and reclaim their own disk. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Repo layout
@@ -69,7 +113,7 @@
 | `apps/web` | Next.js 16 dashboard (App Router, Tailwind, Base UI) — all product surfaces |
 | `apps/native` | Tauri v2 desktop shell bundling the dashboard as a Node sidecar |
 | `packages/db` | Prisma 7 + SQLite (better-sqlite3) — local database |
-| `packages/sandbox` | Sandbox provisioning: Terraform templates, cloud-init bootstrap, Docker/SSH exec, Claude/OpenCode runners |
+| `packages/sandbox` | Sandbox provisioning (Terraform templates, cloud-init bootstrap, Docker/SSH exec, Claude/OpenCode runners) and bots' computers |
 | `packages/harness` | Local docker-compose generation & stack runner |
 | `packages/embeddings` | LanceDB + Ollama (nomic-embed-text) semantic index |
 | `packages/terminal` | node-pty WebSocket terminal server |
@@ -83,13 +127,19 @@ pnpm db:migrate
 pnpm dev          # dashboard on http://localhost:3333
 ```
 
-Desktop: `pnpm dev:native` (dev) · `pnpm build:native` (bundle).
+Desktop: `pnpm dev:native` (dev) · `pnpm build:native` (bundle into
+`apps/native/src-tauri/target/release/bundle/`).
 
-**Requires** Node ≥ 20, pnpm ≥ 10.
+**Requires** Node 20–24 (an LTS line; Node 25's experimental `localStorage`
+breaks `next build`'s prerender), pnpm ≥ 10, and a Rust toolchain for the
+desktop app. The bundle ships the `node` that built it, so build with the Node
+you want the app to run on. A bundle built from a checkout **does not update
+itself** — only release builds from CI do; otherwise it would replace your build
+with an older published release.
 
 | Optional dependency | Enables |
 |---|---|
-| Docker | Local sandboxes, stack runner, DinD services |
+| Docker | Local sandboxes, stack runner, DinD services, bots' computers |
 | Ollama (`nomic-embed-text`) | Semantic search & agent context |
 | Terraform | Civo/AWS cloud sandboxes |
 | Claude Code token (`claude setup-token`) | Agent runs on sandboxes |
@@ -97,9 +147,27 @@ Desktop: `pnpm dev:native` (dev) · `pnpm build:native` (bundle).
 | Telegram bot token | Notifications & remote control |
 | Slack bot (+ app) token | Notifications & thread-reply follow-ups |
 | ClickUp OAuth app | Task imports |
+| Google OAuth app (Desktop client, Gmail + Calendar APIs) | Gmail and Google Calendar for bots |
 | OpenAI API key | Assistants (stack, features, recommendations) |
 
 Tokens and provider credentials are managed in **Settings** (stored locally in SQLite, masked in the UI, never committed); each project picks its credentials in the sandbox wizard.
+
+## Releasing
+
+Push a tag: `git tag v0.3.6 && git push origin v0.3.6`. `release-native.yml`
+syncs every manifest's version from the tag, builds macOS (arm64), Linux and
+Windows, and attaches the bundles to a **draft** release; `release-image.yml`
+publishes the server image. **Publishing the draft is the release**: installed
+apps pick it up on their next check, and `bump-homebrew.yml` points the
+[Homebrew cask](https://github.com/ideascoldigital/homebrew-tap) at it.
+Prereleases are skipped by both.
+
+The auto-update and the cask download releases anonymously, so they need the
+repository to be public. To try a build without releasing, run **Release native
+app** by hand from the Actions tab: it uploads the bundles as workflow artifacts
+(14 days) and publishes nothing.
+
+The full walkthrough, with a pipeline diagram, is in [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Docs
 
@@ -109,7 +177,7 @@ Tokens and provider credentials are managed in **Settings** (stored locally in S
 - [docs/DECISIONS.md](docs/DECISIONS.md) — decision log
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — running it on a 24/7 host (read the security notes first)
 - [docs/RELEASING.md](docs/RELEASING.md) — cutting a release (tag → draft → publish → Homebrew, with a diagram)
-- `specs/` — design specs (sandbox provisioning, embeddings, harness, OpenCode brain, …)
+- `specs/` — design specs (sandbox provisioning, embeddings, harness, OpenCode brain, bots, vault, connectors, …)
 
 ## Security
 
