@@ -208,6 +208,18 @@ test("nested stepChain calls report their own durations", { skip: !bashAvailable
   );
 });
 
+test("a duration is never negative, whichever granularity the samples got", { skip: !bashAvailable }, () => {
+  // nexus_millis has a precise path and a whole-second fallback, and a step
+  // whose two samples land on different ones takes a truncated end minus a
+  // precise start. A wall clock stepped backwards by NTP does the same thing.
+  // Either way CI reported -713ms for a step that took ~125ms: finished before
+  // it began. Coarse is a known trade here; negative is not a duration at all.
+  const { stdout } = runHelpers(
+    "nexus_elapsed 1000 1125\nnexus_elapsed 1795485275713 1795485275000\nnexus_elapsed",
+  );
+  assert.deepEqual(stdout.trim().split("\n"), ["125", "0", "0"]);
+});
+
 test("a command with quotes survives stepChain", { skip: !bashAvailable }, () => {
   const { stdout, report } = runHelpers(
     stepChain(
