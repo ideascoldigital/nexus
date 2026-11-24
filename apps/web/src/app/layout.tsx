@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import Script from "next/script";
 import { NativeMenuGuard } from "@/components/layout/native-menu-guard";
 import { UpdateReadyNotice } from "@/components/layout/update-ready-notice";
@@ -9,18 +9,26 @@ import { Toaster } from "@/components/ui/toaster";
 import { APPEARANCE_BOOT_SCRIPT } from "@/lib/appearance";
 import "./globals.css";
 
-// Inter for display/UI, JetBrains Mono for labels, code and terminal.
-const inter = Inter({
+// Inter for display/UI, JetBrains Mono for labels, code and terminal — the
+// latin variable cuts, which cover 400-700 in one file each.
+//
+// Served from this repo, not `next/font/google`: that fetched them from
+// fonts.googleapis.com during `next build`, so a hiccup there failed the whole
+// build — and it did, inside Docker, where the font loader's own parse of the
+// reply threw `Cannot read properties of null` (release-image.yml run
+// 45294050740). The build has no business depending on a third party at all.
+// Updating a font means replacing its woff2; OFL texts sit beside them.
+const inter = localFont({
+  src: "./fonts/inter-latin-variable.woff2",
   variable: "--font-sans",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: "400 700",
   display: "swap",
 });
 
-const jetbrainsMono = JetBrains_Mono({
+const jetbrainsMono = localFont({
+  src: "./fonts/jetbrains-mono-latin-variable.woff2",
   variable: "--font-mono",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: "400 700",
   display: "swap",
 });
 
