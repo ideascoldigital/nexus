@@ -62,6 +62,15 @@ export function run(
       });
     });
 
+    // docker can exit before it reads its stdin: a fast failure, a flag it
+    // rejects outright, or our own SIGKILL on timeout. The write then lands on
+    // a closed pipe, and EPIPE on a stream with no error listener is an
+    // uncaught exception rather than this promise settling. The exit code is
+    // the real answer there, so let `close` speak and surface only other
+    // write failures.
+    child.stdin.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code !== "EPIPE") reject(err);
+    });
     if (opts.stdin !== undefined) {
       child.stdin.write(opts.stdin);
     }

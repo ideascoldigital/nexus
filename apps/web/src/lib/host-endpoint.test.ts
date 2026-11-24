@@ -12,6 +12,7 @@ import {
   parseTailscaleDnsName,
   provisionEndpointHost,
   renderEndpointEnv,
+  runDocker,
   syncUpdaterConfig,
   type DockerRunner,
   type EndpointHostSpec,
@@ -37,6 +38,23 @@ const spec = (over: Partial<EndpointHostSpec> = {}): EndpointHostSpec => ({
   registry: null,
   pullEmbeddingModel: false,
   ...over,
+});
+
+test("runDocker: docker exiting before it reads stdin is an exit code, not a crash", async () => {
+  // This one runs inside the Next server, where an uncaught EPIPE from a
+  // compose file written to stdin takes the dashboard down with it. A payload
+  // past the pipe buffer makes the failed write certain rather than a race.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "nexux-fake-docker-"));
+  fs.writeFileSync(path.join(dir, "docker"), "#!/bin/sh\nexit 9\n", { mode: 0o755 });
+  const realPath = process.env.PATH;
+  process.env.PATH = `${dir}:${realPath}`;
+  try {
+    const r = await runDocker(["compose", "-f", "-", "up"], { input: "x".repeat(1_000_000) });
+    assert.equal(r.code, 9);
+  } finally {
+    process.env.PATH = realPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 /**

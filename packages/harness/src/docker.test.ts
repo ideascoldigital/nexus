@@ -29,6 +29,14 @@ test("run without stdin closes the child's stdin (cat exits)", async () => {
   assert.equal(r.exitCode, 0);
 });
 
+test("a child that exits before reading stdin yields its code, not a crash", async () => {
+  // Nobody drains the pipe and the payload is past its buffer, so the write
+  // cannot finish and fails with EPIPE. With no error listener on stdin that
+  // was an uncaught exception — the process died instead of this resolving.
+  const r = await run("sh", ["-c", "exit 3"], { stdin: "x".repeat(1_000_000) });
+  assert.equal(r.exitCode, 3);
+});
+
 test("run kills on timeout with exitCode 124", async () => {
   const r = await run("sh", ["-c", "sleep 10"], { timeoutMs: 200 });
   assert.equal(r.exitCode, 124);
