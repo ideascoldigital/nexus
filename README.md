@@ -108,6 +108,7 @@ Tokens and provider credentials are managed in **Settings** (stored locally in S
 - [docs/PROGRESS.md](docs/PROGRESS.md) — state & timeline
 - [docs/DECISIONS.md](docs/DECISIONS.md) — decision log
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — running it on a 24/7 host (read the security notes first)
+- [docs/RELEASING.md](docs/RELEASING.md) — cutting a release (tag → draft → publish → Homebrew, with a diagram)
 - `specs/` — design specs (sandbox provisioning, embeddings, harness, OpenCode brain, …)
 
 ## Security
