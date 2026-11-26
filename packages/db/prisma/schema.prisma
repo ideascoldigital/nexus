@@ -1204,6 +1204,11 @@ model Bot {
   claudeCredentialId String? // saved "claude" credential to run on; null = the first one (resolveClaudeCodeToken)
   idleMinutes        Int       @default(30) // the computer is deleted after this long without a prompt
   mcpServers         Json? // its own MCP servers, Claude Code's native mcpServers shape — loaded next to the browser MCP
+  // When the user last cleared this conversation's context (spec 37). Claude's
+  // memory lives in the container, so clearing it is two things: the session's
+  // claudeSessionId is dropped (the next prompt starts a fresh Claude) and
+  // nothing said before this moment is replayed to it.
+  contextClearedAt   DateTime?
   // Which Docker daemon its computers run on (spec 26, D-85). Null = this
   // machine's docker context, which is where every bot ran before endpoints
   // reached them. A remote endpoint means its workspace and its sign-ins live

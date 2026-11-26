@@ -26,9 +26,11 @@ import {
   Globe,
   Hand,
   Loader2,
+  Brain,
   Mail,
   Maximize2,
   MonitorPlay,
+  MoreHorizontal,
   PanelBottom,
   PanelRight,
   Paperclip,
@@ -36,6 +38,7 @@ import {
   Search,
   Square,
   SquareTerminal,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -57,6 +60,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ImageLightbox, MarkdownReport } from "@/components/ui/markdown-report";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -71,6 +75,7 @@ import { findTeammate, handoffRun, replyRun } from "@/lib/bot-handoffs";
 import { mailRun, parseMailState } from "@/lib/bot-mail";
 import { type DockMode } from "@/lib/bot-layout";
 import { isHandback, isIntro } from "@/lib/bot-prompts";
+import { restartedRun } from "@/lib/bot-restart";
 import { textOn } from "@/lib/bot-shapes";
 import { routineRun, splitReply } from "@/lib/bot-routines";
 
@@ -80,6 +85,9 @@ import { cn } from "@/lib/utils";
 import { openExternal } from "@/services/updates";
 import {
   cancelBotRun,
+  clearBotContext,
+  deleteBotConversation,
+  restartBotComputer,
   sendBotPrompt,
   uploadBotFile,
   type BotFeed,
@@ -152,6 +160,33 @@ export function BotChat({
     mutationFn: (runId: string) => cancelBotRun(bot.id, runId),
     onSuccess: onChange,
   });
+  const failed = (title: string) => (err: unknown) =>
+    toast({ title, description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+  // The three ways to start over (spec 37), kept together in one menu because
+  // picking the wrong one is the real risk: forget the conversation, swap the
+  // computer, or delete the conversation.
+  const clearMemory = useMutation({
+    mutationFn: () => clearBotContext(bot.id),
+    onSuccess: () => {
+      onChange();
+      toast({ title: `${bot.name} starts fresh from here`, description: "Its computer is untouched." });
+    },
+    onError: failed("Could not clear the memory"),
+  });
+  const restart = useMutation({
+    mutationFn: () => restartBotComputer(bot.id),
+    onSuccess: () => {
+      onChange();
+      toast({ title: "Starting a new computer", description: `${bot.name} keeps the conversation.` });
+    },
+    onError: failed("Could not restart the computer"),
+  });
+  const removeChat = useMutation({
+    mutationFn: () => deleteBotConversation(bot.id),
+    onSuccess: onChange,
+    onError: failed("Could not delete the conversation"),
+  });
+  const [confirm, setConfirm] = useState<"restart" | "delete" | null>(null);
 
   const runs = feed?.runs ?? [];
   // Teammates' replies to this bot's handoffs, grouped under the run that sent them.
@@ -167,6 +202,7 @@ export function BotChat({
     (r) => r.status === "queued" || r.status === "running",
   );
   const last = runs.at(-1);
+  const cleared = bot.contextClearedAt ? new Date(bot.contextClearedAt) : null;
 
   // Stay pinned to the newest message.
   useEffect(() => {
@@ -285,6 +321,50 @@ export function BotChat({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="secondary"
+                  size="icon-sm"
+                  className="rounded-full"
+                  title="Start over"
+                  aria-label="Start over"
+                />
+              }
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuItem disabled={clearMemory.isPending} onClick={() => clearMemory.mutate()}>
+                <Brain />
+                <span className="flex-1">
+                  Clear the memory
+                  <span className="block text-[11px] text-muted-foreground">
+                    It forgets this conversation; the messages stay
+                  </span>
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={restart.isPending} onClick={() => setConfirm("restart")}>
+                <RotateCcw />
+                <span className="flex-1">
+                  Restart the computer
+                  <span className="block text-[11px] text-muted-foreground">
+                    A fresh machine; it keeps the conversation
+                  </span>
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                disabled={removeChat.isPending}
+                onClick={() => setConfirm("delete")}
+                className="text-destructive"
+              >
+                <Trash2 />
+                Delete the conversation
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {!panelOpen && (
             <Button variant="secondary" size="sm" className="rounded-full px-3" onClick={onTogglePanel}>
               <PanelRight className="h-3.5 w-3.5" />
@@ -309,6 +389,12 @@ export function BotChat({
           )}
           {runs.map((r, i) => {
             const prev = runs[i - 1];
+            // Where the bot's memory of this chat begins (spec 37). The
+            // messages above it are the user's record, not the bot's context.
+            const clearedHere =
+              cleared !== null &&
+              new Date(r.createdAt) >= cleared &&
+              (!prev || new Date(prev.createdAt) < cleared);
             const newGap =
               !prev ||
               new Date(r.createdAt).getTime() -
@@ -336,7 +422,8 @@ export function BotChat({
                     <span className="h-px flex-1 bg-rose-400/40" />
                   </div>
                 )}
-                {newSession && (
+                {clearedHere && <MemoryCleared />}
+                {newSession && !clearedHere && (
                   <p className="py-1 text-center text-[11.5px] text-muted-foreground">
                     <MonitorPlay className="mr-1 inline h-3 w-3 align-[-2px]" />
                     New computer · fresh memory
@@ -367,6 +454,8 @@ export function BotChat({
               </Fragment>
             );
           })}
+          {/* Cleared and nothing said since: the line belongs at the end. */}
+          {cleared !== null && last && new Date(last.createdAt) < cleared && <MemoryCleared />}
         </div>
       </div>
 
@@ -443,7 +532,37 @@ export function BotChat({
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        open={confirm === "restart"}
+        onOpenChange={(o) => !o && setConfirm(null)}
+        title={`Restart ${bot.name}'s computer?`}
+        description="Its current computer is deleted and a fresh one starts. The conversation stays, and so do its files in the shared workspace and its sign-ins — anything else on the machine is lost, and work in progress stops."
+        confirmLabel="Restart the computer"
+        onConfirm={() => restart.mutate()}
+      />
+      <ConfirmDialog
+        open={confirm === "delete"}
+        onOpenChange={(o) => !o && setConfirm(null)}
+        title={`Delete the conversation with ${bot.name}?`}
+        description="Every message and the files it handed over here go for good, and the bot forgets them. Its routines, its sign-ins and the shared workspace stay."
+        confirmLabel="Delete the conversation"
+        onConfirm={() => removeChat.mutate()}
+      />
     </section>
+  );
+}
+
+/**
+ * Where the bot's memory of this conversation starts (spec 37). It reads like
+ * the "new computer" line on purpose: both mark a point the bot cannot see
+ * past, and the messages above stay because they are the user's record.
+ */
+function MemoryCleared() {
+  return (
+    <p className="py-1 text-center text-[11.5px] text-muted-foreground">
+      <Brain className="mr-1 inline h-3 w-3 align-[-2px]" />
+      Memory cleared · the bot starts fresh here
+    </p>
   );
 }
 
@@ -880,6 +999,7 @@ const RunMessages = memo(function RunMessages({
   });
   const choices = reply?.choices ?? null;
   const routine = routineRun(run.prompt);
+  const restarted = restartedRun(run.prompt);
   const incoming = handoffRun(run.prompt);
   const sender = incoming
     ? (team.find((b) => b.id === incoming.fromId) ?? null)
@@ -888,7 +1008,8 @@ const RunMessages = memo(function RunMessages({
   const sending = mailRun(run.prompt);
   // The app sent it, not you (an intro, a routine, a teammate's answer coming
   // back, an email you approved on its card).
-  const quiet = isIntro(run.prompt) || routine !== null || answerBack !== null || sending !== null;
+  const quiet =
+    isIntro(run.prompt) || routine !== null || restarted !== null || answerBack !== null || sending !== null;
   const { text: ownText, attachments: attached } = splitAttachments(run.prompt);
   const mailState = parseMailState(run.mailState);
   const mails = reply?.mails.map((m, i) => (
@@ -933,6 +1054,12 @@ const RunMessages = memo(function RunMessages({
         <p className="flex items-center justify-center gap-1.5 py-1 text-[11.5px] text-muted-foreground">
           <Mail className="h-3 w-3" />
           {sending.mode === "send" ? "You sent" : "You saved as a draft"} “{sending.mail.subject || sending.mail.to}”
+        </p>
+      ) : restarted ? (
+        <p className="flex items-center justify-center gap-1.5 py-1 text-[11.5px] text-muted-foreground">
+          <RotateCcw className="h-3 w-3" />
+          {bot.name} restarted its computer
+          {restarted.reason ? ` ${restarted.reason}` : ""}
         </p>
       ) : routine ? (
         <p className="flex items-center justify-center gap-1.5 py-1 text-[11.5px] text-muted-foreground">

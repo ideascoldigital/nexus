@@ -2,7 +2,7 @@
 
 Live project state. Update when closing each significant PR/session: move items between sections and add a line to the timeline. Detail of long sessions → `specs/` (like `15-roadmap-definicion-features.md`).
 
-_Last updated: 2026-11-23._
+_Last updated: 2026-11-25._
 
 ## Status by module
 
@@ -23,6 +23,7 @@ _Last updated: 2026-11-23._
 
 ## Milestones (timeline by PR)
 
+- **2026-11-25** — Starting over with a bot (spec 37, D-98): **Clear the memory** (it forgets the conversation; the messages and the computer stay, with a divider where its memory now begins), **Delete the conversation**, and **Restart the computer** — a fresh machine that keeps the chat and moves queued prompts over, from the chat's menu, from the screen's header, or asked for by the bot itself with a ```restart``` block. MCP servers that authenticate with OAuth can now be signed into: **Sign in** runs `claude mcp login` in a terminal on the bot's own desktop, the consent page opens in its Chromium, and `/home/bot/.claude` is mounted per bot so the token outlives the computer. The panel's Tools section shows what each server says (connected / needs a sign-in / failed). Runs now pass `--strict-mcp-config`. 11 tests.
 - **2026-11-23** — The bot's screen can be anchored instead of only opening as a dialog (D-94): full height to the right of the chat, or under the bot's details in the panel, picked from the dialog's header or the chat's Screen menu. Where it sits is remembered per bot and off by default; the dock, the details panel and the inbox all resize by dragging their edge (one `ResizeHandle`), and the inbox also collapses to a rail of faces. The screen is scaled to whatever box holds it, so it no longer crops. A stray click on a watched screen answers with a hint that fades and a double-click asks before the mouse changes hands; "Take control of the computer" in the chat hands control over instead of only opening the screen. 8 tests.
 - **2026-11-22** — Connect Apps (spec 35, D-92): a catalog of apps bots use as tools — Gmail plus Slack, Notion, Airtable, GitHub, MongoDB, PostgreSQL, Supabase, HubSpot, Stripe and Brave Search — connected once (token sealed in `Connector`), offered to all or some bots, and added to their computer as MCP servers on every prompt. Read-only by default for databases and GitHub. In the bots view (blocks button) and Settings → Connect apps; Gmail moved there from the Vault. 6 tests.
 - **2026-11-23** — Google Calendar for bots (spec 36, D-95). Connect apps → Google Calendar connects an account (or adds Calendar to a Gmail one with one more consent); bots get a `calendar` MCP server to read the agenda, find free time, and create, move and cancel events, with guests emailed only when the user asked for invitations.

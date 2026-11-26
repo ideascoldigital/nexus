@@ -31,7 +31,8 @@ import {
 } from "@nexux/sandbox";
 import { detectNeedsInput, NEEDS_INPUT_MARKER } from "@/lib/agent-core";
 import { parseChoices } from "@/lib/bot-choices";
-import { collectBotFiles } from "@/lib/bot-files";
+import { collectBotFiles, removeBotFiles } from "@/lib/bot-files";
+import { renderRestartedPrompt, restartedRun } from "@/lib/bot-restart";
 import { deliverAttachments } from "@/lib/bot-uploads";
 import { connectorServersFor } from "@/services/connector-store";
 import { probeColumns } from "@/lib/docker-endpoints";
@@ -363,6 +364,92 @@ export async function stopBotSession(botId: string): Promise<void> {
   }
 }
 
+/**
+ * A new computer for the bot, now (spec 37): the old one is deleted and a
+ * fresh one boots. The conversation is kept — a new computer means a fresh
+ * Claude, which gets the recent chat as context like any other new computer.
+ *
+ * What was queued survives the swap, re-pointed at the new session rather than
+ * dropped: the user restarting a wedged machine (or the bot asking to) did not
+ * ask to lose the work waiting behind it. Anything that was *running* cannot
+ * survive — its Claude died with the container — and ends canceled.
+ */
+export async function restartBotSession(
+  botId: string,
+  opts: { reason?: string | null; announce?: boolean } = {},
+): Promise<BotSession> {
+  const queued = await prisma.botRun.findMany({
+    where: { botId, status: "queued" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  // Deletes the computer (keeping the team's sign-ins) and settles the session,
+  // which cancels those runs; they are put back on the new session below.
+  await stopBotSession(botId);
+  const session = await startBotSession(botId);
+  if (queued.length) {
+    await prisma.botRun.updateMany({
+      where: { id: { in: queued.map((q) => q.id) } },
+      data: { sessionId: session.id, status: "queued", error: null, finishedAt: null },
+    });
+  }
+  // The bot asked for this itself: it gets a word on the new machine so it can
+  // check what it restarted for and carry on. Queued last, behind the rest.
+  if (opts.announce) {
+    await prisma.botRun.create({
+      data: {
+        botId,
+        sessionId: session.id,
+        prompt: renderRestartedPrompt(opts.reason ?? null),
+        status: "queued",
+      },
+    });
+  }
+  // No kick: the worker starts when the computer reports ready (bootSession).
+  return session;
+}
+
+/**
+ * Forget the conversation so far (spec 37). Claude's memory lives in the
+ * container and Nexus cannot reach into it, so clearing is two things: the
+ * session stops resuming that Claude conversation, and nothing said before
+ * this moment is replayed to the fresh one. The computer is left alone —
+ * files, open pages and sign-ins are untouched — and the chat keeps every
+ * message, with a line where the memory ends.
+ *
+ * Recorded on the bot rather than on the session, so a clear while the
+ * computer is asleep still holds for the next one.
+ */
+export async function clearBotContext(botId: string): Promise<Date> {
+  const clearedAt = new Date();
+  await prisma.bot.update({ where: { id: botId }, data: { contextClearedAt: clearedAt } });
+  await prisma.botSession.updateMany({
+    where: { botId, status: { in: [...ACTIVE_SESSION_STATUSES] } },
+    data: { claudeSessionId: null, systemPromptHash: null },
+  });
+  return clearedAt;
+}
+
+/**
+ * Delete the conversation itself: every message, and the files the bot handed
+ * over in them. The bot forgets too (a chat the user cannot see is not context
+ * the bot should still be working from). Routines, sign-ins and the shared
+ * workspace stay — they are not part of the chat.
+ */
+export async function deleteBotConversation(botId: string): Promise<number> {
+  // Stop first: a run that finishes after the delete would write its reply
+  // into a conversation the user emptied.
+  const pending = await prisma.botRun.findMany({
+    where: { botId, status: { in: ["queued", "running"] } },
+    select: { id: true },
+  });
+  for (const r of pending) await cancelBotRun(botId, r.id);
+  await clearBotContext(botId);
+  const { count } = await prisma.botRun.deleteMany({ where: { botId } });
+  removeBotFiles(botId);
+  return count;
+}
+
 // ---- Prompts --------------------------------------------------------------------
 
 /** Queue a prompt; boots the computer first when the bot has none running. */
@@ -507,11 +594,19 @@ async function drain(sessionId: string): Promise<void> {
     const resume =
       session.claudeSessionId && session.systemPromptHash === sysHash ? session.claudeSessionId : null;
 
-    // A fresh Claude session (new computer, or new instructions): hand it the recent chat.
+    // A fresh Claude session (new computer, new instructions, or a cleared
+    // conversation): hand it the recent chat. Cleared cuts that short — what
+    // the user told it to forget is not replayed (spec 37).
+    const clearedAt = session.bot.contextClearedAt;
     let prompt = run.prompt;
     if (!resume) {
       const history = await prisma.botRun.findMany({
-        where: { botId: session.botId, status: "completed", id: { not: run.id } },
+        where: {
+          botId: session.botId,
+          status: "completed",
+          id: { not: run.id },
+          ...(clearedAt ? { createdAt: { gt: clearedAt } } : {}),
+        },
         orderBy: { createdAt: "desc" },
         take: 6,
         select: { prompt: true, result: true },
@@ -520,7 +615,11 @@ async function drain(sessionId: string): Promise<void> {
         run.prompt,
         history.reverse().map((h) => ({ ...h, prompt: toContainerUrls(h.prompt) })),
         700,
-        session.claudeSessionId ? "memory" : "computer",
+        clearedAt && clearedAt > session.createdAt
+          ? "cleared"
+          : session.claudeSessionId
+            ? "memory"
+            : "computer",
       );
     }
     prompt = withRoutinesNote(
@@ -561,6 +660,8 @@ async function drain(sessionId: string): Promise<void> {
 
     const abort = new AbortController();
     aborts.set(run.id, abort);
+    // Filled from the reply below, acted on once this iteration is done.
+    let restart: { reason: string | null } | null = null;
     const log = createRunLog(run.id);
     // Valid only while this prompt runs.
     const vaultToken = fillable.length || gmail.length || calendar.length ? grantVault({
@@ -664,6 +765,9 @@ async function drain(sessionId: string): Promise<void> {
             }),
           ).catch((err) => console.warn("[bots] reply back failed:", err instanceof Error ? err.message : err));
         }
+        // A computer it asked to restart — but not one it asked for in answer
+        // to a restart it already got.
+        if (!restartedRun(run.prompt)) restart = splitReply(result.result).restart;
         const specs = parseRoutineBlocks(result.result).routines;
         if (specs.length) {
           const changes = await applyRoutineSpecs(session.botId, specs);
@@ -695,6 +799,18 @@ async function drain(sessionId: string): Promise<void> {
     }
     // Anything it signed into (or out of) during the task reaches the team.
     await shareSignIns(session.botId, session.containerName, session.dockerHost);
+
+    // The reply asked for a fresh computer (spec 37). Last, once the reply and
+    // its files are safely out of the container this deletes. Never in answer
+    // to a restart of its own, so a bot that believes a restart will fix
+    // things cannot spin on it.
+    if (restart) {
+      await restartBotSession(session.botId, { reason: restart.reason, announce: true }).catch((err) =>
+        console.warn("[bots] restart failed:", err instanceof Error ? err.message : err),
+      );
+      // This session is gone; the new one's worker starts when it is ready.
+      return;
+    }
   }
 }
 

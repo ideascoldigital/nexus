@@ -157,9 +157,11 @@ pasted whole config (`{"mcpServers": …}`) is unwrapped; empty clears it.
   tools") and says to prefer them over clicking through a site. A changed list
   changes the prompt hash, so the next prompt starts a fresh Claude session.
 - **Limits:** stdio commands run inside the computer (Node/npx are there;
-  Python/uvx are not). OAuth-only remote MCPs can't complete a sign-in
-  headless: use API keys in `env`/`headers`. Secrets sit in the database in
-  plain JSON, like a project's `mcpServers`.
+  Python/uvx are not). Secrets sit in the database in plain JSON, like a
+  project's `mcpServers`. A server that authenticates with OAuth rather than a
+  key is signed into on the bot's own screen — see
+  [spec 37](37-bots-reset-and-mcp-signin.md), which also added
+  `--strict-mcp-config` to the run.
 
 ## Emails for review
 
@@ -287,6 +289,9 @@ environment and referenced by name (`-e KEY`), so it is never in argv. `claude
 | `GET/POST /api/bots/:id/runs` | feed (latest session + last 100 runs) / send a prompt |
 | `DELETE /api/bots/:id/runs/:runId` | cancel queued / stop running |
 
+Starting over — clearing the memory, deleting the conversation, restarting the
+computer — and signing into an MCP server are [spec 37](37-bots-reset-and-mcp-signin.md).
+
 ## Known limits
 
 - The live screen is on `127.0.0.1`: it works when the dashboard is opened on
@@ -294,7 +299,8 @@ environment and referenced by name (`-e KEY`), so it is never in argv. `claude
   Tailscale the chat works but the screen does not — that needs a WS proxy
   through the terminal server, left for a follow-up.
 - Claude's memory lives in the container, so a new session starts fresh
-  (with the recent chat as context); the chat shows a divider there.
+  (with the recent chat as context); the chat shows a divider there. Clearing
+  it on purpose, without a new computer, is spec 37.
 - Sign-ins do not survive the computer: the browser profile is deleted with
   it. Keeping a per-bot browser profile volume is the obvious next step if
   re-signing in gets tedious.

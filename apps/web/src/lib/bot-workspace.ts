@@ -1,17 +1,19 @@
-// What survives a bot's computer (spec 31): the shared workspace and each
-// bot's browser profile. On this machine both are host folders bind-mounted
-// into every computer, so a bot that wakes up finds its files and its
-// sign-ins, and bots see each other's work — like teammates on a shared drive.
+// What survives a bot's computer (spec 31): the shared workspace, each bot's
+// browser profile, and Claude's own folder in it (spec 37, where the OAuth
+// tokens of its MCP servers live). On this machine all three are host folders
+// bind-mounted into every computer, so a bot that wakes up finds its files and
+// its sign-ins, and bots see each other's work — like teammates on a shared
+// drive.
 //
 // On another machine's daemon there is no folder of ours to mount (D-85), so
-// the same two things live in named volumes on that daemon: they still outlive
-// the computer and are still shared between bots there, just not on this disk
-// and not visible in Finder.
+// the same three things live in named volumes on that daemon: they still
+// outlive the computer and are still shared between bots there, just not on
+// this disk and not visible in Finder.
 
 import fs from "node:fs";
 import path from "node:path";
 import { getConfig } from "@nexux/config";
-import { BOT_CHROME_PROFILE, BOT_WORKSPACE } from "@nexux/sandbox";
+import { BOT_CHROME_PROFILE, BOT_CLAUDE_DIR, BOT_WORKSPACE } from "@nexux/sandbox";
 
 /** ~/.nexux/workspace — mounted as /workspace in every bot's computer. */
 export function workspaceRoot(): string {
@@ -21,6 +23,16 @@ export function workspaceRoot(): string {
 /** ~/.nexux/bot-profiles/<botId> — one bot's Chromium profile (cookies, sign-ins). */
 export function botProfileDir(botId: string): string {
   return path.join(getConfig().dataDir, "bot-profiles", botId);
+}
+
+/**
+ * ~/.nexux/bot-claude/<botId> — Claude Code's folder inside one bot's computer.
+ * It is mounted so `.credentials.json` persists: the sign-in a remote MCP
+ * server asked for once (spec 37) then holds for every computer after it.
+ * Per bot, like the browser profile, because the tokens are that bot's.
+ */
+export function botClaudeDir(botId: string): string {
+  return path.join(getConfig().dataDir, "bot-claude", botId);
 }
 
 /** A bot's own folder under the workspace: "Creative Designer" → "creative-designer". */
@@ -50,12 +62,13 @@ export function botWorkdir(name: string): string {
  * one itself before a prompt runs (`runBotPrompt`).
  *
  * The workspace volume is shared, like the folder it stands in for; the
- * profile is per bot, like its folder.
+ * profile and Claude's folder are per bot, like their folders.
  */
 export function botVolumes(bot: { id: string }): { host: string; container: string }[] {
   return [
     { host: "nexux-bot-workspace", container: BOT_WORKSPACE },
     { host: `nexux-bot-profile-${bot.id}`, container: BOT_CHROME_PROFILE },
+    { host: `nexux-bot-claude-${bot.id}`, container: BOT_CLAUDE_DIR },
   ];
 }
 
@@ -65,13 +78,18 @@ export function botMounts(bot: { id: string; name: string }): { host: string; co
   fs.mkdirSync(path.join(root, workspaceFolderFor(bot.name)), { recursive: true });
   const profile = botProfileDir(bot.id);
   fs.mkdirSync(profile, { recursive: true });
+  const claude = botClaudeDir(bot.id);
+  // 0700: it holds the OAuth tokens of this bot's MCP servers.
+  fs.mkdirSync(claude, { recursive: true, mode: 0o700 });
   return [
     { host: root, container: BOT_WORKSPACE },
     { host: profile, container: BOT_CHROME_PROFILE },
+    { host: claude, container: BOT_CLAUDE_DIR },
   ];
 }
 
 /** A bot is deleted: its sign-ins go with it. Its workspace folder stays — it is shared work. */
 export function removeBotProfile(botId: string): void {
   fs.rmSync(botProfileDir(botId), { recursive: true, force: true });
+  fs.rmSync(botClaudeDir(botId), { recursive: true, force: true });
 }

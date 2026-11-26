@@ -4,8 +4,19 @@
 // its computer) and Settings (job, standing instructions, model, idle time).
 
 import { useState, type ReactNode } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, Clock, Loader2, MonitorPlay, Trash2, X } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  AlertTriangle,
+  Check,
+  ChevronRight,
+  Clock,
+  KeyRound,
+  Loader2,
+  MonitorPlay,
+  RefreshCw,
+  Trash2,
+  X,
+} from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
 import { ComputerCard, computerState } from "@/components/bots/bot-computer";
@@ -22,11 +33,14 @@ import { BOT_COLORS, BOT_SHAPES } from "@/lib/bot-shapes";
 import { cn } from "@/lib/utils";
 import {
   deleteBot,
+  getBotMcpServers,
+  signInBotMcp,
   updateBot,
   updateBotRoutine,
   type BotFeed,
   type BotInput,
   type BotListItem,
+  type BotMcpServerStatus,
   type BotRoutine,
 } from "@/services/bots";
 
@@ -379,9 +393,10 @@ function BotSettings({ bot, onDeleted }: { bot: BotListItem; onDeleted: () => vo
         />
         <p className={cn("px-1 text-[11.5px]", mcp.ok ? "text-muted-foreground" : "text-destructive")}>
           {mcp.ok
-            ? "Claude Code's mcpServers JSON, loaded on its computer from the next message. Keep keys in the Vault and write {{secret:name}} here — never the key itself. Sign-in (OAuth) MCPs can't open a login here. Commands run inside the bot's computer (Node and npx are there)."
+            ? "Claude Code's mcpServers JSON, loaded on its computer from the next message — no restart needed. Keep keys in the Vault and write {{secret:name}} here — never the key itself. A server that signs in with OAuth instead is signed into below, on the bot's own screen. Commands run inside the bot's computer (Node and npx are there)."
             : mcp.error}
         </p>
+        <McpServers bot={bot} />
       </Section>
       <Section title="Look">
         <div className="space-y-3 rounded-xl border border-border bg-card/60 p-3">
@@ -474,4 +489,133 @@ function BotSettings({ bot, onDeleted }: { bot: BotListItem; onDeleted: () => vo
       </div>
     </form>
   );
+}
+
+/**
+ * What each of the bot's own MCP servers says right now (spec 37), and the
+ * one button that cannot live anywhere else: **Sign in**, for a server whose
+ * authentication is OAuth rather than a key. It opens a terminal and the
+ * consent page on the bot's own screen, because the sign-in has to happen
+ * inside the computer — that is where the browser and the callback are — and
+ * the token it leaves behind outlives that computer.
+ *
+ * Asking costs a health check from inside the computer, so it is asked once
+ * when the panel opens (and when you press Check again), not on a timer.
+ */
+function McpServers({ bot }: { bot: BotListItem }) {
+  const { toast } = useToast();
+  const names = Object.keys(bot.mcpServers ?? {});
+  const status = useQuery({
+    queryKey: ["bot-mcp", bot.id],
+    queryFn: () => getBotMcpServers(bot.id),
+    enabled: names.length > 0,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+  const signIn = useMutation({
+    mutationFn: (server: string) => signInBotMcp(bot.id, server),
+    onSuccess: () =>
+      toast({
+        title: "Sign-in open on the computer",
+        description: "Take control of the screen and approve it there.",
+      }),
+    onError: (err) =>
+      toast({
+        title: "Could not open the sign-in",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      }),
+  });
+
+  if (names.length === 0) return null;
+  const servers = status.data?.servers ?? [];
+
+  return (
+    <div className="space-y-1.5 rounded-xl border border-border bg-card/60 p-2">
+      {status.isLoading && (
+        <p className="flex items-center gap-1.5 px-1 py-0.5 text-[11.5px] text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Asking the computer…
+        </p>
+      )}
+      {status.isError && (
+        <p className="px-1 text-[11.5px] text-destructive">
+          {status.error instanceof Error ? status.error.message : "Could not ask the computer"}
+        </p>
+      )}
+      {servers.map((s) => (
+        <div key={s.name} className="flex items-center gap-2 px-1 py-0.5">
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-mono text-[12px]">{s.name}</span>
+            <McpState server={s} />
+          </span>
+          {s.state === "needs-auth" && (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className="h-7 shrink-0 rounded-full px-2.5 text-[11.5px]"
+              disabled={signIn.isPending}
+              onClick={() => signIn.mutate(s.name)}
+            >
+              {signIn.isPending && signIn.variables === s.name ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <KeyRound className="h-3 w-3" />
+              )}
+              Sign in
+            </Button>
+          )}
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => void status.refetch()}
+        disabled={status.isFetching}
+        className="flex items-center gap-1.5 px-1 pt-0.5 text-[11.5px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+      >
+        <RefreshCw className={cn("h-3 w-3", status.isFetching && "animate-spin")} />
+        Check again
+      </button>
+    </div>
+  );
+}
+
+function McpState({ server }: { server: BotMcpServerStatus }) {
+  const line = "flex items-center gap-1 text-[11px]";
+  switch (server.state) {
+    case "connected":
+      return (
+        <span className={cn(line, "text-emerald-400")}>
+          <Check className="h-3 w-3" />
+          Connected
+        </span>
+      );
+    case "needs-auth":
+      return (
+        <span className={cn(line, "text-amber-300/90")}>
+          <KeyRound className="h-3 w-3" />
+          Needs a sign-in — it opens on the bot&apos;s screen
+        </span>
+      );
+    case "failed":
+      return (
+        <span className={cn(line, "text-destructive")}>
+          <AlertTriangle className="h-3 w-3" />
+          {server.detail ?? "Could not connect"}
+        </span>
+      );
+    case "asleep":
+      return <span className={cn(line, "text-muted-foreground")}>Wake the computer to check it</span>;
+    case "not-checked":
+      return (
+        <span className={cn(line, "text-muted-foreground")}>
+          {server.missingSecret
+            ? `Not loaded — ${server.detail}`
+            : "Runs as a command inside the computer; no sign-in of its own"}
+        </span>
+      );
+    default:
+      return <span className={cn(line, "text-muted-foreground")}>{server.detail ?? "Unknown"}</span>;
+  }
 }

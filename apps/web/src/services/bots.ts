@@ -21,6 +21,8 @@ export type Bot = {
   /** The Docker endpoint its computers run on; null = this machine (D-85). */
   dockerEndpointId: string | null;
   idleMinutes: number;
+  /** When the user last cleared this conversation (spec 37); the chat marks it. */
+  contextClearedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -174,6 +176,39 @@ export const startBotComputer = (id: string) =>
 
 export const stopBotComputer = (id: string) =>
   call<{ ok: true }>(`/api/bots/${id}/session`, { method: "DELETE" });
+
+/** A fresh computer now: the chat stays, queued prompts move over, running work stops. */
+export const restartBotComputer = (id: string) =>
+  call<BotSession>(`/api/bots/${id}/session/restart`, { method: "POST" });
+
+/** The bot forgets the conversation so far; the messages and its computer stay. */
+export const clearBotContext = (id: string) =>
+  call<{ clearedAt: string }>(`/api/bots/${id}/context`, { method: "DELETE" });
+
+/** Delete the conversation itself: messages, handed-over files, and the memory. */
+export const deleteBotConversation = (id: string) =>
+  call<{ ok: true; deleted: number }>(`/api/bots/${id}/runs`, { method: "DELETE" });
+
+export type BotMcpServerStatus = {
+  name: string;
+  kind: "stdio" | "http" | "sse";
+  /** A vault secret it needs that this bot cannot use — it is not loaded at all. */
+  missingSecret: string | null;
+  /**
+   * What it said when asked, from inside the computer: `needs-auth` is the one
+   * to act on (Sign in). `asleep` means nothing was asked, `not-checked` that
+   * asking would cost more than it is worth (a stdio command's first run).
+   */
+  state: "connected" | "needs-auth" | "failed" | "unknown" | "asleep" | "not-checked";
+  detail: string | null;
+};
+
+export const getBotMcpServers = (id: string) =>
+  call<{ servers: BotMcpServerStatus[] }>(`/api/bots/${id}/mcp`);
+
+/** Opens the server's OAuth sign-in on the bot's screen; the user approves it there. */
+export const signInBotMcp = (id: string, server: string) =>
+  call<{ ok: true }>(`/api/bots/${id}/mcp/login`, { method: "POST", body: JSON.stringify({ server }) });
 
 /** Keeps the computer awake while its screen is open. */
 export const touchBotComputer = (id: string) =>

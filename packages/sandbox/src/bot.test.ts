@@ -7,7 +7,10 @@ import { test } from "node:test";
 
 import {
   BOT_CONTAINER_LABEL,
+  BOT_CLAUDE_DIR,
   BOT_MCP_CONFIG,
+  BOT_MCP_LOGIN_SCRIPT,
+  BOT_MCP_REGISTER_SCRIPT,
   BOT_NOVNC_PORT,
   botImageTag,
   botRunArgs,
@@ -20,9 +23,12 @@ import {
   renderBotDockerfile,
   renderBotEntrypoint,
   renderBotMcpConfig,
+  renderBotMcpLoginScript,
+  renderBotMcpRegisterScript,
   renderBotPanelConfig,
   renderBotScreenPage,
   renderBotSystemPrompt,
+  readMcpState,
 } from "./bot";
 
 test("the image tag follows the recipe, so a changed Dockerfile rebuilds", () => {
@@ -109,16 +115,19 @@ test("the Claude command resumes, picks the model, and wires the browser MCP", (
   assert.ok(cmd.includes(`--mcp-config ${BOT_MCP_CONFIG}`));
   assert.ok(cmd.includes("--append-system-prompt 'You are X'"));
   assert.ok(cmd.endsWith("--permission-mode bypassPermissions --output-format stream-json --verbose"));
+  // A sign-in registers servers in the computer's own Claude config (spec 37);
+  // a run must load exactly the two files it was given, never those.
+  assert.ok(cmd.includes("--strict-mcp-config"));
 
   const fresh = buildBotClaudeCommand("hi", { systemPrompt: "s" });
   assert.match(fresh, /^claude -p 'hi'/);
-  assert.match(fresh, /--mcp-config \/etc\/nexux-bot\/mcp\.json --permission-mode/);
+  assert.match(fresh, /--mcp-config \/etc\/nexux-bot\/mcp\.json --strict-mcp-config --permission-mode/);
   // The bot's own servers ride in a second config file.
   const withOwn = buildBotClaudeCommand("hi", { systemPrompt: "s", userMcp: true });
   // Room for a cold `npx -y` download, but only when the bot has servers of its own.
   assert.match(withOwn, /^MCP_TIMEOUT=180000 claude -p/);
   assert.doesNotMatch(fresh, /MCP_TIMEOUT/);
-  assert.match(withOwn, /--mcp-config \/etc\/nexux-bot\/mcp\.json \/home\/bot\/\.nexux-mcp\.json --permission-mode/);
+  assert.match(withOwn, /--mcp-config \/etc\/nexux-bot\/mcp\.json \/home\/bot\/\.nexux-mcp\.json --strict-mcp-config --permission-mode/);
 });
 
 test("the system prompt carries the job, the computer rules and the input marker", () => {
@@ -360,4 +369,54 @@ test("an older docker that does not know --load still builds", async () => {
   assert.equal(builds.length, 2, `expected a retry, got: ${builds.join(" | ")}`);
   assert.match(builds[0], /--load/);
   assert.doesNotMatch(builds[1], /--load/);
+});
+
+test("readMcpState reads the Status line of `claude mcp get`", () => {
+  assert.deepEqual(readMcpState("my-api:\n  Scope: User config\n  Status: \u2714 Connected\n"), {
+    state: "connected",
+    detail: "Connected",
+  });
+  assert.equal(readMcpState("x:\n  Status: ! Needs authentication\n").state, "needs-auth");
+  assert.equal(readMcpState("x:\n  Status: \u2717 Failed to connect\n").state, "failed");
+  // No status at all (the server is not registered, the CLI errored): not a verdict.
+  assert.deepEqual(readMcpState('No MCP server named "x".'), { state: "unknown", detail: null });
+});
+
+test("the sign-in scripts take the server on stdin and run on the bot's desktop", () => {
+  const register = renderBotMcpRegisterScript();
+  // The definition may carry an API key in its headers: stdin, never argv.
+  assert.ok(register.includes('readFileSync(0, "utf8")'));
+  assert.ok(register.includes(".claude.json"));
+  // A null definition drops the registration again.
+  assert.ok(register.includes("delete config.mcpServers[name]"));
+  assert.ok(register.includes("mode: 0o600"));
+
+  const login = renderBotMcpLoginScript();
+  assert.ok(login.includes('claude mcp login "$name"'));
+  // It must not close the moment it finishes: the user reads the outcome.
+  assert.ok(login.includes("read -r"));
+});
+
+test("the image keeps Claude's folder, so an MCP sign-in outlives the computer", () => {
+  const df = renderBotDockerfile();
+  assert.ok(df.includes(BOT_CLAUDE_DIR));
+  // Owned by the bot user, like its browser profile: both are mounted from the host.
+  assert.match(df, new RegExp(`chown bot:bot .*${BOT_CLAUDE_DIR.replace(/\//g, "\\/")}`));
+  assert.ok(df.includes(BOT_MCP_REGISTER_SCRIPT));
+  assert.ok(df.includes(BOT_MCP_LOGIN_SCRIPT));
+  // `claude mcp login` opens the consent page with xdg-open.
+  assert.ok(df.includes("xdg-utils"));
+});
+
+test("the system prompt teaches the restart block and where MCP sign-ins come from", () => {
+  const p = renderBotSystemPrompt({
+    name: "Ops",
+    needsInputMarker: "NEEDS_INPUT:",
+    mcpServers: ["my-api"],
+  });
+  assert.ok(p.includes("```restart"));
+  // Restarting is not the way to pick up a tool the user just added.
+  assert.match(p, /loaded fresh on every message/);
+  assert.match(p, /Sign in/);
+  assert.ok(p.includes(BOT_CLAUDE_DIR));
 });

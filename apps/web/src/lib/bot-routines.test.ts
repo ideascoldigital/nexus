@@ -41,8 +41,14 @@ test("splitReply separates text, a question and routine changes", () => {
   assert.equal(r.body, "Hecho.");
   assert.equal(r.choices?.question, "¿La programo?");
   assert.equal(r.routines[0]?.name, "R");
-  assert.deepEqual(splitReply(null), { body: "", choices: null, routines: [], handoffs: [], mails: [] });
+  assert.deepEqual(splitReply(null), { body: "", choices: null, routines: [], handoffs: [], mails: [], restart: null });
   assert.equal(splitReply("No tengo acceso.\nNEEDS_INPUT: ¿Qué cuenta uso?").body, "No tengo acceso.\n¿Qué cuenta uso?");
+});
+
+test("splitReply takes a restart block out of the text too", () => {
+  const r = splitReply('Reinicio y sigo.\n\n```restart\n{"reason": "to pick up the sign-in"}\n```');
+  assert.equal(r.body, "Reinicio y sigo.");
+  assert.deepEqual(r.restart, { reason: "to pick up the sign-in" });
 });
 
 test("describeCron reads common schedules in words", () => {

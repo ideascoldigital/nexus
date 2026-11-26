@@ -58,6 +58,15 @@ export const BOT_WORKSPACE = "/workspace";
 export const BOT_CHROME_PROFILE = `${BOT_HOME}/.chrome`;
 /** Where a bot puts files it hands to the user (the app copies them into the chat). */
 export const BOT_OUTBOX = `${BOT_HOME}/outbox`;
+/**
+ * Claude Code's own folder in the computer, mounted from a per-bot host folder
+ * so it persists (spec 37). What has to survive is `.credentials.json`: the
+ * OAuth tokens `claude mcp login` stores for a bot's remote MCP servers, keyed
+ * by the server's name and the hash of its type, url and headers — so a run
+ * that loads the same server through `--mcp-config` finds the sign-in again,
+ * on this computer and on every computer after it.
+ */
+export const BOT_CLAUDE_DIR = `${BOT_HOME}/.claude`;
 
 // ---- Image ------------------------------------------------------------------
 
@@ -260,6 +269,73 @@ export function renderBotCookieScript(): string {
 }
 
 export const BOT_COOKIE_SCRIPT = "/usr/local/lib/nexux-bot/cookies.js";
+/** Puts one MCP server into Claude's own user config, so `claude mcp` can act on it by name. */
+export const BOT_MCP_REGISTER_SCRIPT = "/usr/local/lib/nexux-bot/mcp-register.js";
+/** The sign-in a user watches: `claude mcp login <name>` in a terminal on the bot's desktop. */
+export const BOT_MCP_LOGIN_SCRIPT = "/usr/local/lib/nexux-bot/mcp-login.sh";
+
+/**
+ * Puts one MCP server into Claude Code's own user config inside the computer
+ * (spec 37). `claude mcp login`, `logout` and `get` act on servers Claude has
+ * configured — they ignore `--mcp-config`, which is how a bot's servers reach
+ * its runs — so a server has to be registered by name before it can be signed
+ * into or asked about. The definition arrives on stdin: its headers may carry
+ * a key, and argv is readable from the rest of the computer.
+ *
+ * The registration itself is throwaway (the file dies with the container, and
+ * runs pass --strict-mcp-config so it never changes what a prompt loads).
+ * What is worth keeping is what the sign-in leaves behind in BOT_CLAUDE_DIR.
+ */
+export function renderBotMcpRegisterScript(): string {
+  return `const fs = require("fs");
+const path = require("path");
+const file = path.join(process.env.HOME || "${BOT_HOME}", ".claude.json");
+const { name, server } = JSON.parse(fs.readFileSync(0, "utf8"));
+if (!name || typeof name !== "string") throw new Error("a server name is required");
+let config = {};
+try { config = JSON.parse(fs.readFileSync(file, "utf8")) || {}; } catch {}
+config.mcpServers = config.mcpServers || {};
+if (server) config.mcpServers[name] = server;
+else delete config.mcpServers[name];
+fs.writeFileSync(file, JSON.stringify(config, null, 2), { mode: 0o600 });
+process.stdout.write(JSON.stringify({ ok: true }));
+`;
+}
+
+/**
+ * The sign-in the user watches (spec 37): a terminal window on the bot's own
+ * desktop running `claude mcp login <name>`, which opens the consent page in
+ * the bot's Chromium — the same browser whose profile outlives the computer.
+ * The user takes control of the screen, approves, and the token lands in
+ * BOT_CLAUDE_DIR.
+ *
+ * It runs on the desktop rather than through `docker exec` on purpose: the CLI
+ * wants a terminal, the OAuth callback is a local redirect that only a browser
+ * inside this computer can reach, and the user can see what went wrong.
+ */
+export function renderBotMcpLoginScript(): string {
+  return `#!/usr/bin/env bash
+set -u
+name="\${1:-}"
+log="\${2:-/dev/null}"
+exec > >(tee -a "$log") 2>&1
+if [ -z "$name" ]; then echo "usage: mcp-login.sh <server name>"; sleep 5; exit 2; fi
+echo "Signing in to the MCP server '$name'."
+echo "A page will open in your browser: approve the access there."
+echo
+claude mcp login "$name"
+code=$?
+echo
+if [ $code -eq 0 ]; then
+  echo "Signed in. This sign-in is kept for this bot, so its next computer will have it too."
+else
+  echo "The sign-in did not finish (exit $code). You can close this window and try again from Nexus."
+fi
+echo
+echo "Closing in 30 seconds. Press Enter to close now."
+read -r -t 30 _ || true
+`;
+}
 
 /** Claude Code MCP config: the Playwright MCP attached to the visible Chromium. */
 export function renderBotMcpConfig(): string {
@@ -422,7 +498,7 @@ export function renderBotDockerfile(): string {
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=UTC
 RUN apt-get update && apt-get install -y --no-install-recommends \\
       ca-certificates curl gnupg git jq unzip python3 procps \\
-      xvfb x11vnc fluxbox novnc websockify xdotool scrot dbus-x11 \\
+      xvfb x11vnc fluxbox novnc websockify xdotool scrot dbus-x11 xdg-utils \\
       chromium fonts-liberation fonts-dejavu fonts-noto-color-emoji \\
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \\
     && apt-get install -y --no-install-recommends nodejs \\
@@ -430,8 +506,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
 RUN npm install -g @anthropic-ai/claude-code @playwright/mcp \\
     && npm cache clean --force
 RUN useradd -m -s /bin/bash ${BOT_USER} \\
-    && mkdir -p /tmp/.X11-unix /etc/nexux-bot ${BOT_WORKSPACE} ${BOT_CHROME_PROFILE} \\
-    && chown ${BOT_USER}:${BOT_USER} ${BOT_WORKSPACE} ${BOT_CHROME_PROFILE} \\
+    && mkdir -p /tmp/.X11-unix /etc/nexux-bot ${BOT_WORKSPACE} ${BOT_CHROME_PROFILE} ${BOT_CLAUDE_DIR} \\
+    && chown ${BOT_USER}:${BOT_USER} ${BOT_WORKSPACE} ${BOT_CHROME_PROFILE} ${BOT_CLAUDE_DIR} \\
     && chmod 1777 /tmp/.X11-unix
 # The desktop (its own layer, so the big ones above stay cached).
 RUN apt-get update && apt-get install -y --no-install-recommends \\
@@ -439,7 +515,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /usr/local/lib/nexux-bot \\
     && echo ${b64(renderBotCookieScript())} | base64 -d > ${BOT_COOKIE_SCRIPT} \\
-    && chmod 644 ${BOT_COOKIE_SCRIPT}
+    && chmod 644 ${BOT_COOKIE_SCRIPT} \\
+    && echo ${b64(renderBotMcpRegisterScript())} | base64 -d > ${BOT_MCP_REGISTER_SCRIPT} \\
+    && chmod 644 ${BOT_MCP_REGISTER_SCRIPT} \\
+    && echo ${b64(renderBotMcpLoginScript())} | base64 -d > ${BOT_MCP_LOGIN_SCRIPT} \\
+    && chmod 755 ${BOT_MCP_LOGIN_SCRIPT}
 RUN echo ${b64(renderBotEntrypoint())} | base64 -d > /usr/local/bin/nexux-bot-entrypoint \\
     && chmod 755 /usr/local/bin/nexux-bot-entrypoint \\
     && echo ${b64(renderBotMcpConfig())} | base64 -d > ${BOT_MCP_CONFIG} \\
@@ -804,6 +884,99 @@ export async function writeBotMcpConfig(
   if (res.code !== 0) throw new Error(`could not write the MCP config: ${tail(res.stderr, 200)}`);
 }
 
+/**
+ * Register (or, with a null server, drop) one MCP server in Claude's own
+ * config inside the computer — the step `claude mcp login|logout|get` needs,
+ * since those read Claude's configured servers and not `--mcp-config`.
+ */
+export async function registerBotMcpServer(
+  name: string,
+  server: string,
+  definition: Record<string, unknown> | null,
+  target?: DockerTarget | null,
+): Promise<void> {
+  const res = await docker(
+    target,
+    ["exec", "-i", "-u", BOT_USER, name, "node", BOT_MCP_REGISTER_SCRIPT],
+    { stdin: JSON.stringify({ name: server, server: definition }), timeoutMs: 20_000 },
+  );
+  if (res.code !== 0) throw new Error(`could not register "${server}": ${tail(res.stderr, 200)}`);
+}
+
+export type BotMcpState = "connected" | "needs-auth" | "failed" | "unknown";
+
+/**
+ * Whether one of a bot's remote MCP servers answers, and whether it wants a
+ * sign-in first. `claude mcp get` health-checks the server it is asked about
+ * and prints one `Status:` line; the server is registered first and left
+ * registered (harmless — runs pass --strict-mcp-config).
+ *
+ * Only for `http`/`sse` servers: a stdio server's check would run its command,
+ * which for the usual `npx -y …` means a download of a minute or more.
+ */
+export async function botMcpState(
+  name: string,
+  server: string,
+  definition: Record<string, unknown>,
+  target?: DockerTarget | null,
+): Promise<{ state: BotMcpState; detail: string | null }> {
+  await registerBotMcpServer(name, server, definition, target);
+  const res = await docker(
+    target,
+    ["exec", "-u", BOT_USER, name, "claude", "mcp", "get", server],
+    { timeoutMs: 90_000 },
+  );
+  return readMcpState(`${res.stdout}\n${res.stderr}`);
+}
+
+/** The `Status:` line of `claude mcp get`, as a state. */
+export function readMcpState(output: string): { state: BotMcpState; detail: string | null } {
+  const line = output.split(/\r?\n/).find((l) => /^\s*Status:/.test(l))?.replace(/^\s*Status:\s*/, "").trim();
+  if (!line) return { state: "unknown", detail: null };
+  const plain = line.replace(/^[^A-Za-z]+/, "").trim();
+  if (/needs authentication/i.test(plain)) return { state: "needs-auth", detail: plain };
+  if (/^connected/i.test(plain)) return { state: "connected", detail: plain };
+  return { state: "failed", detail: plain || null };
+}
+
+/**
+ * Open the sign-in for one remote MCP server on the bot's desktop: a terminal
+ * window running `claude mcp login <server>`, which opens the consent page in
+ * the bot's own Chromium. Returns at once — the user finishes it on the screen.
+ */
+export async function startBotMcpLogin(
+  name: string,
+  server: string,
+  definition: Record<string, unknown>,
+  target?: DockerTarget | null,
+): Promise<void> {
+  await registerBotMcpServer(name, server, definition, target);
+  const logFile = `/tmp/nexux-mcp-login.log`;
+  const res = await docker(
+    target,
+    [
+      "exec",
+      "-d",
+      "-u",
+      BOT_USER,
+      "-e",
+      "DISPLAY=:99",
+      name,
+      "xfce4-terminal",
+      "--title",
+      `Sign in to ${server}`,
+      "--geometry",
+      "100x24",
+      "--command",
+      `${BOT_MCP_LOGIN_SCRIPT} ${shq(server)} ${logFile}`,
+    ],
+    { timeoutMs: 20_000 },
+  );
+  if (res.code !== 0) {
+    throw new Error(`could not open the sign-in on the computer: ${tail(res.stderr, 200)}`);
+  }
+}
+
 /** Set cookies in a computer's browser. Values travel on stdin, never in argv. */
 export async function setBotCookies(
   name: string,
@@ -843,6 +1016,8 @@ export const BOT_ROUTINE_FENCE = "routine";
 export const BOT_HANDOFF_FENCE = "handoff";
 /** Fence of the block a bot drafts an email for the user to review with. */
 export const BOT_MAIL_FENCE = "mail";
+/** Fence of the block a bot restarts its own computer with (spec 37). */
+export const BOT_RESTART_FENCE = "restart";
 
 /** What the bot knows about itself and its computer, every run. */
 export function renderBotSystemPrompt(bot: {
@@ -919,6 +1094,21 @@ export function renderBotSystemPrompt(bot: {
   );
   parts.push(
     "",
+    "# Restarting your computer",
+    "",
+    "You cannot restart your computer with a command — the shell that would do it is inside it. Ask for it instead, by ending your reply with:",
+    "",
+    "```" + BOT_RESTART_FENCE,
+    '{"reason": "to load the new tool the user just added"}',
+    "```",
+    "",
+    `- Nexus deletes this computer and starts a fresh one, then sends you a short message so you can carry on. ${BOT_WORKSPACE}, your browser sign-ins and your MCP sign-ins survive it; anything else on the computer does not, so finish or save your work first (files you want the user to have go in ${BOT_OUTBOX} before the block).`,
+    "- Do it when the user asks you to restart, and when something on the computer is wedged (a command that will not die, a desktop that stopped answering) and a fresh machine is the honest fix. Say in your text that you are restarting and why.",
+    "- A tool the user just added does NOT need this: MCP servers are loaded fresh on every message. Only a sign-in you were told to pick up, or a broken machine, is a reason.",
+    "- One restart per reply, and never twice in a row: if the first one did not help, tell the user instead.",
+  );
+  parts.push(
+    "",
     "# Emails",
     "",
     bot.gmail?.length
@@ -992,6 +1182,8 @@ export function renderBotSystemPrompt(bot: {
       "# Your tools",
       "",
       `Besides the browser, the user connected these MCP servers for you: ${bot.mcpServers.map((n) => `\`${n}\``).join(", ")} (their tools are named \`mcp__<server>__<tool>\`). When one covers the task, use it instead of clicking through the website — it is faster and more reliable — and tell the user briefly which one you used. If one fails (not authorized, unreachable), say so plainly and fall back to the browser if you can.`,
+      "- They are loaded fresh on every message, so a server the user adds, changes or removes in Nexus is there (or gone) on your very next message. You do not need to restart your computer for it, and you cannot add one yourself — ask the user to add it in Nexus → the bot's details → Tools.",
+      `- A server that answers "not authorized", "unauthorized" or asks for a sign-in needs the user to press **Sign in** next to it in Nexus → Tools. That opens a terminal and a consent page on this very screen; approve it there if they hand you control. The sign-in is kept in ${BOT_CLAUDE_DIR}, which survives this computer, so it is asked for once — do not try to run \`claude mcp login\` yourself.`,
     );
   }
   if (bot.skippedMcp?.length) {
@@ -1045,7 +1237,11 @@ export function buildBotClaudeCommand(
   return (
     `${mcpWait}claude ${resume}${model}-p ${shq(prompt)}` +
     ` --append-system-prompt ${shq(opts.systemPrompt)}` +
-    ` --mcp-config ${BOT_MCP_CONFIG}${opts.userMcp ? ` ${BOT_USER_MCP_CONFIG}` : ""}` +
+    // --strict-mcp-config: these files are the whole list. The computer's own
+    // Claude config holds throwaway registrations (spec 37: `claude mcp login`
+    // only acts on servers Claude has configured), and a run must not load a
+    // server because a sign-in left it there.
+    ` --mcp-config ${BOT_MCP_CONFIG}${opts.userMcp ? ` ${BOT_USER_MCP_CONFIG}` : ""} --strict-mcp-config` +
     ` --permission-mode bypassPermissions --output-format stream-json --verbose`
   );
 }

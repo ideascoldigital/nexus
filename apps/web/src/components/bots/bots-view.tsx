@@ -72,6 +72,7 @@ import {
   getBotFeed,
   getBots,
   sendBotPrompt,
+  restartBotComputer,
   startBotComputer,
   stopBotComputer,
   updateBot,
@@ -644,6 +645,9 @@ function BotWorkspace({
     toast({ title, description: err instanceof Error ? err.message : undefined, variant: "destructive" });
   const start = useMutation({ mutationFn: () => startBotComputer(bot.id), onSuccess: refresh, onError: onError("Could not wake the computer") });
   const stop = useMutation({ mutationFn: () => stopBotComputer(bot.id), onSuccess: refresh, onError: onError("Could not stop the computer") });
+  // A fresh computer without losing the chat (spec 37) — the usual fix for a
+  // wedged desktop, and what the bot asks for itself with a restart block.
+  const restart = useMutation({ mutationFn: () => restartBotComputer(bot.id), onSuccess: refresh, onError: onError("Could not restart the computer") });
   // Back from driving: the bot looks at what you did and carries on. If it is
   // already working (you took over mid-task), it sees the screen on its own.
   const handBack = useMutation({
@@ -698,7 +702,8 @@ function BotWorkspace({
           onHandBack={onHandBack}
           onStart={() => start.mutate()}
           onStop={() => stop.mutate()}
-          busy={start.isPending || stop.isPending}
+          onRestart={() => restart.mutate()}
+          busy={start.isPending || stop.isPending || restart.isPending}
         />
       )}
       {panelOpen && (
@@ -729,7 +734,8 @@ function BotWorkspace({
         onHandBack={onHandBack}
         onStart={() => start.mutate()}
         onStop={() => stop.mutate()}
-        busy={start.isPending || stop.isPending}
+        onRestart={() => restart.mutate()}
+        busy={start.isPending || stop.isPending || restart.isPending}
       />
     </div>
   );

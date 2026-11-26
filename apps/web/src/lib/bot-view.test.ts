@@ -132,6 +132,11 @@ test("botPreview is one clean line per run state", () => {
   assert.equal(botPreview({ ...run, status: "running" }), "Working…");
   assert.equal(botPreview({ ...run, status: "queued" }), "You: do it");
   assert.equal(botPreview({ ...run, status: "error", error: "boom" }), "Error: boom");
+  // Prompts the app sent read as what they mean, not as the user's words.
+  assert.equal(
+    botPreview({ ...run, status: "queued", prompt: "[nexux:restarted] to load the new tool" }),
+    "Restarting its computer…",
+  );
   assert.equal(botPreview(null), null);
 });
 
@@ -155,6 +160,19 @@ test("a fresh computer's first prompt carries the earlier chat", () => {
   assert.match(out, /took control of your computer, then handed it back/);
   assert.ok(!out.includes("x".repeat(701)));
   assert.ok(out.endsWith("New message from the user:\nintenta de nuevo"));
+});
+
+test("each reason for a fresh Claude says what actually changed", () => {
+  const chat = [{ prompt: "¿Qué tal?", result: "Bien" }];
+  // Same machine, new instructions: its files and sign-ins are still there.
+  assert.match(withEarlierContext("sigue", chat, 700, "memory"), /fresh conversation on the same computer/);
+  // Cleared (spec 37): the machine is untouched, and only what came after is replayed.
+  const cleared = withEarlierContext("sigue", chat, 700, "cleared");
+  assert.match(cleared, /cleared this conversation/);
+  assert.match(cleared, /computer is untouched/);
+  assert.doesNotMatch(cleared, /computer was reset/);
+  // A cleared conversation with nothing said since carries no history at all.
+  assert.equal(withEarlierContext("sigue", [], 700, "cleared"), "sigue");
 });
 
 test("links to the user's machine are rewritten for the bot's container", () => {

@@ -19,6 +19,7 @@ import {
   PanelRight,
   Power,
   PowerOff,
+  RotateCcw,
   X,
 } from "lucide-react";
 
@@ -270,6 +271,8 @@ type SurfaceProps = {
   onHandBack: () => void;
   onStart: () => void;
   onStop: () => void;
+  /** Delete this computer and boot a fresh one (spec 37), keeping the chat. */
+  onRestart: () => void;
   busy: boolean;
   /** Anchor the screen somewhere (from the dialog). */
   onAnchor?: (mode: Exclude<DockMode, "off">) => void;
@@ -293,6 +296,7 @@ function ComputerSurface({
   onHandBack,
   onStart,
   onStop,
+  onRestart,
   busy,
   onAnchor,
   onExpand,
@@ -329,6 +333,7 @@ function ComputerSurface({
   const [pasteText, setPasteText] = useState("");
   const [copied, setCopied] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
+  const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmControl, setConfirmControl] = useState(false);
   const takeControl = () => {
     control.take();
@@ -472,16 +477,28 @@ function ComputerSurface({
               Wake up
             </Button>
           ) : (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              title="Put to sleep (deletes the computer)"
-              aria-label="Put the computer to sleep"
-              disabled={busy}
-              onClick={() => setConfirmStop(true)}
-            >
-              <PowerOff className="h-3.5 w-3.5" />
-            </Button>
+            <>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                title="Restart the computer (a fresh machine; the chat stays)"
+                aria-label="Restart the computer"
+                disabled={busy}
+                onClick={() => setConfirmRestart(true)}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                title="Put to sleep (deletes the computer)"
+                aria-label="Put the computer to sleep"
+                disabled={busy}
+                onClick={() => setConfirmStop(true)}
+              >
+                <PowerOff className="h-3.5 w-3.5" />
+              </Button>
+            </>
           )}
           {docked && (
             <Button
@@ -665,6 +682,14 @@ function ComputerSurface({
         description="Anything on it is lost and running work stops."
         confirmLabel="Put to sleep"
         onConfirm={onStop}
+      />
+      <ConfirmDialog
+        open={confirmRestart}
+        onOpenChange={setConfirmRestart}
+        title={`Restart ${bot.name}'s computer?`}
+        description="This one is deleted and a fresh one starts. The conversation stays, and so do its files in the shared workspace and its sign-ins — anything else on the machine is lost, and work in progress stops."
+        confirmLabel="Restart the computer"
+        onConfirm={onRestart}
       />
     </>
   );

@@ -1,7 +1,7 @@
 import { prisma } from "@nexux/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { botBootProgress, enqueueBotPrompt } from "@/lib/bot-manager";
+import { botBootProgress, deleteBotConversation, enqueueBotPrompt } from "@/lib/bot-manager";
 import { handoffPrefix } from "@/lib/bot-handoffs";
 import { shapeRoutine, shapeRun, shapeSession, shapeThreadReply } from "@/lib/bot-view";
 
@@ -60,4 +60,17 @@ export async function POST(req: NextRequest, { params }: Params) {
       { status: 409 },
     );
   }
+}
+
+/**
+ * Delete the conversation: every message and the files the bot handed over in
+ * them (spec 37). The bot forgets with it. Its routines, its sign-ins and the
+ * shared workspace stay — they are not part of the chat.
+ */
+export async function DELETE(_req: NextRequest, { params }: Params) {
+  const { botId } = await params;
+  const exists = await prisma.bot.findUnique({ where: { id: botId }, select: { id: true } });
+  if (!exists) return NextResponse.json({ error: "Bot not found" }, { status: 404 });
+  const deleted = await deleteBotConversation(botId);
+  return NextResponse.json({ ok: true, deleted });
 }

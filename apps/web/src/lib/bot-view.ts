@@ -9,6 +9,7 @@ import { handoffRun, replyRun } from "@/lib/bot-handoffs";
 import { mailRun } from "@/lib/bot-mail";
 import { validateBotMcpServers, type BotMcpServers } from "@/lib/bot-mcp";
 import { isHandback, isIntro } from "@/lib/bot-prompts";
+import { restartedRun } from "@/lib/bot-restart";
 import { describeCron, routineRun, splitReply } from "@/lib/bot-routines";
 import { BOT_SHAPES } from "@/lib/bot-shapes";
 
@@ -203,6 +204,7 @@ export function botPreview(
     if (isIntro(run.prompt)) return "Getting ready to say hi…";
     const routine = routineRun(run.prompt);
     if (routine) return `Routine · ${routine.name}`;
+    if (restartedRun(run.prompt)) return "Restarting its computer…";
     const from = handoffRun(run.prompt);
     if (from) return `${from.fromName}: ${clean(from.message)}`;
     const back = replyRun(run.prompt);
@@ -285,8 +287,13 @@ export function withEarlierContext(
   prompt: string,
   history: { prompt: string; result: string | null }[],
   perAnswer = 700,
-  /** "computer": a new machine. "memory": same machine, fresh Claude session (instructions changed). */
-  reason: "computer" | "memory" = "computer",
+  /**
+   * "computer": a new machine. "memory": same machine, fresh Claude session
+   * (instructions changed). "cleared": the user cleared the conversation's
+   * context (spec 37) — the machine is untouched, and whatever is replayed
+   * here happened after that moment.
+   */
+  reason: "computer" | "memory" | "cleared" = "computer",
 ): string {
   if (history.length === 0) return prompt;
   const lines = history.map((h) => {
@@ -307,10 +314,14 @@ export function withEarlierContext(
     const short = answer.length > perAnswer ? `${answer.slice(0, perAnswer)}…` : answer;
     return short ? `${asked}\nYou answered: ${short}` : asked;
   });
-  return [
+  const note =
     reason === "memory"
       ? "Note: your instructions were updated, so this is a fresh conversation on the same computer — your files, open pages and sign-ins are still there. Earlier conversation, oldest first:"
-      : "Note: your computer was reset since your last messages. It is a fresh machine: nothing is open and you are not signed in anywhere. Earlier conversation, oldest first:",
+      : reason === "cleared"
+        ? "Note: the user cleared this conversation, so you remember nothing of what came before it. Your computer is untouched — your files, open pages and sign-ins are still there. What has been said since they cleared it, oldest first:"
+        : "Note: your computer was reset since your last messages. It is a fresh machine: nothing is open and you are not signed in anywhere. Earlier conversation, oldest first:";
+  return [
+    note,
     "",
     lines.join("\n\n"),
     "",

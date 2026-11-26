@@ -14,6 +14,7 @@ import { splitAttachments } from "@/lib/bot-attachments";
 import { parseChoices, type BotChoices } from "@/lib/bot-choices";
 import { handoffRun, parseHandoffBlocks, replyRun, type HandoffSpec } from "@/lib/bot-handoffs";
 import { mailRun, parseMailBlocks, type MailDraft } from "@/lib/bot-mail";
+import { parseRestartBlocks, restartedRun, type RestartSpec } from "@/lib/bot-restart";
 import { isHandback, isIntro } from "@/lib/bot-prompts";
 
 export const ROUTINE_FENCE = "routine";
@@ -59,14 +60,16 @@ export function splitReply(text: string | null | undefined): {
   routines: RoutineSpec[];
   handoffs: HandoffSpec[];
   mails: MailDraft[];
+  restart: RestartSpec | null;
 } {
   const { body: withoutRoutines, routines } = parseRoutineBlocks(text);
   const { body: withoutMails, mails } = parseMailBlocks(withoutRoutines);
-  const { body, handoffs } = parseHandoffBlocks(withoutMails);
+  const { body: withoutRestart, restart } = parseRestartBlocks(withoutMails);
+  const { body, handoffs } = parseHandoffBlocks(withoutRestart);
   const choices = parseChoices(body);
   // NEEDS_INPUT: is for the app (it flags the reply), not for reading.
   const shown = (choices ? choices.body : body).replace(/^NEEDS_INPUT:\s*/gm, "").trim();
-  return { body: shown, choices, routines, handoffs, mails };
+  return { body: shown, choices, routines, handoffs, mails, restart };
 }
 
 // ---- Runs a routine fires ------------------------------------------------------
@@ -210,6 +213,7 @@ export function promptLabel(prompt: string): string {
   if (isHandback(prompt)) return "Checking what you did on the computer";
   const routine = routineRun(prompt);
   if (routine) return `Routine · ${routine.name}`;
+  if (restartedRun(prompt)) return "Back on a new computer";
   const from = handoffRun(prompt);
   if (from) return `Message from ${from.fromName}`;
   const mail = mailRun(prompt);
