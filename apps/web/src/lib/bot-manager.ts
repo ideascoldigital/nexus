@@ -26,6 +26,7 @@ import {
   writeBotGmailScript,
   writeBotVaultScripts,
   writeBotMcpConfig,
+  syncBotSkills,
   stopBotClaudeRuns,
   stopBotContainer,
 } from "@nexux/sandbox";
@@ -34,6 +35,8 @@ import { parseChoices } from "@/lib/bot-choices";
 import { collectBotFiles, removeBotFiles } from "@/lib/bot-files";
 import { renderRestartedPrompt, restartedRun } from "@/lib/bot-restart";
 import { deliverAttachments } from "@/lib/bot-uploads";
+import { botSkillFiles } from "@/services/bot-skill-store";
+import { withSkillCommand } from "@/lib/bot-skills";
 import { connectorServersFor } from "@/services/connector-store";
 import { probeColumns } from "@/lib/docker-endpoints";
 import { botNexusUrl, closeNexusReach } from "@/lib/bot-nexus-reach";
@@ -641,9 +644,17 @@ async function drain(sessionId: string): Promise<void> {
     // The user approved an email on its card: send (or save) it as written.
     const mail = mailRun(run.prompt);
     if (mail) prompt = prompt.replace(run.prompt, mailForClaude(mail));
-    // Files the user attached: copied into the computer, read by path.
+    // Skills it has loaded (spec 38), read from the library now so an edit
+    // there reaches the next prompt. A skill that cannot be read is skipped.
+    const skills = await botSkillFiles(session.botId).catch((err) => {
+      console.warn(`[bots] ${session.bot.name}: skills not loaded:`, err instanceof Error ? err.message : err);
+      return null;
+    });
+    const skillNames = (skills ?? []).map((s) => s.name);
+    // Files the user attached: copied into the computer, read by path. A
+    // message that starts with "/<skill>" asks for that skill by name.
     if (prompt.includes(run.prompt)) {
-      const own = await deliverAttachments({
+      const delivered = await deliverAttachments({
         botId: session.botId,
         prompt: run.prompt,
         container: session.containerName,
@@ -653,6 +664,7 @@ async function drain(sessionId: string): Promise<void> {
         console.warn("[bots] could not deliver attachments:", err instanceof Error ? err.message : err);
         return run.prompt;
       });
+      const own = withSkillCommand(delivered, skillNames);
       if (own !== run.prompt) prompt = prompt.replace(run.prompt, () => own);
     }
     // Links to the user's machine, reachable from the container.
@@ -671,6 +683,13 @@ async function drain(sessionId: string): Promise<void> {
           dockerHost: session.dockerHost,
         }) : null;
     try {
+      // Rewritten every prompt too: a skill loaded or dropped applies on the next message.
+      // Not reading the library (null) leaves the computer's skills as they were.
+      if (skills) {
+        await syncBotSkills(session.containerName, skills, { host: session.dockerHost }).catch((err) => {
+          console.warn(`[bots] ${session.bot.name}: skills not written:`, err instanceof Error ? err.message : err);
+        });
+      }
       // Rewritten every prompt, so a settings change applies on the next message.
       let userMcp = false;
       try {

@@ -884,6 +884,71 @@ export async function writeBotMcpConfig(
   if (res.code !== 0) throw new Error(`could not write the MCP config: ${tail(res.stderr, 200)}`);
 }
 
+/** Where Claude Code finds the user's skills, in the bot's persistent Claude folder. */
+export const BOT_SKILLS_DIR = `${BOT_CLAUDE_DIR}/skills`;
+
+/** One skill as it goes into a computer: its folder's files, paths relative to it. */
+export type BotSkillFiles = { name: string; files: { path: string; content: string | Buffer }[] };
+
+/** A skill folder name Nexus will write and remove: one path segment, nothing clever. */
+export const BOT_SKILL_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
+
+/**
+ * Runs inside the computer with the skills on stdin. It owns only the folders
+ * it lists in its manifest, so a skill the bot made itself is never touched:
+ * a skill dropped since the last prompt goes, every loaded one is rewritten
+ * whole (a file removed from it goes too), and the manifest is replaced.
+ */
+export function renderSkillSyncScript(skillsDir = BOT_SKILLS_DIR): string {
+  return `
+const fs = require("fs"), path = require("path");
+const dir = ${JSON.stringify(skillsDir)};
+const manifest = path.join(dir, ".nexux-skills.json");
+const ok = (n) => /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(n);
+const skills = JSON.parse(fs.readFileSync(0, "utf8")).filter((s) => ok(s.name));
+let before = [];
+try { before = JSON.parse(fs.readFileSync(manifest, "utf8")); } catch {}
+const keep = new Set(skills.map((s) => s.name));
+fs.mkdirSync(dir, { recursive: true });
+for (const n of before) if (ok(n) && !keep.has(n)) fs.rmSync(path.join(dir, n), { recursive: true, force: true });
+for (const s of skills) {
+  const root = path.join(dir, s.name);
+  fs.rmSync(root, { recursive: true, force: true });
+  for (const f of s.files) {
+    const to = path.resolve(root, f.path);
+    if (!to.startsWith(root + path.sep)) continue;
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.writeFileSync(to, Buffer.from(f.content, "base64"));
+  }
+}
+fs.writeFileSync(manifest, JSON.stringify([...keep]));
+`;
+}
+
+/**
+ * Put a bot's loaded skills in its computer (spec 38), where Claude Code
+ * discovers them by itself — and take out the ones it no longer has. One
+ * `docker exec`, the files on stdin, so it works on another machine's daemon.
+ * File contents are base64 so a binary asset survives the JSON.
+ */
+export async function syncBotSkills(
+  name: string,
+  skills: BotSkillFiles[],
+  target?: DockerTarget | null,
+): Promise<void> {
+  const payload = skills
+    .filter((s) => BOT_SKILL_NAME.test(s.name))
+    .map((s) => ({
+      name: s.name,
+      files: s.files.map((f) => ({ path: f.path, content: (typeof f.content === "string" ? Buffer.from(f.content, "utf8") : f.content).toString("base64") })),
+    }));
+  const res = await docker(target, ["exec", "-i", "-u", BOT_USER, name, "node", "-e", renderSkillSyncScript()], {
+    stdin: JSON.stringify(payload),
+    timeoutMs: 30_000,
+  });
+  if (res.code !== 0) throw new Error(`could not write the skills: ${tail(res.stderr, 200)}`);
+}
+
 /**
  * Register (or, with a null server, drop) one MCP server in Claude's own
  * config inside the computer — the step `claude mcp login|logout|get` needs,

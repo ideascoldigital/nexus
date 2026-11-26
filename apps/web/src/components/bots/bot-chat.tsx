@@ -39,11 +39,13 @@ import {
   Square,
   SquareTerminal,
   Trash2,
+  Wand2,
   Wrench,
   X,
 } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
+import { BotSkillsDialog, SlashMenu, useBotSkills } from "@/components/bots/bot-skills";
 import { MailCard } from "@/components/bots/bot-mail-card";
 import { Button } from "@/components/ui/button";
 import {
@@ -76,6 +78,7 @@ import { mailRun, parseMailState } from "@/lib/bot-mail";
 import { type DockMode } from "@/lib/bot-layout";
 import { isHandback, isIntro } from "@/lib/bot-prompts";
 import { restartedRun } from "@/lib/bot-restart";
+import { composeSkillMessage, slashOptions, slashQuery, splitSkillCommand, type SlashOption } from "@/lib/bot-skills";
 import { textOn } from "@/lib/bot-shapes";
 import { routineRun, splitReply } from "@/lib/bot-routines";
 
@@ -218,14 +221,49 @@ export function BotChat({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [prompt]);
 
+  // A skill picked from the "/" menu rides as a chip, not as text (spec 38).
+  const [pickedSkill, setPickedSkill] = useState<string | null>(null);
   const submit = () => {
     if (send.isPending || files.uploading) return;
     const attached = files.ready.map(attachmentMarkdown).join("\n");
-    const text = [prompt.trim(), attached].filter(Boolean).join("\n\n");
-    // The attachments go with this message only (not with a picked option).
-    if (text) send.mutate(text, { onSuccess: files.clear });
+    const text = [composeSkillMessage(pickedSkill, prompt), attached].filter(Boolean).join("\n\n");
+    // The attachments and the picked skill go with this message only (not with a picked option).
+    if (text)
+      send.mutate(text, {
+        onSuccess: () => {
+          files.clear();
+          setPickedSkill(null);
+        },
+      });
   };
-  const canSend = (prompt.trim().length > 0 || files.ready.length > 0) && !files.uploading;
+  const canSend =
+    (prompt.trim().length > 0 || files.ready.length > 0 || pickedSkill !== null) && !files.uploading;
+
+  // The "/" menu (spec 38): open while a command is typed alone at the start,
+  // until it is picked or dismissed with Escape.
+  const skills = useBotSkills(bot.id);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  // The highlighted row, for the query it was picked on: typing more resets it.
+  const [slashSel, setSlashSel] = useState<{ q: string | null; i: number }>({ q: null, i: 0 });
+  const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
+  const slash = slashQuery(prompt);
+  const slashMenu =
+    slash !== null && slashDismissed !== prompt
+      ? slashOptions(slash, (skills.data ?? []).filter((s) => s.loaded))
+      : [];
+  const slashActive = slashSel.q === slash ? slashSel.i : 0;
+  const setSlashActive = (next: number | ((i: number) => number)) =>
+    setSlashSel({ q: slash, i: typeof next === "function" ? next(slashActive) : next });
+  const pickSlash = (o: SlashOption) => {
+    if (o.kind === "skills") {
+      setPrompt("");
+      setSkillsOpen(true);
+    } else {
+      setPickedSkill(o.command);
+      setPrompt("");
+      inputRef.current?.focus();
+    }
+  };
 
   const addFiles = (list: Iterable<File>) => {
     const err = files.add(list);
@@ -460,7 +498,29 @@ export function BotChat({
       </div>
 
       <div className="shrink-0 px-6 pb-5">
-        <div className="mx-auto w-full max-w-[960px] rounded-[22px] border border-border bg-card/70 py-1.5 pr-1.5 pl-1.5 focus-within:border-foreground/25">
+        <div className="relative mx-auto w-full max-w-[960px] rounded-[22px] border border-border bg-card/70 py-1.5 pr-1.5 pl-1.5 focus-within:border-foreground/25">
+          <SlashMenu
+            options={slashMenu}
+            active={Math.min(slashActive, Math.max(slashMenu.length - 1, 0))}
+            onHover={setSlashActive}
+            onPick={pickSlash}
+          />
+          {pickedSkill && (
+            <div className="flex px-1.5 pt-1.5 pb-0.5">
+              <span className="flex items-center gap-1.5 rounded-full border border-border bg-background/60 py-1 pr-1 pl-2.5 text-[12px]">
+                <Wand2 className="h-3.5 w-3.5 text-muted-foreground" />
+                Using <span className="font-mono">{pickedSkill}</span>
+                <button
+                  type="button"
+                  onClick={() => setPickedSkill(null)}
+                  aria-label="Don't use this skill"
+                  className="flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            </div>
+          )}
           {files.items.length > 0 && (
             <div className="flex flex-wrap gap-2 px-1.5 pt-1.5 pb-1">
               {files.items.map((f) => (
@@ -502,15 +562,39 @@ export function BotChat({
               addFiles(pasted);
             }}
             onKeyDown={(e) => {
+              if (slashMenu.length > 0) {
+                const n = slashMenu.length;
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setSlashActive((i) => (i + (e.key === "ArrowDown" ? 1 : n - 1)) % n);
+                  return;
+                }
+                if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+                  e.preventDefault();
+                  pickSlash(slashMenu[Math.min(slashActive, n - 1)]);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setSlashDismissed(prompt);
+                  return;
+                }
+              }
+              if (e.key === "Backspace" && pickedSkill && prompt === "") {
+                setPickedSkill(null);
+                return;
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 submit();
               }
             }}
             placeholder={
-              busy
-                ? `${bot.name} is busy. This will run next…`
-                : `Message ${bot.name}`
+              pickedSkill
+                ? `What should ${bot.name} do with ${pickedSkill}? (or just send)`
+                : busy
+                  ? `${bot.name} is busy. This will run next…`
+                  : `Message ${bot.name} — / for skills`
             }
             className="max-h-40 min-h-[30px] flex-1 resize-none bg-transparent py-1.5 pl-1 text-[13.5px] leading-5 outline-none placeholder:text-muted-foreground"
           />
@@ -532,6 +616,7 @@ export function BotChat({
           </div>
         </div>
       </div>
+      <BotSkillsDialog botId={bot.id} botName={bot.name} open={skillsOpen} onOpenChange={setSkillsOpen} />
       <ConfirmDialog
         open={confirm === "restart"}
         onOpenChange={(o) => !o && setConfirm(null)}
@@ -1010,7 +1095,9 @@ const RunMessages = memo(function RunMessages({
   // back, an email you approved on its card).
   const quiet =
     isIntro(run.prompt) || routine !== null || restarted !== null || answerBack !== null || sending !== null;
-  const { text: ownText, attachments: attached } = splitAttachments(run.prompt);
+  const { text: sentText, attachments: attached } = splitAttachments(run.prompt);
+  // "/<skill> …" shows as a chip over what you wrote.
+  const { skill: usedSkill, rest: ownText } = splitSkillCommand(sentText);
   const mailState = parseMailState(run.mailState);
   const mails = reply?.mails.map((m, i) => (
     <MailCard
@@ -1069,6 +1156,12 @@ const RunMessages = memo(function RunMessages({
         </p>
       ) : hidden ? null : (
         <div className="flex flex-col items-end gap-1">
+          {usedSkill && (
+            <span className="flex items-center gap-1 text-[11.5px] text-muted-foreground">
+              <Wand2 className="h-3 w-3" />
+              Using <span className="font-mono">{usedSkill}</span>
+            </span>
+          )}
           {attached.length > 0 && <SentAttachments files={attached} />}
           {/* Your messages wear the bot's color. */}
           {ownText && (
