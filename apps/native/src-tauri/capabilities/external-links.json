@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "external-links",
+  "description": "A link out of the app opens in the real browser: the webview answers a new-window request with nothing, so without this every outward link is dead on click. The page may only ask the opener for a URL, and only mailto, tel, http or https (the plugin's default scope) — never a path, a file or an app. Granted to the app's own server, dev or sidecar, and to no other site.",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://localhost:*",
+      "http://localhost:*/*",
+      "http://127.0.0.1:*",
+      "http://127.0.0.1:*/*"
+    ]
+  },
+  "permissions": [
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
+  ]
+}

@@ -53,3 +53,7 @@ No native state beyond two mutexes (`SidecarChild`, `ZoomLevel`). All data lives
 Release builds update themselves (D-93). The sidecar's `lib/auto-update.ts` checks GitHub's latest release a minute after boot and every 6h, installs a newer one with `lib/self-update.ts` (macOS: replace the bundle in /Applications; Linux: AppImage in `~/.local/bin`; Windows: NSIS installer), and the root-layout notice offers Restart → `/api/updates/restart` → `lib/relaunch.ts` (detached script: quit by bundle id, wait for this shell's pid, reopen). The gate is `build-info.json`'s `release` flag, which is true only for CI tag builds; `start.js` turns it into `NEXUX_RELEASE_BUILD=1`. `NEXUX_AUTO_UPDATE=0` disables it.
 
 Rust backend uses `tauri-plugin-shell` + `tauri-plugin-opener`. Icons bundled for macOS/iOS/Android/Windows.
+
+## Capabilities
+
+`src-tauri/capabilities/` is four files, because the page the window shows is a **remote origin** (the sidecar on 127.0.0.1, or Next in dev) and gets only what it is named for: `default.json` is the shell's own, while `sidecar-zoom` (webview zoom), `titlebar-drag` (the overlay title bar) and `external-links` (D-99: `opener:allow-open-url` scoped by `allow-default-urls` to mailto/tel/http/https) are granted to that origin and no other site. A link out of the app is dead without the last one: the webview answers a new-window request with nothing, and `NativeMenuGuard` has taken away the context menu that would have offered "open in new tab". The page side is `web/src/lib/external-links.ts`, installed once from the root layout.
