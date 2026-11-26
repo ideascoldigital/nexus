@@ -2,13 +2,20 @@ import { Prisma, prisma } from "@nexux/db";
 import { NextRequest, NextResponse } from "next/server";
 import { enqueueBotPrompt } from "@/lib/bot-manager";
 import { buildIntroPrompt } from "@/lib/bot-intro";
-import { botActivity, botDataFor, botInputSchema, botPreview } from "@/lib/bot-view";
+import {
+  botActiveAt,
+  botActivity,
+  botDataFor,
+  botInputSchema,
+  botPreview,
+  byRecentActivity,
+} from "@/lib/bot-view";
 import { missingEndpoint } from "@/lib/docker-endpoints";
 import { getActiveWorkspaceId } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 
-/** The active workspace's bots, with what each computer is doing right now. */
+/** The active workspace's bots, most recent activity first, with what each computer is doing right now. */
 export async function GET() {
   const bots = await prisma.bot.findMany({
     // Strictly this workspace's team — unlike agents and skills, which are
@@ -22,43 +29,71 @@ export async function GET() {
       runs: {
         orderBy: { createdAt: "desc" },
         take: 1,
-        select: { prompt: true, status: true, result: true, error: true, needsInput: true, createdAt: true, finishedAt: true },
+        select: {
+          prompt: true,
+          status: true,
+          result: true,
+          error: true,
+          needsInput: true,
+          createdAt: true,
+          finishedAt: true,
+        },
       },
-      _count: { select: { runs: { where: { status: { in: ["queued", "running"] } } } } },
+      _count: {
+        select: { runs: { where: { status: { in: ["queued", "running"] } } } },
+      },
     },
   });
   return NextResponse.json(
-    bots.map(({ sessions, runs, _count, ...bot }) => {
-      const latest = sessions[0] ?? null;
-      const last = runs[0] ?? null;
-      return {
-        ...bot,
-        activity: botActivity(latest, _count.runs),
-        lastActivityAt: latest?.lastActivityAt ?? null,
-        // The list reads like a chat inbox: the latest message and when it landed.
-        preview: botPreview(last),
-        previewAt: last ? (last.finishedAt ?? last.createdAt) : null,
-        needsInput: last?.status === "completed" && last.needsInput,
-      };
-    }),
+    bots
+      .map((b) => ({
+        b,
+        activeAt: botActiveAt(b, b.runs[0] ?? null),
+        createdAt: b.createdAt,
+      }))
+      .sort(byRecentActivity)
+      .map(({ b }) => b)
+      .map(({ sessions, runs, _count, ...bot }) => {
+        const latest = sessions[0] ?? null;
+        const last = runs[0] ?? null;
+        return {
+          ...bot,
+          activity: botActivity(latest, _count.runs),
+          lastActivityAt: latest?.lastActivityAt ?? null,
+          // The list reads like a chat inbox: the latest message and when it landed.
+          preview: botPreview(last),
+          previewAt: last ? (last.finishedAt ?? last.createdAt) : null,
+          needsInput: last?.status === "completed" && last.needsInput,
+        };
+      }),
   );
 }
 
 export async function POST(req: NextRequest) {
   const parsed = botInputSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(
+      { error: parsed.error.flatten() },
+      { status: 400 },
+    );
   }
   if (await missingEndpoint(parsed.data.dockerEndpointId)) {
-    return NextResponse.json({ error: "That Docker endpoint no longer exists." }, { status: 400 });
+    return NextResponse.json(
+      { error: "That Docker endpoint no longer exists." },
+      { status: 400 },
+    );
   }
   const workspaceId = await getActiveWorkspaceId();
   const bot = await prisma.bot.create({
-    data: { ...botDataFor(parsed.data, Prisma.DbNull), workspaceId } as Prisma.BotCreateInput,
+    data: {
+      ...botDataFor(parsed.data, Prisma.DbNull),
+      workspaceId,
+    } as Prisma.BotCreateInput,
   });
   // `?intro=0` skips the greeting — imports create many bots at once, and each
   // greeting wakes a computer.
-  if (req.nextUrl.searchParams.get("intro") === "0") return NextResponse.json(bot, { status: 201 });
+  if (req.nextUrl.searchParams.get("intro") === "0")
+    return NextResponse.json(bot, { status: 201 });
   // A new teammate says hi first: it wakes its computer and introduces itself
   // with a "where do we start?" question.
   //
@@ -71,7 +106,10 @@ export async function POST(req: NextRequest) {
   void buildIntroPrompt(bot)
     .then((prompt) => enqueueBotPrompt(bot.id, prompt))
     .catch((err) =>
-      console.warn("[bots] intro skipped:", err instanceof Error ? err.message : err),
+      console.warn(
+        "[bots] intro skipped:",
+        err instanceof Error ? err.message : err,
+      ),
     );
   return NextResponse.json(bot, { status: 201 });
 }

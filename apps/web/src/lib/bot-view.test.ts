@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  botActiveAt,
+  byRecentActivity,
   botActivity,
   botInputSchema,
   describeRunsOn,
@@ -253,4 +255,22 @@ test("a session carries where it runs, so the screen can be labelled", () => {
   };
   assert.equal(shapeSession(row)?.runsOn.kind, "local");
   assert.equal(shapeSession({ ...row, dockerHost: "ssh://devbox" })?.runsOn.kind, "remote");
+});
+
+test("bots sort by their latest activity, newest first; idle ones by when they were hired", () => {
+  const d = (s: string) => new Date(`2026-11-24T${s}:00Z`);
+  const rows = [
+    { name: "old, idle", createdAt: d("08:00"), last: null },
+    { name: "replied at 10", createdAt: d("07:00"), last: { createdAt: d("09:00"), finishedAt: d("10:00") } },
+    { name: "asked at 11, working", createdAt: d("06:00"), last: { createdAt: d("11:00"), finishedAt: null } },
+    { name: "new, idle", createdAt: d("09:30"), last: null },
+    { name: "same time, hired later", createdAt: d("08:30"), last: { createdAt: d("08:00"), finishedAt: d("10:00") } },
+  ].map((r) => ({ ...r, activeAt: botActiveAt(r, r.last) }));
+  assert.deepEqual(rows.sort(byRecentActivity).map((r) => r.name), [
+    "asked at 11, working",
+    "replied at 10",
+    "same time, hired later",
+    "new, idle",
+    "old, idle",
+  ]);
 });

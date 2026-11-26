@@ -8,6 +8,7 @@
 // values into a server definition. Pure and client-safe.
 
 import type { BotMcpServers } from "@/lib/bot-mcp";
+import { normalizeDbUri } from "@/lib/db-uri";
 
 export type ConnectorCategory = "Communication" | "Productivity" | "Developer" | "Data" | "Sales" | "Payments" | "Search";
 
@@ -33,6 +34,8 @@ export type ConnectorField = {
   help?: string;
   /** A sanity check on what was pasted (not proof that it works). */
   pattern?: RegExp;
+  /** Clean up what was pasted before it is checked and used. */
+  normalize?: (v: string) => string;
 };
 
 export type ConnectorDef = {
@@ -149,7 +152,7 @@ export const CONNECTORS: ConnectorDef[] = [
       { text: "Copy the connection string (Connect → Drivers) with that user's password in it" },
     ],
     fields: [
-      { key: "uri", label: "Connection string", type: "secret", placeholder: "mongodb+srv://user:password@cluster…", pattern: /^mongodb(\+srv)?:\/\// },
+      { key: "uri", label: "Connection string", type: "secret", placeholder: "mongodb+srv://user:password@cluster…", pattern: /^mongodb(\+srv)?:\/\//, normalize: normalizeDbUri },
       { key: "readOnly", label: "Read only", type: "toggle", defaultOn: true, help: "Bots can query but never insert, update or delete" },
     ],
     server: (v) => ({
@@ -165,7 +168,7 @@ export const CONNECTORS: ConnectorDef[] = [
     tagline: "Read-only SQL queries on a Postgres database",
     kind: "mcp",
     steps: [{ text: "Create a database role with read-only access and paste its connection string" }],
-    fields: [{ key: "uri", label: "Connection string", type: "secret", placeholder: "postgresql://user:password@host:5432/db", pattern: /^postgres(ql)?:\/\// }],
+    fields: [{ key: "uri", label: "Connection string", type: "secret", placeholder: "postgresql://user:password@host:5432/db", pattern: /^postgres(ql)?:\/\//, normalize: normalizeDbUri }],
     server: (v) => ({ command: "npx", args: ["-y", "@modelcontextprotocol/server-postgres", v.uri] }),
   },
   {
@@ -253,6 +256,7 @@ export function validateConnectorValues(
       return { ok: false, error: `${f.label} is required` };
     }
     if (v.length > 4000 || /[\r\n]/.test(v)) return { ok: false, error: `${f.label} doesn't look right` };
+    if (f.normalize) v = f.normalize(v);
     if (f.pattern && !f.pattern.test(v)) {
       return { ok: false, error: `${f.label} doesn't look right${f.placeholder ? ` — expected something like ${f.placeholder}` : ""}` };
     }
