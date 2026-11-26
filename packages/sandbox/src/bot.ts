@@ -44,12 +44,16 @@ export const BOT_NOVNC_PORT = 6080;
 export const BOT_CDP_PORT = 9222;
 export const BOT_READY_MARKER = "/tmp/nexux-bot-ready";
 export const BOT_FAILED_MARKER = "/tmp/nexux-bot-failed";
+/** Written before a computer is put to sleep: Chromium is closed on purpose, not relaunched. */
+export const BOT_STOPPING_MARKER = "/tmp/nexux-bot-stopping";
 export const BOT_MCP_CONFIG = "/etc/nexux-bot/mcp.json";
 /** The bot's own MCP servers (from its settings), rewritten before every prompt. Owner-only: may hold keys. */
 export const BOT_USER_MCP_CONFIG = `${BOT_HOME}/.nexux-mcp.json`;
 /** How long Claude waits for a bot's MCP servers to start (MCP_TIMEOUT): room for a cold `npx -y`. */
 export const BOT_MCP_STARTUP_MS = 180_000;
 export const BOT_CONTAINER_LABEL = "nexux-bot=1";
+/** Label holding the computer's fingerprint (botComputerFingerprint), read when it wakes. */
+export const BOT_CONFIG_LABEL = "nexux-bot-config";
 export const BOT_IMAGE_REPO = "nexux-bot";
 export const BOT_SCREEN = { width: 1440, height: 900 };
 /** Shared, persistent folder: the same host folder is mounted in every bot's computer. */
@@ -81,6 +85,9 @@ export function renderBotEntrypoint(): string {
   return `#!/usr/bin/env bash
 set -u
 export DISPLAY=:99
+# A computer that slept wakes with its old /tmp: markers and the X lock of the
+# last boot would read as "ready" (or "display taken") before anything is up.
+rm -f ${BOT_READY_MARKER} ${BOT_FAILED_MARKER} ${BOT_STOPPING_MARKER} /tmp/.X99-lock /tmp/.X11-unix/X99
 mkdir -p "$HOME/.vnc" "${BOT_WORKDIR}" "${BOT_DOWNLOADS}"
 
 Xvfb :99 -screen 0 ${width}x${height}x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
@@ -154,8 +161,9 @@ websockify --web /usr/share/novnc ${BOT_NOVNC_PORT} localhost:5900 \\
 # --test-type hides the "unsupported command-line flag" bar that flag brings.
 # The profile is persistent (mounted from the host), so a lock left by the
 # previous computer — another hostname — would stop Chromium: clear it.
+# Going to sleep closes it on purpose (BOT_STOPPING_MARKER): not relaunched.
 (
-  while true; do
+  while [ ! -f ${BOT_STOPPING_MARKER} ]; do
     rm -f "$HOME/.chrome/SingletonLock" "$HOME/.chrome/SingletonSocket" "$HOME/.chrome/SingletonCookie"
     chromium --no-sandbox --test-type --password-store=basic --no-first-run --no-default-browser-check \\
       --disable-dev-shm-usage --disable-features=Translate \\
@@ -656,11 +664,14 @@ export function botRunArgs(opts: {
   memoryMb?: number | null;
   /** Host folders bind-mounted into the computer (the shared workspace, the browser profile). */
   mounts?: { host: string; container: string }[];
+  /** botComputerFingerprint: a computer woken with another one is replaced instead. */
+  config?: string;
 }): string[] {
   return [
     "run",
     "-d",
-    "--rm", // ephemeral: stopping the session deletes the machine
+    // No --rm: an idle computer is stopped, not deleted, and wakes as itself
+    // (its disk, its browser, its Claude). Deleting it is an explicit `rm`.
     "--init",
     "--shm-size=1g", // Chromium crashes tabs on Docker's 64 MB default
     ...(opts.memoryMb ? ["--memory", `${opts.memoryMb}m`] : []),
@@ -679,8 +690,26 @@ export function botRunArgs(opts: {
     "--add-host=host.docker.internal:host-gateway",
     "--label",
     BOT_CONTAINER_LABEL,
+    ...(opts.config ? ["--label", `${BOT_CONFIG_LABEL}=${opts.config}`] : []),
     opts.image,
   ];
+}
+
+/**
+ * What a computer was made from: its image, the Claude token in its env and
+ * its mounts. A sleeping computer only wakes as itself when this still
+ * matches — a new app version, a new token or a moved folder means a new
+ * computer. Hashed, so the token never sits in a label.
+ */
+export function botComputerFingerprint(opts: {
+  image: string;
+  token: string;
+  mounts?: { host: string; container: string }[];
+}): string {
+  return createHash("sha256")
+    .update(JSON.stringify([opts.image, opts.token, opts.mounts ?? []]))
+    .digest("hex")
+    .slice(0, 16);
 }
 
 /** `127.0.0.1:49153` (one line per binding) → 49153. */
@@ -702,6 +731,7 @@ export async function launchBotContainer(opts: {
   mounts?: { host: string; container: string }[];
   onLog?: LogSink;
   target?: DockerTarget | null;
+  config?: string;
 }): Promise<{ containerName: string; vncPort: number }> {
   const image = await ensureBotImage({ onLog: opts.onLog, target: opts.target });
   const memoryMb = await sandboxMemoryLimitMb(opts.target);
@@ -713,6 +743,7 @@ export async function launchBotContainer(opts: {
       envKeys: Object.keys(opts.env),
       memoryMb,
       mounts: opts.mounts,
+      config: opts.config,
     }),
     { env: opts.env, timeoutMs: 120_000 },
   );
@@ -773,7 +804,76 @@ export async function botReadiness(
   return "starting";
 }
 
-/** Remove the container (and, being --rm, everything in it). Idempotent. */
+/**
+ * Put a computer to sleep: close Chromium properly first — killed, it loses
+ * the cookies it has not written yet, and Google then rejects the stale
+ * session — then stop the container. Its disk stays; wakeBotContainer
+ * starts it again. A computer from before sleeping existed (run with --rm)
+ * is deleted by the stop; the flush still keeps its sign-ins in the profile.
+ */
+export async function sleepBotContainer(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<void> {
+  await docker(
+    target,
+    ["exec", "-u", BOT_USER, name, "node", "-e", BOT_BROWSER_CLOSE_SCRIPT],
+    { timeoutMs: 30_000 },
+  ).catch(() => undefined);
+  await docker(target, ["stop", "-t", "20", name], { timeoutMs: 60_000 }).catch(() => undefined);
+}
+
+/**
+ * Ask Chromium to quit (DevTools Browser.close: a normal shutdown, cookies
+ * written), then wait for it to be gone. Touches the stopping marker first so
+ * the entrypoint does not relaunch it.
+ */
+const BOT_BROWSER_CLOSE_SCRIPT = `
+const fs = require("fs");
+const { execSync } = require("child_process");
+fs.writeFileSync(${JSON.stringify(BOT_STOPPING_MARKER)}, "");
+try { fs.rmSync(${JSON.stringify(BOT_READY_MARKER)}, { force: true }); } catch {}
+const running = () => { try { execSync("pgrep -x chromium", { stdio: "ignore" }); return true; } catch { return false; } };
+(async () => {
+  try {
+    const v = await (await fetch("http://127.0.0.1:${BOT_CDP_PORT}/json/version")).json();
+    const ws = new WebSocket(v.webSocketDebuggerUrl);
+    await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
+    ws.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+  } catch {}
+  for (let i = 0; i < 40 && running(); i++) await new Promise((r) => setTimeout(r, 250));
+  process.exit(0);
+})();
+`;
+
+/** Start a sleeping computer again; its noVNC port is a new one. */
+export async function wakeBotContainer(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<{ vncPort: number }> {
+  const started = await docker(target, ["start", name], { timeoutMs: 60_000 });
+  if (started.code !== 0) throw new Error(`docker start failed: ${tail(started.stderr || started.stdout)}`);
+  const vncPort = await botScreenPort(name, target);
+  if (!vncPort) throw new Error("could not read the bot's published noVNC port");
+  return { vncPort };
+}
+
+/** The fingerprint a computer was made with, or null when there is no such container. */
+export async function botContainerConfig(
+  name: string,
+  target?: DockerTarget | null,
+): Promise<string | null> {
+  const res = await docker(
+    target,
+    ["inspect", "-f", `{{index .Config.Labels "${BOT_CONFIG_LABEL}"}}`, name],
+    { timeoutMs: 15_000 },
+  ).catch(() => null);
+  if (!res || res.code !== 0) return null;
+  const v = res.stdout.trim();
+  return v && v !== "<no value>" ? v : null;
+}
+
+/** Delete the container and everything on its disk. Idempotent. */
 export async function stopBotContainer(
   name: string,
   target?: DockerTarget | null,

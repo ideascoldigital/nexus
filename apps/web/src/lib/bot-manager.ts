@@ -1,7 +1,10 @@
 // Bots (spec 31): AI teammates, each with its own ephemeral computer.
 //
-// A session is one container: started on the first prompt (or by hand),
-// deleted when the user ends it or after `idleMinutes` without a prompt.
+// A session is one container: started on the first prompt (or by hand), put
+// to sleep (stopped, not deleted) when the user turns it off or after
+// `idleMinutes` without a prompt, and woken as itself — same disk, browser
+// sign-ins and Claude conversation — on the next one. Only a restart, a
+// changed setup or deleting the bot gives it a new computer.
 // Prompts queue per session and run strictly in order, each one resuming the
 // session's Claude conversation. Everything runs in-process, like the dev
 // console: the workers and abort handles live on globalThis so they survive
@@ -29,6 +32,11 @@ import {
   syncBotSkills,
   stopBotClaudeRuns,
   stopBotContainer,
+  sleepBotContainer,
+  wakeBotContainer,
+  botContainerConfig,
+  botComputerFingerprint,
+  botImageTag,
 } from "@nexux/sandbox";
 import { detectNeedsInput, NEEDS_INPUT_MARKER } from "@/lib/agent-core";
 import { parseChoices } from "@/lib/bot-choices";
@@ -74,6 +82,8 @@ import {
 import { resolveClaudeCodeToken } from "@/lib/sandbox-manager";
 
 export const ACTIVE_SESSION_STATUSES = ["starting", "ready"] as const;
+/** A stopped computer that is kept, to wake as itself. Not active: it runs nothing. */
+export const ASLEEP = "asleep";
 const READY_TIMEOUT_MS = 3 * 60_000;
 const READY_POLL_MS = 1500;
 const RUN_TIMEOUT_MS = 45 * 60_000;
@@ -177,6 +187,32 @@ export async function startBotSession(botId: string): Promise<BotSession> {
       "No Claude Code token — add one in Settings → AI Providers (`claude setup-token`)",
     );
   }
+  const config = botComputerFingerprint({
+    image: botImageTag(),
+    token: claude.token,
+    mounts: mountsFor(bot, target.host),
+  });
+
+  // Its own computer, asleep: wake it, when it is still what this bot would
+  // be given now. Otherwise it is retired and a new one is made.
+  const asleep = await prisma.botSession.findFirst({
+    where: { botId, status: ASLEEP },
+    orderBy: { createdAt: "desc" },
+  });
+  if (asleep) {
+    const same =
+      asleep.dockerHost === target.host &&
+      (await botContainerConfig(asleep.containerName, { host: asleep.dockerHost })) === config;
+    if (same) {
+      const woken = await prisma.botSession.update({
+        where: { id: asleep.id },
+        data: { status: "starting", error: null, stoppedAt: null, lastActivityAt: new Date() },
+      });
+      void bootSession(woken.id, claude.token, { wake: true, config });
+      return woken;
+    }
+    await retireAsleep(botId);
+  }
 
   const session = await prisma.botSession.create({
     data: {
@@ -187,31 +223,47 @@ export async function startBotSession(botId: string): Promise<BotSession> {
       vncPassword: randomBytes(6).toString("hex"),
     },
   });
-  void bootSession(session.id, claude.token);
+  void bootSession(session.id, claude.token, { wake: false, config });
   return session;
 }
 
-async function bootSession(sessionId: string, claudeToken: string): Promise<void> {
+/** Delete the bot's sleeping computers: the next one it gets is new. */
+async function retireAsleep(botId: string): Promise<void> {
+  const asleep = await prisma.botSession.findMany({ where: { botId, status: ASLEEP } });
+  for (const s of asleep) {
+    await stopBotContainer(s.containerName, { host: s.dockerHost });
+    await prisma.botSession.update({ where: { id: s.id }, data: { status: "stopped" } });
+  }
+}
+
+async function bootSession(
+  sessionId: string,
+  claudeToken: string,
+  opts: { wake: boolean; config: string },
+): Promise<void> {
   const session = await prisma.botSession.findUnique({ where: { id: sessionId }, include: { bot: true } });
   if (!session) return;
   const target = { host: session.dockerHost };
   let build = { step: null as string | null, line: null as string | null };
-  bootProgress.set(sessionId, "Preparing the computer…");
+  bootProgress.set(sessionId, opts.wake ? "Waking the computer…" : "Preparing the computer…");
   try {
-    const { vncPort } = await launchBotContainer({
-      name: session.containerName,
-      target,
-      env: {
-        CLAUDE_CODE_OAUTH_TOKEN: claudeToken,
-        VNC_PASSWORD: session.vncPassword ?? "",
-      },
-      // The shared workspace and its browser profile outlive the computer.
-      mounts: mountsFor(session.bot, session.dockerHost),
-      onLog: (chunk) => {
-        build = buildProgress(build, chunk);
-        if (build.step || build.line) bootProgress.set(sessionId, formatBuildProgress(build));
-      },
-    });
+    const { vncPort } = opts.wake
+      ? await wakeBotContainer(session.containerName, target)
+      : await launchBotContainer({
+          name: session.containerName,
+          target,
+          env: {
+            CLAUDE_CODE_OAUTH_TOKEN: claudeToken,
+            VNC_PASSWORD: session.vncPassword ?? "",
+          },
+          // The shared workspace and its browser profile outlive the computer.
+          mounts: mountsFor(session.bot, session.dockerHost),
+          config: opts.config,
+          onLog: (chunk) => {
+            build = buildProgress(build, chunk);
+            if (build.step || build.line) bootProgress.set(sessionId, formatBuildProgress(build));
+          },
+        });
     // What goes on the row is the port on *this* machine: the published one for
     // a local daemon, an SSH forward's for a remote one.
     const localPort = await botScreenLocalPort({
@@ -251,6 +303,18 @@ async function bootSession(sessionId: string, claudeToken: string): Promise<void
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await stopBotContainer(session.containerName, target);
+    const current = await prisma.botSession.findUnique({ where: { id: sessionId }, select: { status: true } });
+    if (opts.wake && current?.status === "starting") {
+      // It would not wake: a new computer in its place, for the same prompts.
+      // A new computer means a fresh Claude (it gets the recent chat).
+      console.warn("[bots] could not wake the computer, making a new one:", message);
+      await prisma.botSession.update({
+        where: { id: sessionId },
+        data: { claudeSessionId: null, systemPromptHash: null },
+      });
+      await bootSession(sessionId, claudeToken, { ...opts, wake: false });
+      return;
+    }
     await endSession(sessionId, "error", `Could not start the computer: ${message}`);
   } finally {
     bootProgress.delete(sessionId);
@@ -312,7 +376,7 @@ export async function shareSignIns(
 /** Settle a session and everything still pending on it. */
 async function endSession(
   sessionId: string,
-  status: "stopped" | "error",
+  status: "stopped" | "error" | typeof ASLEEP,
   error?: string,
 ): Promise<void> {
   // Every way a session ends passes through here, so this is the one place the
@@ -348,23 +412,37 @@ async function endSession(
   }
 }
 
-/** Delete the bot's computer. Anything queued or running is canceled. */
-export async function stopBotSession(botId: string): Promise<void> {
+/**
+ * Turn the bot's computer off. Anything queued or running is canceled.
+ * By default it sleeps — stopped, kept, and woken as itself by the next
+ * prompt. `delete` throws it away (a restart, or the bot being deleted),
+ * along with any computer already asleep.
+ */
+export async function stopBotSession(botId: string, opts: { delete?: boolean } = {}): Promise<void> {
   const sessions = await prisma.botSession.findMany({
     where: { botId, status: { in: [...ACTIVE_SESSION_STATUSES] } },
   });
   for (const s of sessions) {
     // Last chance to keep what was signed into on this computer.
     if (s.status === "ready") await shareSignIns(botId, s.containerName, s.dockerHost);
+    // A computer still booting has nothing worth keeping.
+    const keep = !opts.delete && s.status === "ready";
     // Settle first so the worker and the booter both see the session gone.
-    await endSession(s.id, "stopped");
+    await endSession(s.id, keep ? ASLEEP : "stopped");
     const running = await prisma.botRun.findMany({
       where: { sessionId: s.id },
       select: { id: true },
     });
     for (const r of running) aborts.get(r.id)?.abort();
-    await stopBotContainer(s.containerName, { host: s.dockerHost });
+    const target = { host: s.dockerHost };
+    if (keep) {
+      await stopBotClaudeRuns(s.containerName, target).catch(() => undefined);
+      await sleepBotContainer(s.containerName, target);
+    } else {
+      await stopBotContainer(s.containerName, target);
+    }
   }
+  if (opts.delete) await retireAsleep(botId);
 }
 
 /**
@@ -388,7 +466,7 @@ export async function restartBotSession(
   });
   // Deletes the computer (keeping the team's sign-ins) and settles the session,
   // which cancels those runs; they are put back on the new session below.
-  await stopBotSession(botId);
+  await stopBotSession(botId, { delete: true });
   const session = await startBotSession(botId);
   if (queued.length) {
     await prisma.botRun.updateMany({
@@ -427,7 +505,7 @@ export async function clearBotContext(botId: string): Promise<Date> {
   const clearedAt = new Date();
   await prisma.bot.update({ where: { id: botId }, data: { contextClearedAt: clearedAt } });
   await prisma.botSession.updateMany({
-    where: { botId, status: { in: [...ACTIVE_SESSION_STATUSES] } },
+    where: { botId, status: { in: [...ACTIVE_SESSION_STATUSES, ASLEEP] } },
     data: { claudeSessionId: null, systemPromptHash: null },
   });
   return clearedAt;
@@ -986,8 +1064,10 @@ export async function reapIdleBots(): Promise<number> {
 /**
  * What a restart does with the computers it finds: a `ready` session whose
  * container is still there is adopted (it keeps its browser, sign-ins and
- * Claude memory); every other active session ends; containers nobody adopts
- * are deleted. Pure, so the decision is testable without Docker.
+ * Claude memory); every other active session ends; a sleeping computer is
+ * left asleep, and forgotten only when its container is gone; containers
+ * nobody adopts or keeps are deleted. Pure, so the decision is testable
+ * without Docker.
  */
 /** A container is identified by its name *and* its daemon, never by name alone. */
 export type BotContainerRef = { name: string; dockerHost: string | null };
@@ -1004,16 +1084,20 @@ const refKey = (c: BotContainerRef) => `${c.dockerHost ?? ""}\u0000${c.name}`;
 export function planRecovery(
   sessions: { id: string; status: string; containerName: string; dockerHost: string | null }[],
   containers: BotContainerRef[],
-): { adopt: string[]; end: string[]; remove: BotContainerRef[] } {
+): { adopt: string[]; end: string[]; remove: BotContainerRef[]; forget: string[] } {
   const present = new Set(containers.map(refKey));
   const key = (s: { containerName: string; dockerHost: string | null }) =>
     refKey({ name: s.containerName, dockerHost: s.dockerHost });
-  const adopt = sessions.filter((s) => s.status === "ready" && present.has(key(s)));
-  const kept = new Set(adopt.map(key));
+  const active = sessions.filter((s) => s.status !== ASLEEP);
+  const asleep = sessions.filter((s) => s.status === ASLEEP);
+  const adopt = active.filter((s) => s.status === "ready" && present.has(key(s)));
+  const sleeping = asleep.filter((s) => present.has(key(s)));
+  const kept = new Set([...adopt, ...sleeping].map(key));
   return {
     adopt: adopt.map((s) => s.id),
-    end: sessions.filter((s) => !adopt.includes(s)).map((s) => s.id),
+    end: active.filter((s) => !adopt.includes(s)).map((s) => s.id),
     remove: containers.filter((c) => !kept.has(refKey(c))),
+    forget: asleep.filter((s) => !sleeping.includes(s)).map((s) => s.id),
   };
 }
 
@@ -1026,7 +1110,7 @@ export function planRecovery(
  */
 export async function recoverBots(): Promise<void> {
   const sessions = await prisma.botSession.findMany({
-    where: { status: { in: [...ACTIVE_SESSION_STATUSES] } },
+    where: { status: { in: [...ACTIVE_SESSION_STATUSES, ASLEEP] } },
     select: { id: true, status: true, containerName: true, dockerHost: true },
   });
   // Computers can be spread across daemons, so every one Nexus knows about is
@@ -1046,8 +1130,10 @@ export async function recoverBots(): Promise<void> {
     const s = sessions.find((x) => x.id === id)!;
     const target = { host: s.dockerHost };
     if ((await botReadiness(s.containerName, target)) !== "ready") {
-      await stopBotContainer(s.containerName, target);
-      await endSession(id, "stopped", "Nexux restarted — the computer was deleted");
+      // Still there but not up (the Mac or Docker restarted): keep it asleep;
+      // the next prompt wakes it, or replaces it if it will not wake.
+      await sleepBotContainer(s.containerName, target);
+      await endSession(id, ASLEEP);
       continue;
     }
     await stopBotClaudeRuns(s.containerName, target);
@@ -1073,6 +1159,9 @@ export async function recoverBots(): Promise<void> {
   }
   for (const c of plan.remove) {
     await stopBotContainer(c.name, { host: c.dockerHost });
+  }
+  if (plan.forget.length) {
+    await prisma.botSession.updateMany({ where: { id: { in: plan.forget } }, data: { status: "stopped" } });
   }
   if (!g.nexuxBotReaper) {
     // One tick a minute: put idle computers to sleep, wake bots whose

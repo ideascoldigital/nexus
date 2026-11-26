@@ -14,6 +14,8 @@ import {
   BOT_NOVNC_PORT,
   botImageTag,
   botRunArgs,
+  botComputerFingerprint,
+  BOT_CONFIG_LABEL,
   botVncUrl,
   buildBotClaudeCommand,
   dockerRun,
@@ -70,14 +72,15 @@ test("the MCP config attaches Playwright to the visible Chromium over CDP", () =
   ]);
 });
 
-test("docker run is ephemeral, labelled, loopback-only, and keeps secrets out of argv", () => {
+test("docker run keeps the computer, labelled, loopback-only, and keeps secrets out of argv", () => {
   const args = botRunArgs({
     name: "nexux-bot-abc",
     image: "nexux-bot:123",
     envKeys: ["CLAUDE_CODE_OAUTH_TOKEN", "VNC_PASSWORD"],
     memoryMb: 4096,
   });
-  assert.ok(args.includes("--rm"));
+  // Stopped when idle, not deleted: it wakes as itself.
+  assert.ok(!args.includes("--rm"));
   assert.ok(args.includes("--init"));
   assert.equal(args[args.indexOf("-p") + 1], `127.0.0.1::${BOT_NOVNC_PORT}`);
   assert.equal(args[args.indexOf("--label") + 1], BOT_CONTAINER_LABEL);
@@ -419,4 +422,22 @@ test("the system prompt teaches the restart block and where MCP sign-ins come fr
   assert.match(p, /loaded fresh on every message/);
   assert.match(p, /Sign in/);
   assert.ok(p.includes(BOT_CLAUDE_DIR));
+});
+
+test("a computer carries its fingerprint, and the fingerprint follows image, token and mounts", () => {
+  const mounts = [{ host: "/h/ws", container: "/workspace" }];
+  const fp = botComputerFingerprint({ image: "nexux-bot:1", token: "t", mounts });
+  const args = botRunArgs({ name: "n", image: "i", envKeys: [], config: fp });
+  assert.ok(args.includes(`${BOT_CONFIG_LABEL}=${fp}`));
+  assert.match(fp, /^[0-9a-f]{16}$/);
+  assert.equal(fp, botComputerFingerprint({ image: "nexux-bot:1", token: "t", mounts }));
+  assert.notEqual(fp, botComputerFingerprint({ image: "nexux-bot:2", token: "t", mounts }));
+  assert.notEqual(fp, botComputerFingerprint({ image: "nexux-bot:1", token: "u", mounts }));
+  assert.notEqual(fp, botComputerFingerprint({ image: "nexux-bot:1", token: "t", mounts: [] }));
+});
+
+test("a woken computer starts clean: old markers and X lock go, and a closed browser stays closed", () => {
+  const entry = renderBotEntrypoint();
+  assert.match(entry, /rm -f \/tmp\/nexux-bot-ready \/tmp\/nexux-bot-failed \/tmp\/nexux-bot-stopping \/tmp\/\.X99-lock/);
+  assert.match(entry, /while \[ ! -f \/tmp\/nexux-bot-stopping \]; do/);
 });

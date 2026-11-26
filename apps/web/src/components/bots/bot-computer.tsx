@@ -311,7 +311,7 @@ function ComputerSurface({
   const remoteClip = useRemoteClipboard(frameRef, true);
 
   // Your time on the screen is activity: without this the idle reaper only
-  // counts chat messages, and deletes the computer while you are using it.
+  // counts chat messages, and puts the computer to sleep while you are using it.
   const live = Boolean(url);
   useEffect(() => {
     if (!live) return;
@@ -491,7 +491,7 @@ function ComputerSurface({
               <Button
                 size="icon-sm"
                 variant="ghost"
-                title="Put to sleep (deletes the computer)"
+                title="Put to sleep (it wakes as it was)"
                 aria-label="Put the computer to sleep"
                 disabled={busy}
                 onClick={() => setConfirmStop(true)}
@@ -586,7 +586,7 @@ function ComputerSurface({
                     {state === "error" ? (session?.error ?? "The computer could not start.") : "Asleep"}
                   </p>
                   <p className="max-w-sm text-[11px] text-white/40">
-                    It wakes up by itself when you send a message, and is deleted after{" "}
+                    It wakes up as it was when you send a message, and goes to sleep after{" "}
                     {feed?.bot.idleMinutes ?? 30} idle minutes.
                   </p>
                 </>
@@ -678,8 +678,8 @@ function ComputerSurface({
       <ConfirmDialog
         open={confirmStop}
         onOpenChange={setConfirmStop}
-        title="Delete this computer?"
-        description="Anything on it is lost and running work stops."
+        title="Put this computer to sleep?"
+        description="Running work stops. Its files, open sign-ins and memory stay, and it wakes as it was with your next message."
         confirmLabel="Put to sleep"
         onConfirm={onStop}
       />

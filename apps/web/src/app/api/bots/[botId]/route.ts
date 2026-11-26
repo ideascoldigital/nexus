@@ -38,7 +38,7 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
   const { botId } = await params;
   const exists = await prisma.bot.findUnique({ where: { id: botId }, select: { id: true } });
   if (!exists) return NextResponse.json({ error: "Bot not found" }, { status: 404 });
-  await stopBotSession(botId);
+  await stopBotSession(botId, { delete: true });
   await prisma.bot.delete({ where: { id: botId } });
   removeBotFiles(botId);
   removeBotProfile(botId);
