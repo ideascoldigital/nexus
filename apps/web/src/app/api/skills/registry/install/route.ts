@@ -1,10 +1,6 @@
-import { prisma } from "@nexux/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { homeDir } from "@nexux/config";
-import { resolveRegistrySkill } from "@/lib/skills-registry";
+import { installRegistrySkill, SkillInstallError } from "@/lib/skill-install";
 import { getActiveWorkspaceId } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
@@ -21,48 +17,13 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
-
-  const workspaceId = await getActiveWorkspaceId();
-
-  let resolved;
   try {
-    resolved = await resolveRegistrySkill(parsed.data.id);
+    const skill = await installRegistrySkill(parsed.data.id, await getActiveWorkspaceId());
+    return NextResponse.json(skill, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Resolve failed";
-    return NextResponse.json({ error: message }, { status: 502 });
+    if (err instanceof SkillInstallError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
   }
-
-  const existing = await prisma.skill.findUnique({
-    where: { name: resolved.name },
-  });
-  if (existing) {
-    return NextResponse.json(
-      {
-        error:
-          existing.workspaceId === workspaceId
-            ? "Skill already installed in this workspace"
-            : "A skill with this name exists in another workspace",
-      },
-      { status: 409 },
-    );
-  }
-
-  const skillDir = path.join(homeDir(), ".claude", "skills", resolved.name);
-  await fs.mkdir(skillDir, { recursive: true });
-  const skillFile = path.join(skillDir, "SKILL.md");
-  await fs.writeFile(skillFile, resolved.content, "utf8");
-
-  const skill = await prisma.skill.create({
-    data: {
-      name: resolved.name,
-      description: resolved.description || null,
-      workspaceId,
-      source: "skills.sh",
-      scope: "user",
-      path: skillFile,
-      body: resolved.body,
-    },
-  });
-
-  return NextResponse.json(skill, { status: 201 });
 }

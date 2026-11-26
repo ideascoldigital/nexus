@@ -225,3 +225,21 @@ export const deleteBotRoutine = (botId: string, id: string) =>
 
 export const runBotRoutine = (botId: string, id: string) =>
   call<BotRun>(`/api/bots/${botId}/routines/${id}/run`, { method: "POST" });
+
+/** A skill in the bot's library (spec 38), and whether it has it loaded. */
+export type BotSkill = {
+  id: string;
+  name: string;
+  description: string | null;
+  source: string;
+  loaded: boolean;
+};
+
+export const getBotSkills = (botId: string) => call<{ skills: BotSkill[] }>(`/api/bots/${botId}/skills`);
+
+export const setBotSkills = (botId: string, skillIds: string[]) =>
+  call<{ skills: BotSkill[] }>(`/api/bots/${botId}/skills`, { method: "PUT", body: JSON.stringify({ skillIds }) });
+
+/** Install a skills.sh skill into the library and load it on the bot. */
+export const installBotSkill = (botId: string, registryId: string) =>
+  call<{ skills: BotSkill[] }>(`/api/bots/${botId}/skills`, { method: "POST", body: JSON.stringify({ registryId }) });

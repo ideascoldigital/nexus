@@ -677,6 +677,22 @@ model Skill {
 
   projectSkills ProjectSkill[]
   agentSkills   AgentSkill[]
+  botSkills     BotSkill[]
+}
+
+// A skill a bot has loaded (spec 38), written into its computer's
+// ~/.claude/skills before each prompt.
+model BotSkill {
+  id        String   @id @default(cuid())
+  botId     String
+  skillId   String
+  createdAt DateTime @default(now())
+
+  bot   Bot   @relation(fields: [botId], references: [id], onDelete: Cascade)
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([botId, skillId])
+  @@index([botId])
 }
 
 model ProjectSkill {
@@ -1220,6 +1236,7 @@ model Bot {
   sessions       BotSession[]
   runs           BotRun[]
   routines       BotRoutine[]
+  skills         BotSkill[]
   dockerEndpoint DockerEndpoint? @relation(fields: [dockerEndpointId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId])

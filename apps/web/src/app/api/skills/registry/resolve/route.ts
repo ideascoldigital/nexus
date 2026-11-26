@@ -10,7 +10,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
   try {
+    // The folder's files are for installing; the preview only shows SKILL.md.
     const skill = await resolveRegistrySkill(id);
+    delete skill.files;
     return NextResponse.json(skill);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Resolve failed";
