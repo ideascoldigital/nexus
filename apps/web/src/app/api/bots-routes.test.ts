@@ -290,7 +290,19 @@ test("a restart adopts live ready computers and deletes the rest", () => {
       { name: "c-c", dockerHost: null },
       { name: "c-orphan", dockerHost: null },
     ],
+    forget: [],
   });
+});
+
+test("a restart leaves sleeping computers asleep, and forgets one whose container is gone", () => {
+  const plan = planRecovery(
+    [
+      { id: "s", status: "asleep", containerName: "c-s", dockerHost: null }, // kept to wake as itself
+      { id: "g", status: "asleep", containerName: "c-g", dockerHost: null }, // container gone
+    ],
+    [{ name: "c-s", dockerHost: null }],
+  );
+  assert.deepEqual(plan, { adopt: [], end: [], remove: [], forget: ["g"] });
 });
 
 test("the same container name on two daemons is two computers, not one", () => {

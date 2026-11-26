@@ -23,7 +23,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
   }
 }
 
-/** Delete the computer. Queued and running prompts are canceled. */
+/** Turn the computer off: it sleeps, and wakes as itself. Queued and running prompts are canceled. */
 export async function DELETE(_req: NextRequest, { params }: Params) {
   const { botId } = await params;
   await stopBotSession(botId);

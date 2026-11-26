@@ -273,6 +273,11 @@ export {
   runBotPrompt,
   stopBotClaudeRuns,
   stopBotContainer,
+  sleepBotContainer,
+  wakeBotContainer,
+  botContainerConfig,
+  botComputerFingerprint,
+  BOT_STOPPING_MARKER,
   type BotReadiness,
 } from "./bot";
 export {
