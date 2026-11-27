@@ -16,7 +16,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Settings,
-  Blocks,
   Loader2,
   MessageSquare,
   PanelLeftClose,
@@ -26,7 +25,6 @@ import {
   PowerOff,
   Plus,
   Search,
-  ShieldCheck,
   Trash2,
   X,
 } from "lucide-react";
@@ -246,12 +244,6 @@ export function BotsView() {
               <WorkspaceSwitcher variant="compact" returnTo="/bots" />
               <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setQuery("")} aria-label="Search bots" title="Search">
                 <Search className="h-3.5 w-3.5" />
-              </Button>
-              <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setPanel({ kind: "apps", tab: null })} aria-label="Connect apps" title="Connect apps">
-                <Blocks className="h-3.5 w-3.5" />
-              </Button>
-              <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setPanel({ kind: "vault", tab: null })} aria-label="Vault" title="Vault">
-                <ShieldCheck className="h-3.5 w-3.5" />
               </Button>
               <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setCreating(true)} aria-label="New bot" title="New bot">
                 <Plus className="h-4 w-4" />

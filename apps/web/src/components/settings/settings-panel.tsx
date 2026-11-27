@@ -19,6 +19,12 @@ import {
   Plug,
   ShieldCheck,
   Blocks,
+  Box,
+  ChevronLeft,
+  ChevronRight,
+  Container,
+  Search,
+  Server,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ApiTokensSection } from "@/components/settings/api-tokens";
@@ -173,7 +179,12 @@ export type SettingsPanelKind = "vault" | "apps" | "settings";
 const PANEL_SECTIONS: Record<SettingsPanelKind, readonly SettingsTab[]> = {
   vault: ["vault", "ai", "cloud", "git"],
   apps: ["connectors", "communications", "integrations"],
-  settings: ["machines", "api", "terminal", "appearance", "desktop", "backup"],
+  // Everything in one place: the Vault and Connect apps live here too now.
+  settings: [
+    "vault", "ai", "cloud", "git",
+    "connectors", "communications", "integrations",
+    "machines", "api", "terminal", "appearance", "desktop", "backup",
+  ],
 };
 const PANEL_COPY: Record<SettingsPanelKind, { title: string; subtitle: string }> = {
   vault: { title: "Vault", subtitle: "Every key and login, encrypted on this machine" },
@@ -183,6 +194,7 @@ const PANEL_COPY: Record<SettingsPanelKind, { title: string; subtitle: string }>
 
 /** Which panel shows a section — where an old ?tab= link should land. */
 export function panelOf(tab: string | null): SettingsPanelKind {
+  if (PANEL_SECTIONS.settings.includes(tab as SettingsTab)) return "settings";
   for (const [panel, tabs] of Object.entries(PANEL_SECTIONS) as [SettingsPanelKind, readonly SettingsTab[]][]) {
     if ((tabs as readonly string[]).includes(tab ?? "")) return panel;
   }
@@ -204,8 +216,15 @@ type NavItem = {
 // apps), what the machine itself needs (system).
 const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   {
-    label: "Providers",
+    label: "Vault",
     items: [
+      {
+        id: "vault",
+        label: "Logins & secrets",
+        icon: ShieldCheck,
+        description:
+          "Logins, API keys, cards and contact details bots use without seeing them. Encrypted on this machine; the key lives in your Keychain.",
+      },
       {
         id: "ai",
         label: "AI Providers",
@@ -231,8 +250,15 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     ],
   },
   {
-    label: "Channels & apps",
+    label: "Connect apps",
     items: [
+      {
+        id: "connectors",
+        label: "Apps for bots",
+        icon: Blocks,
+        description:
+          "Apps your bots use as tools — Gmail, Slack, Notion, GitHub, databases and more. Connect once; tokens stay encrypted here.",
+      },
       {
         id: "communications",
         label: "Channels",
@@ -286,20 +312,6 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
           "Which database and data folder the desktop app opens — point it at your dev database to test the packaged app on real data.",
       },
       {
-        id: "vault",
-        label: "Logins & secrets",
-        icon: ShieldCheck,
-        description:
-          "Logins, API keys, cards and contact details bots use without seeing them. Encrypted on this machine; the key lives in your Keychain.",
-      },
-      {
-        id: "connectors",
-        label: "Apps for bots",
-        icon: Blocks,
-        description:
-          "Apps your bots use as tools — Gmail, Slack, Notion, GitHub, databases and more. Connect once; tokens stay encrypted here.",
-      },
-      {
         id: "backup",
         label: "Backup & migration",
         icon: DatabaseBackup,
@@ -310,6 +322,101 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   },
 ];
 
+
+type SubPage = { id: string; name: string; tagline: string; icon: typeof Bot; render: () => React.ReactNode };
+
+/** Machines and Backup hold several things: a list of them, each opening its own page (as Connect apps). */
+const SUB_PAGES: Partial<Record<SettingsTab, SubPage[]>> = {
+  machines: [
+    {
+      id: "docker",
+      name: "Docker endpoints",
+      tagline: "Other machines' Docker for bots and local sandboxes",
+      icon: Container,
+      render: () => <DockerEndpointsSection />,
+    },
+    {
+      id: "naming",
+      name: "Machine names",
+      tagline: "The word generated sandbox names start with",
+      icon: Box,
+      render: () => <SandboxNamingSection />,
+    },
+    {
+      id: "search",
+      name: "Local search model",
+      tagline: "The model behind project search and ⌘K, on this machine",
+      icon: Search,
+      render: () => <EmbeddingsSection />,
+    },
+  ],
+  backup: [
+    {
+      id: "hosts",
+      name: "Nexus hosts",
+      tagline: "Machines running Nexus that you can move onto",
+      icon: Server,
+      render: () => <NexusHostsSection />,
+    },
+    {
+      id: "migration",
+      name: "Backup & migration",
+      tagline: "Export your configuration, or bring it from another Nexus",
+      icon: DatabaseBackup,
+      render: () => <BackupMigrationSection />,
+    },
+  ],
+};
+
+function SubPageList({ pages, back }: { pages: SubPage[]; back: string }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const open = pages.find((p) => p.id === openId);
+  if (open) {
+    return (
+      <div className="space-y-5">
+        <button
+          type="button"
+          onClick={() => setOpenId(null)}
+          className="flex items-center gap-1 text-[12.5px] text-muted-foreground hover:text-foreground"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+          {back}
+        </button>
+        <div className="flex items-center gap-3">
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border bg-card">
+            <open.icon className="h-5 w-5 text-muted-foreground" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-[16px] font-semibold">{open.name}</h3>
+            <p className="text-[12.5px] text-muted-foreground">{open.tagline}</p>
+          </div>
+        </div>
+        <div className="nexux-flat nexux-sub space-y-6">{open.render()}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-x-6 sm:grid-cols-2">
+      {pages.map((p) => (
+        <button
+          key={p.id}
+          type="button"
+          onClick={() => setOpenId(p.id)}
+          className="group flex w-full items-center gap-3 rounded-xl px-1 py-2.5 text-left transition-colors hover:bg-accent/50"
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card">
+            <p.icon className="h-4.5 w-4.5 text-muted-foreground" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13.5px] font-medium">{p.name}</span>
+            <span className="block truncate text-[12px] text-muted-foreground">{p.tagline}</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/60 group-hover:text-foreground" />
+        </button>
+      ))}
+    </div>
+  );
+}
 
 export function isSettingsSection(value: string | null): value is SettingsTab {
   return isSettingsTab(value);
@@ -469,20 +576,13 @@ export function SettingsPanel({
 
               {activeTab === "cloud" && <ProviderCatalog kind="cloud" />}
 
-              {activeTab === "machines" && (
-                <>
-                  {/* Compute you already own: another machine's Docker for
-                      bots and local sandboxes (spec 26). */}
-                  <DockerEndpointsSection />
-                  {/* Names the machines Nexus provisions, local docker ones too. */}
-                  <SandboxNamingSection />
-                  {/* The local model behind search and ⌘K — its status, and a
-                      way to try it rather than trust it. */}
-                  <EmbeddingsSection />
-                </>
-              )}
+              {activeTab === "machines" && <SubPageList pages={SUB_PAGES.machines!} back="Machines" />}
 
-              {activeTab === "api" && <ApiTokensSection />}
+              {activeTab === "api" && (
+                <div className="nexux-flat space-y-6">
+                  <ApiTokensSection />
+                </div>
+              )}
 
               {activeTab === "git" && <ProviderCatalog kind="git" />}
 
@@ -490,23 +590,30 @@ export function SettingsPanel({
 
               {activeTab === "integrations" && <ChannelsAndAccounts kind="accounts" />}
 
-              {activeTab === "terminal" && <TerminalShellSection />}
+              {activeTab === "terminal" && (
+                <div className="nexux-flat space-y-6">
+                  <TerminalShellSection />
+                </div>
+              )}
 
-              {activeTab === "appearance" && <AppearanceSection />}
+              {activeTab === "appearance" && (
+                <div className="nexux-flat space-y-6">
+                  <AppearanceSection />
+                </div>
+              )}
 
-              {activeTab === "desktop" && <DesktopAppSection />}
+              {activeTab === "desktop" && (
+                <div className="nexux-flat space-y-6">
+                  <DesktopAppSection />
+                </div>
+              )}
 
               {activeTab === "vault" && <VaultSection />}
 
               {activeTab === "connectors" && <ConnectApps />}
 
-              {activeTab === "backup" && (
-                <>
-                  {/* Create the machine first, then move configuration onto it. */}
-                  <NexusHostsSection />
-                  <BackupMigrationSection />
-                </>
-              )}
+              {/* Create the machine first, then move configuration onto it. */}
+              {activeTab === "backup" && <SubPageList pages={SUB_PAGES.backup!} back="Backup & migration" />}
             </div>
           </div>
       </div>

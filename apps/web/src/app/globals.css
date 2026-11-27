@@ -319,3 +319,50 @@ html[data-titlebar="overlay"] .titlebar-only {
 @utility max-w-page {
   max-width: var(--page-max-width);
 }
+
+/*
+ * Settings → the same look as Vault and Connect apps (spec 39): a section's
+ * cards lose their chrome — a small title over its content, and the content
+ * in one rounded box — instead of a card per block. Scoped to the panel, so
+ * the components keep their own look anywhere else.
+ */
+.nexux-flat [data-slot="card"] {
+  gap: 0.6rem;
+  overflow: visible;
+  padding-block: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.nexux-flat [data-slot="card-header"] {
+  padding-inline: 0.25rem;
+}
+.nexux-flat [data-slot="card-title"] {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.nexux-flat [data-slot="card-title"] > svg {
+  display: none;
+}
+.nexux-flat [data-slot="card-description"] {
+  font-size: 12.5px;
+}
+.nexux-flat [data-slot="card-content"] {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--card) 60%, transparent);
+  padding: 0.875rem 1rem;
+}
+.nexux-flat [data-slot="card-content"] [data-slot="card-content"] {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.nexux-flat [data-slot="card-footer"] {
+  border: 0;
+  background: transparent;
+  padding: 0.25rem 0.25rem 0;
+}
+/* A sub-page already says its name in its header: its first block's title would repeat it. */
+.nexux-sub > [data-slot="card"]:first-child [data-slot="card-title"] {
+  display: none;
+}
