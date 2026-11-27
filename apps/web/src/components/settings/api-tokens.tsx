@@ -69,6 +69,18 @@ const SCOPE_COPY: Record<ApiScope, { label: string; detail: string }> = {
     label: "Read projects",
     detail: "List projects, features and phases.",
   },
+  "projects:write": {
+    label: "Create projects",
+    detail: "Create projects, clone their repositories and recognise their stack.",
+  },
+  "files:read": {
+    label: "Read project files",
+    detail: "List and read the files in a project's folders — never .env files, keys or other secrets.",
+  },
+  "files:write": {
+    label: "Edit project files",
+    detail: "Create and edit files in a project's folders on this machine — never .env files, keys or .git.",
+  },
   "tasks:read": {
     label: "Read runs",
     detail: "Activity, run status and logs — what is blocked or finished.",

@@ -314,6 +314,26 @@ pub fn run() {
                     menu.append(&view)?;
                 }
             }
+            // ⌘W closes the tab you are in (a terminal, files…), not the app:
+            // the default menu's "Close Window" owns ⌘W and closing the only
+            // window quits Nexus. It goes, and "Close Tab" asks the page; the
+            // window's red button still closes it.
+            for item in menu.items()? {
+                if let MenuItemKind::Submenu(sub) = item {
+                    for child in sub.items()? {
+                        if let MenuItemKind::Predefined(p) = &child {
+                            if p.text().map(|t| t == "Close Window").unwrap_or(false) {
+                                sub.remove(p)?;
+                            }
+                        }
+                    }
+                    if sub.text().as_deref().ok() == Some("Window") {
+                        let close_tab =
+                            MenuItem::with_id(app, "close_tab", "Close Tab", true, Some("CmdOrCtrl+W"))?;
+                        sub.prepend(&close_tab)?;
+                    }
+                }
+            }
             app.set_menu(menu)?;
 
             // Dev mode is driven by beforeDevCommand + devUrl (Next on :3000).
@@ -572,6 +592,11 @@ pub fn run() {
             "zoom_in" => page_zoom(app, "in"),
             "zoom_out" => page_zoom(app, "out"),
             "zoom_reset" => page_zoom(app, "reset"),
+            "close_tab" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.eval("window.__nexuxCloseTab && window.__nexuxCloseTab()");
+                }
+            }
             _ => {}
         })
         .build(tauri::generate_context!())

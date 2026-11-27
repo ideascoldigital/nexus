@@ -12,11 +12,10 @@
 // The inbox is one workspace's team (D-87); the title bar's switcher is how
 // you move between them.
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft,
+  Settings,
   Blocks,
   Loader2,
   MessageSquare,
@@ -36,8 +35,11 @@ import { BotAvatar } from "@/components/bots/bot-avatar";
 import { BotChat } from "@/components/bots/bot-chat";
 import { ComputerDialog, ComputerDock, useComputerControl } from "@/components/bots/bot-computer";
 import { BotPanel } from "@/components/bots/bot-panel";
+import { ProjectSandboxPanel, useProjectSandboxes, type SurfaceKind } from "@/components/bots/project-sandbox-panel";
+import { ProjectCard } from "@/components/bots/project-card";
 import { NewBotDialog } from "@/components/bots/new-bot-dialog";
 import { WorkspaceSwitcher } from "@/components/layout/workspace-switcher";
+import { panelOf, SettingsPanel, type SettingsPanelKind } from "@/components/settings/settings-panel";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   ContextMenu,
@@ -48,9 +50,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { ConnectAppsDialog } from "@/components/connectors/connect-apps";
 import { ResizeHandle } from "@/components/ui/resize-handle";
-import { VaultSection } from "@/components/vault/vault-section";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -121,8 +121,26 @@ function isUnread(bot: BotListItem, seenAt: string | undefined): boolean {
 export function BotsView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [vaultOpen, setVaultOpen] = useState(false);
-  const [appsOpen, setAppsOpen] = useState(false);
+  // Vault, Connect apps and Settings are modals here, not pages. Old links
+  // (/settings?tab=…) are redirected to /bots?settings=1&tab=…, which opens
+  // whichever of the three holds that section.
+  const [panel, setPanel] = useState<{ kind: SettingsPanelKind; tab: string | null } | null>(() => {
+    if (typeof window === "undefined") return null;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("settings")) return null;
+    const tab = params.get("tab");
+    return { kind: panelOf(tab), tab };
+  });
+  const closePanel = (open: boolean) => {
+    if (open) return;
+    setPanel(null);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("settings")) {
+      url.searchParams.delete("settings");
+      url.searchParams.delete("tab");
+      window.history.replaceState(window.history.state, "", url.toString());
+    }
+  };
   const [query, setQuery] = useState<string | null>(null);
   // The inbox folds to a rail of faces, so the chat and the bot's computer get
   // the whole window when you are watching one bot work.
@@ -229,10 +247,10 @@ export function BotsView() {
               <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setQuery("")} aria-label="Search bots" title="Search">
                 <Search className="h-3.5 w-3.5" />
               </Button>
-              <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setAppsOpen(true)} aria-label="Connect apps" title="Connect apps">
+              <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setPanel({ kind: "apps", tab: null })} aria-label="Connect apps" title="Connect apps">
                 <Blocks className="h-3.5 w-3.5" />
               </Button>
-              <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setVaultOpen(true)} aria-label="Vault" title="Vault">
+              <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setPanel({ kind: "vault", tab: null })} aria-label="Vault" title="Vault">
                 <ShieldCheck className="h-3.5 w-3.5" />
               </Button>
               <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setCreating(true)} aria-label="New bot" title="New bot">
@@ -287,19 +305,20 @@ export function BotsView() {
             inboxOpen ? "px-3" : "justify-center px-2",
           )}
         >
-          {/* The only way out of the simple view — kept small on purpose. */}
-          <Link
-            href="/"
+          {/* Nexus is run from here (spec 39): settings open over it. */}
+          <button
+            type="button"
+            onClick={() => setPanel({ kind: "settings", tab: null })}
             className={cn(
               "flex items-center gap-2 rounded-full py-1.5 text-[12.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
               inboxOpen ? "px-2" : "px-2.5",
             )}
-            title="Back to the Nexus dashboard"
-            aria-label="Back to the Nexus dashboard"
+            title="Nexus settings"
+            aria-label="Nexus settings"
           >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            {inboxOpen && "Nexus dashboard"}
-          </Link>
+            <Settings className="h-3.5 w-3.5" />
+            {inboxOpen && "Settings"}
+          </button>
           {inboxOpen && (
             <Button
               size="icon-sm"
@@ -330,13 +349,13 @@ export function BotsView() {
       )}
 
       <NewBotDialog open={creating} onOpenChange={setCreating} onCreated={(id) => setSelectedId(id)} />
-      <ConnectAppsDialog open={appsOpen} onOpenChange={setAppsOpen} />
-      <Dialog open={vaultOpen} onOpenChange={setVaultOpen}>
-        <DialogContent className="gap-0 p-0 sm:max-w-[760px]">
-          <DialogHeader className="px-6 pt-5 pb-3">
-            <DialogTitle className="text-[17px] font-semibold">Vault</DialogTitle>
-          </DialogHeader>
-          <VaultSection className="max-h-[70vh] overflow-y-auto px-6 pb-6" />
+      <Dialog open={panel !== null} onOpenChange={closePanel}>
+        <DialogContent className="flex h-[min(88vh,860px)] flex-col gap-0 overflow-hidden p-5 sm:max-w-[min(1120px,94vw)]">
+          <DialogTitle className="sr-only">
+            {panel?.kind === "vault" ? "Vault" : panel?.kind === "apps" ? "Connect apps" : "Settings"}
+          </DialogTitle>
+          {/* Keyed so switching from one panel to another starts on its own section. */}
+          {panel && <SettingsPanel key={panel.kind} panel={panel.kind} initialTab={panel.tab} />}
         </DialogContent>
       </Dialog>
       {/* Keyed so the field starts from whichever bot was right-clicked,
@@ -574,6 +593,31 @@ function BotWorkspace({
       : clampDockWidth(readJson(BOTS_KEYS.dockWidth, DOCK_DEFAULT_WIDTH), window.innerWidth),
   );
   const [computerOpen, setComputerOpen] = useState(false);
+  // A project chat's right panel is its sandbox (spec 39): it opens by itself
+  // once there is one, and stays as the user leaves it after that.
+  const projectSandboxes = useProjectSandboxes(bot.kind === "nexus" ? bot.projectId : null);
+  // It opens by itself only while a sandbox is being set up (its setup log);
+  // otherwise "Details" opens it.
+  const booting = (projectSandboxes.data ?? []).some((s) => s.status === "provisioning" || s.status === "pending");
+  // The right column: the sandbox (by itself once there is one) or Details.
+  const [pane, setPane] = useState<"sandbox" | "none" | null>(null);
+  const shownPane = bot.projectId ? (pane ?? (booting ? "sandbox" : "none")) : "none";
+  // A surface something asked the panel to open (the floating card), and
+  // whether the panel is expanded over the chat.
+  const [surfaceAsk, setSurfaceAsk] = useState<{ kind: SurfaceKind; at: number } | null>(null);
+  const [cardOpen, setCardOpen] = useState(false);
+  // A wide chat keeps the project card pinned at its top right (and leaves it
+  // room); a narrow one shows it as a popover from the chat's name.
+  const [chatWidth, setChatWidth] = useState(0);
+  const chatObserver = useRef<ResizeObserver | null>(null);
+  const chatColumnRef = useCallback((el: HTMLDivElement | null) => {
+    chatObserver.current?.disconnect();
+    if (!el) return;
+    chatObserver.current = new ResizeObserver(([entry]) => setChatWidth(Math.round(entry!.contentRect.width)));
+    chatObserver.current.observe(el);
+  }, []);
+  const pinCard = Boolean(bot.projectId) && chatWidth >= 980;
+  const [sandboxExpanded, setSandboxExpanded] = useState(false);
   // Frozen when the chat opens, so the NEW line stays put while you read.
   const [seenAtOpen] = useState(seenAt);
 
@@ -659,6 +703,60 @@ function BotWorkspace({
     const busy = feed?.runs.some((r) => r.status === "queued" || r.status === "running");
     if (!busy && !handBack.isPending) handBack.mutate();
   };
+
+  // The Nexus chat (spec 39) is only a chat: no computer, no details panel.
+  if (bot.kind === "nexus") {
+    return (
+      <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        {!(shownPane === "sandbox" && sandboxExpanded) && (
+        // The chat's own column: the floating card hangs under its name and
+        // stays centred on the chat, whatever the panel beside it does.
+        <div ref={chatColumnRef} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <BotChat
+          bot={bot}
+          feed={feed}
+          firstUnreadId={firstUnreadId}
+          // "Details" opens the panel: terminals, files, setup log, preview, settings.
+          panelOpen={shownPane === "sandbox"}
+          onTogglePanel={() => setPane(shownPane === "sandbox" ? "none" : "sandbox")}
+          onTitleClick={bot.projectId && !pinCard ? () => setCardOpen((v) => !v) : undefined}
+          insetRight={pinCard ? 340 : 0}
+          dockMode="off"
+          onDockMode={() => {}}
+          onOpenComputer={() => {}}
+          onChange={refresh}
+          team={team}
+          onOpenBot={onOpenBot}
+        />
+        {bot.projectId && (pinCard || cardOpen) && (
+          <ProjectCard
+            projectId={bot.projectId}
+            pinned={pinCard}
+            onClose={() => setCardOpen(false)}
+            onOpenSurface={(kind) => {
+              setPane("sandbox");
+              setSurfaceAsk({ kind, at: Date.now() });
+            }}
+          />
+        )}
+        </div>
+        )}
+        {bot.projectId && shownPane === "sandbox" && (
+          <ProjectSandboxPanel
+            projectId={bot.projectId}
+            open={surfaceAsk}
+            bot={bot}
+            expanded={sandboxExpanded}
+            onExpand={setSandboxExpanded}
+            onClose={() => {
+              setPane("none");
+              setSandboxExpanded(false);
+            }}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1">

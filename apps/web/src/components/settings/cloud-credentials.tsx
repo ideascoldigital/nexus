@@ -453,7 +453,7 @@ function CredentialRow({
 }) {
   const check = useCredentialCheck(cred, justSaved);
   return (
-    <div className="rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+    <div className="rounded-xl border border-border bg-card/60 px-3 py-2">
       <div className="flex items-center gap-3">
         <span className="text-sm font-medium">{cred.name}</span>
         <Badge variant="secondary" className="text-[10px]">
@@ -665,5 +665,60 @@ export function LlmCredentialsSection() {
       icon={<KeyRound className="h-5 w-5" />}
       providers={LLM_UI_PROVIDERS}
     />
+  );
+}
+
+/**
+ * One provider's credentials, in the Vault's catalog look (spec 39): the saved
+ * ones in a card, each with its Test and delete, then a card to add another.
+ */
+export function ProviderCredentials({ provider }: { provider: CredentialProvider }) {
+  const qc = useQueryClient();
+  const [justSavedId, setJustSavedId] = useState<string | null>(null);
+  const credentials = useQuery({ queryKey: ["cloud-credentials"], queryFn: getCredentials });
+  const invalidate = () => invalidateCredentialQueries(qc);
+  const deleteMutation = useMutation({
+    mutationFn: (credentialId: string) => deleteCredential(credentialId),
+    onSuccess: invalidate,
+  });
+  const list = (credentials.data ?? []).filter((c) => c.provider === provider);
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <h4 className="px-1 text-[12px] text-muted-foreground">Saved · {list.length}</h4>
+        {credentials.isLoading ? (
+          <p className="px-1 text-[12.5px] text-muted-foreground">Loading…</p>
+        ) : list.length === 0 ? (
+          <p className="rounded-xl border border-border bg-card/60 px-3 py-2.5 text-[12.5px] text-muted-foreground">
+            None yet — add one below.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {list.map((cred) => (
+              <CredentialRow
+                key={cred.id}
+                cred={cred}
+                onDelete={() => deleteMutation.mutate(cred.id)}
+                deleting={deleteMutation.isPending}
+                justSaved={cred.id === justSavedId}
+              />
+            ))}
+          </div>
+        )}
+        {deleteMutation.isError && <p className="px-1 text-xs text-destructive">{(deleteMutation.error as Error).message}</p>}
+      </div>
+      <div className="space-y-2">
+        <h4 className="px-1 text-[12px] text-muted-foreground">Add one</h4>
+        <div className="rounded-xl border border-border bg-card/60 p-3">
+          <NewCredentialForm
+            provider={provider}
+            onSaved={(created) => {
+              setJustSavedId(created.id);
+              invalidate();
+            }}
+          />
+        </div>
+      </div>
+    </div>
   );
 }

@@ -420,3 +420,9 @@ test("the system prompt teaches the restart block and where MCP sign-ins come fr
   assert.match(p, /Sign in/);
   assert.ok(p.includes(BOT_CLAUDE_DIR));
 });
+
+test("a bot's reasoning effort rides along as --effort, only a known level", () => {
+  assert.match(buildBotClaudeCommand("hi", { systemPrompt: "s", effort: "high" }), / --effort high -p /);
+  assert.doesNotMatch(buildBotClaudeCommand("hi", { systemPrompt: "s", effort: "x; rm" }), /--effort/);
+  assert.doesNotMatch(buildBotClaudeCommand("hi", { systemPrompt: "s" }), /--effort/);
+});

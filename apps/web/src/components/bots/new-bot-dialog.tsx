@@ -1,7 +1,9 @@
 "use client";
 
-// "Create New Bot": a big preview of the face, a name, a shape and a color.
-// The job and standing instructions are edited later from the bot's panel.
+// "Create New Bot": first what it is — an assistant (a teammate with its own
+// computer) or a project (spec 39: a chat that creates and runs a project in
+// Nexus, with no computer) — then a big preview of the face, a name, a shape
+// and a color. An assistant's job and instructions are edited from its panel.
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -27,6 +29,7 @@ export function NewBotDialog({
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const [kind, setKind] = useState<"bot" | "nexus">("bot");
   const [name, setName] = useState("");
   const [shape, setShape] = useState<BotShape>("blob");
   const [color, setColor] = useState<string>("#ec4899");
@@ -35,12 +38,16 @@ export function NewBotDialog({
   const [dockerEndpointId, setDockerEndpointId] = useState<string | null>(null);
 
   const create = useMutation({
-    mutationFn: () => createBot({ name: name.trim(), shape, color, dockerEndpointId }),
+    mutationFn: () =>
+      kind === "nexus"
+        ? createBot({ kind, name: name.trim() || "New project", shape, color })
+        : createBot({ name: name.trim(), shape, color, dockerEndpointId }),
     onSuccess: (bot) => {
       qc.invalidateQueries({ queryKey: ["bots"] });
       onCreated(bot.id);
       onOpenChange(false);
       setName("");
+      setKind("bot");
       setDockerEndpointId(null);
     },
     onError: (err) =>
@@ -50,6 +57,16 @@ export function NewBotDialog({
         variant: "destructive",
       }),
   });
+
+  const canCreate = kind === "nexus" || Boolean(name.trim());
+  const pickKind = (next: "bot" | "nexus") => {
+    setKind(next);
+    // A project chat starts with Nexus's own face; you can still change it.
+    if (next === "nexus") {
+      setShape("hexagon");
+      setColor("#6366f1");
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -61,14 +78,36 @@ export function NewBotDialog({
           className="flex flex-col items-center gap-5 px-4 pt-5 pb-6"
           onSubmit={(e) => {
             e.preventDefault();
-            if (name.trim() && !create.isPending) create.mutate();
+            if (canCreate && !create.isPending) create.mutate();
           }}
         >
+          <div className="grid w-full grid-cols-2 gap-2">
+            {(
+              [
+                ["bot", "Assistant", "A teammate with its own computer and browser"],
+                ["nexus", "Project", "Creates a project with you and runs it in Nexus"],
+              ] as const
+            ).map(([id, label, hint]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={kind === id}
+                onClick={() => pickKind(id)}
+                className={cn(
+                  "rounded-xl border px-3 py-2 text-left transition-colors",
+                  kind === id ? "border-primary/60 bg-primary/10" : "border-border hover:bg-accent/60",
+                )}
+              >
+                <span className="block text-[13px] font-medium">{label}</span>
+                <span className="block text-[11px] leading-snug text-muted-foreground">{hint}</span>
+              </button>
+            ))}
+          </div>
           <BotAvatar shape={shape} color={color} size={108} looking />
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Name your Bot"
+            placeholder={kind === "nexus" ? "Project name (optional — Nexus asks)" : "Name your Bot"}
             maxLength={60}
             autoFocus
             className="h-9 w-full rounded-lg border border-input bg-transparent px-3 text-center text-[13px] outline-none placeholder:text-muted-foreground focus:border-ring"
@@ -106,7 +145,7 @@ export function NewBotDialog({
               />
             ))}
           </div>
-          <RunsOnSwitch value={dockerEndpointId} onChange={setDockerEndpointId} />
+          {kind === "bot" && <RunsOnSwitch value={dockerEndpointId} onChange={setDockerEndpointId} />}
           <button type="submit" hidden />
         </form>
         <DialogFooter className="m-0 rounded-none border-t border-border bg-transparent px-4 py-3">
@@ -115,7 +154,7 @@ export function NewBotDialog({
           </Button>
           <Button
             className="rounded-full px-4"
-            disabled={!name.trim() || create.isPending}
+            disabled={!canCreate || create.isPending}
             onClick={() => create.mutate()}
           >
             {create.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}

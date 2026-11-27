@@ -1,11 +1,4 @@
-import {
-  Bot,
-  BotMessageSquare,
-  FolderKanban,
-  Hash,
-  LayoutDashboard,
-  Settings,
-} from "lucide-react";
+import { BotMessageSquare, Settings } from "lucide-react";
 
 /**
  * The workspace's top-level destinations.
@@ -17,10 +10,6 @@ import {
  * happen again.
  */
 export const NAV_ITEMS = [
-  { icon: LayoutDashboard, label: "Dashboard", href: "/" },
-  { icon: FolderKanban, label: "Projects", href: "/projects" },
-  { icon: Bot, label: "Agents", href: "/agents" },
   { icon: BotMessageSquare, label: "Bots", href: "/bots" },
-  { icon: Hash, label: "Skills", href: "/skills" },
   { icon: Settings, label: "Settings", href: "/settings" },
 ] as const;

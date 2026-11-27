@@ -12,6 +12,9 @@
 /** Scope names, duplicated deliberately — see `SCOPES` below. */
 export const SCOPES = [
   "projects:read",
+  "projects:write",
+  "files:read",
+  "files:write",
   "tasks:read",
   "tasks:write",
   "sandboxes:read",
@@ -116,6 +119,64 @@ export type SeedResetSummary = {
 
 export type PowerAction = "pause" | "resume";
 
+/** A git repository found under a folder on the Nexus machine. */
+export type ScannedRepo = { name: string; localPath: string; hasGit: boolean };
+
+/** A kind of project an idea can be bootstrapped as. */
+export type BootstrapType = { key: string; name: string; tagline: string };
+
+/** A saved git credential, by name only — its secret never leaves Nexus. */
+export type GitCredentialSummary = { id: string; name: string; provider: string };
+
+export type NewRepositoryInput = {
+  name: string;
+  repoUrl?: string;
+  localPath?: string;
+  isMain?: boolean;
+  gitCredentialId?: string;
+};
+
+export type CreateProjectInput = {
+  name: string;
+  description?: string;
+  /** A scanned folder: the parent of the repos. */
+  workspacePath?: string;
+  repositories?: NewRepositoryInput[];
+  /** An idea: scaffold a fresh folder of this type under parentPath. */
+  bootstrap?: { type: string; parentPath: string };
+};
+
+export type RepositorySummary = {
+  id: string;
+  name: string;
+  repoUrl: string | null;
+  localPath: string | null;
+  isMain: boolean;
+  /** pending | cloning | ready | error */
+  cloneStatus: string;
+};
+
+export type ProjectDetail = ProjectSummary & {
+  description: string | null;
+  workspacePath: string | null;
+  bootstrapType: string | null;
+  repositories: RepositorySummary[];
+};
+
+/** Where a project's sandbox can run on this install, and what it is set to now. */
+export type SandboxOptions = {
+  /** Docker on this machine answers (free; runs here). */
+  local: { available: boolean };
+  /** Other machines' Docker (free; spec 26). */
+  dockerEndpoints: DockerEndpointSummary[];
+  /** Cloud providers with a saved credential and terraform installed (cost money). */
+  cloud: { civo: boolean; aws: boolean; terraformInstalled: boolean };
+  /** The project's saved sandbox settings, or null when it has none yet. */
+  saved: { provider: string; region: string; size: string; dockerEndpointId: string | null } | null;
+  /** Its sandboxes right now. */
+  sandboxes: SandboxSummary[];
+};
+
 /**
  * Everything a tool is allowed to do. The host implements this; the package
  * only calls it. Adding a capability here is a deliberate widening of what any
@@ -124,9 +185,38 @@ export type PowerAction = "pause" | "resume";
  */
 export type NexuxContext = {
   listProjects(): Promise<ProjectSummary[]>;
+  /** A project with its repositories and where each one's clone stands. */
+  getProject(projectId: string): Promise<ProjectDetail | null>;
+  /** Git repositories under a folder on the Nexus machine; null if not a folder. */
+  scanDirectory(directory: string): Promise<{ directory: string; repos: ScannedRepo[] } | null>;
+  /** What an idea can be bootstrapped as, and where new ones go by default. */
+  listBootstrapTypes(): Promise<{ types: BootstrapType[]; defaultParentPath: string }>;
+  listGitCredentials(): Promise<GitCredentialSummary[]>;
+  /** Writes: a project row, and for an idea a scaffolded folder on disk. */
+  createProject(input: CreateProjectInput): Promise<ProjectDetail>;
+  /** Starts cloning the repositories that are not checked out yet; returns at once. */
+  cloneRepositories(projectId: string): Promise<ProjectDetail>;
+  /** Reads each checked-out repo and records what it runs on (languages, commands, ports). */
+  detectStack(projectId: string): Promise<unknown>;
+  /** One folder of a project's repository (secret files marked, never read). */
+  listProjectFiles(projectId: string, repository: string, dir: string): Promise<unknown>;
+  /** A text file inside a project's repository; refuses secrets and paths outside it. */
+  readProjectFile(projectId: string, repository: string, file: string, offset?: number, limit?: number): Promise<unknown>;
+  /** Create or overwrite a text file inside a project's repository (never a secret, never outside it). */
+  writeProjectFile(projectId: string, repository: string, file: string, content: string): Promise<unknown>;
+  /** Replace exact text in a file inside a project's repository. */
+  editProjectFile(
+    projectId: string,
+    repository: string,
+    file: string,
+    oldText: string,
+    newText: string,
+    all?: boolean,
+  ): Promise<unknown>;
   getActivity(): Promise<ActivitySummary>;
   listSandboxes(projectId: string): Promise<SandboxSummary[]>;
   listDockerEndpoints(): Promise<DockerEndpointSummary[]>;
+  sandboxOptions(projectId: string): Promise<SandboxOptions>;
   getTask(taskId: string): Promise<TaskSummary | null>;
   getTaskLogs(taskId: string, tailLines?: number): Promise<string | null>;
   createTask(input: CreateTaskInput): Promise<TaskSummary>;

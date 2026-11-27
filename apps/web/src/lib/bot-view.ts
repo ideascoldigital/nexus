@@ -23,6 +23,8 @@ export const botInputSchema = z.object({
     .optional(),
   shape: z.enum(BOT_SHAPES).optional(),
   model: z.string().trim().max(60).nullish(),
+  /** Reasoning effort, claude --effort; null = the CLI's default. */
+  effort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullish(),
   claudeCredentialId: z.string().nullish(),
   /**
    * Which Docker daemon its computers run on (D-85); null = this machine.

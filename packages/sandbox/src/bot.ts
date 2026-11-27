@@ -1283,24 +1283,31 @@ export function renderBotSystemPrompt(bot: {
   return parts.join("\n");
 }
 
+/** Claude Code's --effort levels. */
+export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
+
 export function buildBotClaudeCommand(
   prompt: string,
   opts: {
     systemPrompt: string;
     resumeSessionId?: string | null;
     model?: string | null;
+    /** claude --effort: low, medium, high, xhigh or max; null = the CLI default. */
+    effort?: string | null;
     /** Also load BOT_USER_MCP_CONFIG (the bot's own servers, written by writeBotMcpConfig). */
     userMcp?: boolean;
   },
 ): string {
   const resume = opts.resumeSessionId ? `--resume ${shq(opts.resumeSessionId)} ` : "";
   const model = opts.model?.trim() ? `--model ${shq(opts.model.trim())} ` : "";
+  const effort = opts.effort && CLAUDE_EFFORTS.includes(opts.effort as ClaudeEffort) ? `--effort ${opts.effort} ` : "";
   // A bot's own stdio MCP servers usually start with `npx -y <pkg>`, and its
   // computer is fresh after every sleep: the first download can take a minute
   // or more (mongodb-mcp-server: ~72s), past Claude Code's 30s startup wait.
   const mcpWait = opts.userMcp ? `MCP_TIMEOUT=${BOT_MCP_STARTUP_MS} ` : "";
   return (
-    `${mcpWait}claude ${resume}${model}-p ${shq(prompt)}` +
+    `${mcpWait}claude ${resume}${model}${effort}-p ${shq(prompt)}` +
     ` --append-system-prompt ${shq(opts.systemPrompt)}` +
     // --strict-mcp-config: these files are the whole list. The computer's own
     // Claude config holds throwaway registrations (spec 37: `claude mcp login`
@@ -1342,6 +1349,7 @@ export async function runBotPrompt(
     systemPrompt: string;
     resumeSessionId?: string | null;
     model?: string | null;
+    effort?: string | null;
     userMcp?: boolean;
     onLog?: LogSink;
     timeoutMs?: number;

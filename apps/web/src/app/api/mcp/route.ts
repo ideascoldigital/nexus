@@ -9,6 +9,7 @@ import { callTool, toolsFor, type Scope } from "@nexux/mcp";
 
 import { bearerFrom, verifyToken } from "@/lib/api-token";
 import { createMcpContext } from "@/lib/mcp-context";
+import { runGrantFor } from "@/lib/nexus-run-tokens";
 
 export const dynamic = "force-dynamic";
 
@@ -37,23 +38,32 @@ function unauthorized() {
 }
 
 export async function POST(req: NextRequest) {
-  const verified = await verifyToken(bearerFrom(req.headers.get("authorization")));
-  if (!verified) return unauthorized();
+  const bearer = bearerFrom(req.headers.get("authorization"));
+  // A run of the Nexus chat (spec 39) carries a token that lives only in
+  // memory, scoped to its workspace; everything else is a saved API token.
+  const run = runGrantFor(bearer);
+  const verified = run ? null : await verifyToken(bearer);
+  if (!run && !verified) return unauthorized();
 
-  const scopes = verified.scopes as Scope[];
-  const ctx = createMcpContext();
+  const scopes = (run ? run.scopes : verified!.scopes) as Scope[];
+  const ctx = run
+    ? createMcpContext({ workspaceId: run.workspaceId, onProjectCreated: run.onProjectCreated, confirm: run.confirm, onSandboxLaunched: run.onSandboxLaunched })
+    : createMcpContext();
 
   const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 
   // Listing is filtered to the token's scopes, not merely calling: advertising
   // a tool that would always be refused invites a client to keep trying it,
   // and tells the holder of a narrow token what a broader one could do.
+  const denied = new Set(run?.deny ?? []);
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: toolsFor(scopes),
+    tools: toolsFor(scopes).filter((t) => !denied.has(t.name)),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const result = await callTool(
+    const result = denied.has(request.params.name)
+      ? ({ ok: false, error: `Unknown tool: ${request.params.name}` } as const)
+      : await callTool(
       ctx,
       scopes,
       request.params.name,

@@ -55,6 +55,7 @@ model Project {
   stackLocks    StackLock[]
   seeds         SeedData[]
   taskSchedules TaskSchedule[]
+  bots          Bot[]
 }
 
 model Repository {
@@ -1217,6 +1218,7 @@ model Bot {
   color              String    @default("#8b5cf6")
   shape              String    @default("blob") // avatar shape id (apps/web bot-shapes)
   model              String? // claude --model for its runs; null = CLI default
+  effort             String? // claude --effort (low|medium|high|xhigh|max); null = CLI default
   claudeCredentialId String? // saved "claude" credential to run on; null = the first one (resolveClaudeCodeToken)
   idleMinutes        Int       @default(30) // the computer is deleted after this long without a prompt
   mcpServers         Json? // its own MCP servers, Claude Code's native mcpServers shape — loaded next to the browser MCP
@@ -1230,6 +1232,13 @@ model Bot {
   // reached them. A remote endpoint means its workspace and its sign-ins live
   // on that machine, so moving a bot gives it a fresh computer.
   dockerEndpointId   String?
+  // Spec 39: "bot" (a teammate with a computer) or "nexus" (the Nexus chat:
+  // runs on this machine with only Nexus's own tools, no computer).
+  kind               String    @default("bot")
+  // The project a Nexus chat (or, later, a teammate) belongs to. Null on the
+  // "New project" chat until it creates one.
+  projectId          String?
+  project            Project?  @relation(fields: [projectId], references: [id], onDelete: SetNull)
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 

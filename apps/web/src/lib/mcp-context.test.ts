@@ -292,3 +292,66 @@ test("listed sandboxes carry runsOn", async () => {
   assert.equal(typeof s.runsOn, "string");
   assert.ok("dockerEndpointId" in s);
 });
+
+// --- creating projects (spec 39) ----------------------------------------------
+
+test("a project from Git URLs gets a folder for each repo, so it can be cloned", async () => {
+  const created = await ctx.createProject({
+    name: "Acme Shop",
+    repositories: [
+      { name: "api", repoUrl: "https://github.com/acme/api.git" },
+      { name: "Web App", repoUrl: "https://github.com/acme/web.git", localPath: "/tmp/acme-web" },
+    ],
+  });
+  assert.equal(created.name, "Acme Shop");
+  const [api, web] = created.repositories;
+  assert.equal(api.isMain, true);
+  assert.match(api.localPath ?? "", /acme-shop\/api$/);
+  assert.equal(web.localPath, "/tmp/acme-web");
+  assert.equal(api.cloneStatus, "pending");
+  assert.ok(created.workspacePath?.endsWith("acme-shop"));
+  assert.deepEqual((await ctx.getProject(created.id))?.repositories.length, 2);
+});
+
+test("an unknown git credential is refused as the caller's mistake", async () => {
+  await assert.rejects(
+    ctx.createProject({ name: "X", repositories: [{ name: "a", repoUrl: "https://x/a.git", gitCredentialId: "nope" }] }),
+    /Not a saved git credential/,
+  );
+});
+
+test("git credentials are listed by name, never with their secret", async () => {
+  const cred = await prisma.cloudCredential.create({
+    data: { name: "Work GitHub", provider: "github", data: { token: "ghp_secret" } },
+  });
+  await prisma.cloudCredential.create({ data: { name: "Civo", provider: "civo", data: { token: "c" } } });
+  const listed = await ctx.listGitCredentials();
+  assert.deepEqual(listed.find((c) => c.id === cred.id), { id: cred.id, name: "Work GitHub", provider: "github" });
+  assert.ok(!listed.some((c) => c.provider === "civo"));
+  assert.ok(!JSON.stringify(listed).includes("ghp_secret"));
+});
+
+test("another workspace's project cannot be read, cloned or detected", async () => {
+  assert.equal(await ctx.getProject(otherWorkspaceProjectId), null);
+  await assert.rejects(ctx.cloneRepositories(otherWorkspaceProjectId), /Project not found/);
+  await assert.rejects(ctx.detectStack(otherWorkspaceProjectId), /Project not found/);
+});
+
+test("detecting skips repos that are not checked out", async () => {
+  const p = await ctx.createProject({ name: "Pending", repositories: [{ name: "a", repoUrl: "https://x/a.git" }] });
+  const res = (await ctx.detectStack(p.id)) as { repositories: { repository: string; skipped?: string }[] };
+  assert.deepEqual(res.repositories, [{ repository: "a", skipped: "not checked out (pending)" }]);
+});
+
+test("from a chat, a cloud sandbox waits for confirmation and never launches on its own", async () => {
+  const asked: string[] = [];
+  const chat = createMcpContext({
+    confirm: (a) => {
+      asked.push(a.summary);
+      return "act_abc123";
+    },
+  });
+  await assert.rejects(chat.launchSandbox({ projectId, provider: "civo" }), /Needs the user's confirmation[\s\S]*act_abc123/);
+  assert.match(asked[0] ?? "", /civo sandbox for "Mine"/);
+  assert.equal(await prisma.sandbox.count({ where: { projectId, provider: "civo", status: "provisioning" } }), 0);
+});

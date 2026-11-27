@@ -231,12 +231,12 @@ export function NexusHostsSection() {
   if (readiness && !vmReady && !endpointReady) {
     blockers.push(
       !readiness.terraformInstalled
-        ? "no machine to put it on: terraform is not installed for a cloud VM, and no Docker endpoint is added (Settings → Cloud)"
-        : "no machine to put it on: no Civo or AWS credential, and no Docker endpoint (Settings → Cloud)",
+        ? "no machine to put it on: terraform is not installed for a cloud VM, and no Docker endpoint is added (Settings → Machines)"
+        : "no machine to put it on: no Civo or AWS credential, and no Docker endpoint (Vault → Cloud, Settings → Machines)",
     );
   }
   if (readiness && !readiness.hasTailscaleCredential) {
-    blockers.push("no Tailscale auth key saved (Settings → Cloud)");
+    blockers.push("no Tailscale auth key saved (Vault → Cloud)");
   }
   const canCreate = blockers.length === 0;
 
@@ -1120,7 +1120,7 @@ function CreateHostForm({
             credentials={cloudCredentials}
             value={credentialId}
             onChange={setCredentialId}
-            empty={`No ${provider === "aws" ? "AWS" : "Civo"} credential saved (Settings → Cloud).`}
+            empty={`No ${provider === "aws" ? "AWS" : "Civo"} credential saved (Vault → Cloud).`}
           />
         )}
         <CredentialField
@@ -1129,7 +1129,7 @@ function CreateHostForm({
           credentials={tailscaleCredentials}
           value={tailscaleCredentialId}
           onChange={setTailscaleCredentialId}
-          empty="No Tailscale auth key saved (Settings → Cloud)."
+          empty="No Tailscale auth key saved (Vault → Cloud)."
         />
       </div>
 
@@ -1167,7 +1167,7 @@ function CreateHostForm({
           onChange={setRegistryCredentialId}
           optional
           showProvider
-          empty={`No saved git token logs in to ${imageRegistry}. Add one in Settings → Git — set its registry host if it is a self-hosted install. Only needed if the image is private.`}
+          empty={`No saved git token logs in to ${imageRegistry}. Add one in Vault → Git — set its registry host if it is a self-hosted install. Only needed if the image is private.`}
           hint={`The token the host runs docker login with against ${imageRegistry}. It needs registry read access to that image; a public image needs none.`}
         />
       )}

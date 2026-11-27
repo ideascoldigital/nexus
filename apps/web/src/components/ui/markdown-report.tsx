@@ -5,7 +5,10 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChevronLeft, ChevronRight, Download, FileWarning } from "lucide-react";
 
+import { CodeBlock } from "@/components/ui/code-block";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
+import { parseLocalFileLink } from "@/lib/local-file-link";
 import { cn } from "@/lib/utils";
 
 /** Files bots hand over are served by Nexus under this path (see lib/bot-files). */
@@ -241,6 +244,46 @@ function ImageRow({ node }: { node: HastNode }) {
   );
 }
 
+/** The text of a hast node and everything under it. */
+function hastText(node: HastNode | undefined): string {
+  if (!node) return "";
+  if (node.type === "text") return node.value ?? "";
+  return (node.children ?? []).map(hastText).join("");
+}
+
+/** A link to a file on this Mac: opens it in the editor (at its line), not as a page. */
+function LocalFileAnchor({ href, children, className }: { href: string; children: React.ReactNode; className: string }) {
+  const { toast } = useToast();
+  const target = parseLocalFileLink(href)!;
+  return (
+    <a
+      href={href}
+      title={`Open ${target.path}${target.line ? `:${target.line}` : ""}`}
+      className={className}
+      onClick={async (e) => {
+        e.preventDefault();
+        let app: string | null = null;
+        try {
+          app = window.localStorage.getItem("nexux:project-opener");
+        } catch {
+          // no preference
+        }
+        const res = await fetch("/api/open-file", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...target, app }),
+        }).catch(() => null);
+        if (!res?.ok) {
+          const body = res ? await res.json().catch(() => ({})) : {};
+          toast({ title: "Could not open the file", description: body.error ?? "Nexus did not answer", variant: "destructive" });
+        }
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
 /**
  * Renders an agent's markdown report.
  *
@@ -260,27 +303,37 @@ function ImageRow({ node }: { node: HastNode }) {
 export const MarkdownReport = memo(function MarkdownReport({
   children,
   className,
+  variant = "report",
 }: {
   children: string;
   className?: string;
+  /** "chat": a reply in a conversation — body-size text in the foreground colour. */
+  variant?: "report" | "chat";
 }) {
+  const chat = variant === "chat";
+  const linkClass = "break-all text-violet-300 underline underline-offset-2 hover:text-violet-200";
   return (
-    <div className={cn("min-w-0 text-xs leading-relaxed", className)}>
+    <div className={cn("min-w-0", chat ? "text-[13.5px] leading-[1.65] text-foreground/90" : "text-xs leading-relaxed", className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           h1: ({ children }) => (
-            <h1 className="mt-4 mb-2 text-sm font-semibold first:mt-0">
+            <h1 className={cn("mt-4 mb-2 font-semibold first:mt-0", chat ? "text-[16px] text-foreground" : "text-sm")}>
               {children}
             </h1>
           ),
           h2: ({ children }) => (
-            <h2 className="mt-4 mb-2 border-b border-border/40 pb-1 text-sm font-semibold first:mt-0">
+            <h2
+              className={cn(
+                "mt-4 mb-2 font-semibold first:mt-0",
+                chat ? "text-[15px] text-foreground" : "border-b border-border/40 pb-1 text-sm",
+              )}
+            >
               {children}
             </h2>
           ),
           h3: ({ children }) => (
-            <h3 className="mt-3 mb-1.5 text-xs font-semibold first:mt-0">
+            <h3 className={cn("mt-3 mb-1.5 font-semibold first:mt-0", chat ? "text-[14px] text-foreground" : "text-xs")}>
               {children}
             </h3>
           ),
@@ -290,21 +343,31 @@ export const MarkdownReport = memo(function MarkdownReport({
               // one line of thumbnails, opened as a carousel with arrows.
               <ImageRow node={node as HastNode} />
             ) : (
-              <p className="my-1.5 break-words text-muted-foreground">
+              <p className={cn("break-words first:mt-0 last:mb-0", chat ? "my-2" : "my-1.5 text-muted-foreground")}>
                 {children}
               </p>
             ),
           ul: ({ children }) => (
-            <ul className="my-1.5 list-disc space-y-1 pl-4 text-muted-foreground marker:text-muted-foreground/60">
+            <ul
+              className={cn(
+                "list-disc space-y-1 pl-5 marker:text-muted-foreground/60",
+                chat ? "my-2" : "my-1.5 pl-4 text-muted-foreground",
+              )}
+            >
               {children}
             </ul>
           ),
           ol: ({ children }) => (
-            <ol className="my-1.5 list-decimal space-y-1 pl-4 text-muted-foreground">
+            <ol
+              className={cn(
+                "list-decimal space-y-1 pl-5 marker:text-muted-foreground",
+                chat ? "my-2" : "my-1.5 pl-4 text-muted-foreground",
+              )}
+            >
               {children}
             </ol>
           ),
-          li: ({ children }) => <li className="break-words">{children}</li>,
+          li: ({ children }) => <li className="break-words pl-0.5 [&>p]:my-0.5">{children}</li>,
           strong: ({ children }) => (
             <strong className="font-semibold text-foreground">
               {children}
@@ -338,6 +401,11 @@ export const MarkdownReport = memo(function MarkdownReport({
                 <Download className="h-3.5 w-3.5 shrink-0" />
                 <span className="truncate">{children}</span>
               </a>
+            ) : parseLocalFileLink(href) ? (
+              // A path on this Mac (a file the chat read or changed): the editor.
+              <LocalFileAnchor href={href!} className={linkClass}>
+                {children}
+              </LocalFileAnchor>
             ) : (
               <a
                 href={href}
@@ -346,7 +414,7 @@ export const MarkdownReport = memo(function MarkdownReport({
                 // break-all, because an autolinked URL is one unbroken token: a
                 // merge-request link is long enough to push the whole panel into
                 // a horizontal scroll without it.
-                className="break-all text-violet-300 underline underline-offset-2 hover:text-violet-200"
+                className={linkClass}
               >
                 {children}
               </a>
@@ -389,23 +457,26 @@ export const MarkdownReport = memo(function MarkdownReport({
                 className="mr-1.5 align-middle accent-primary"
               />
             ) : null,
-          code: ({ className, children }) => {
-            // Fenced blocks arrive with a language class; inline code doesn't.
-            const isBlock = Boolean(className);
-            if (isBlock) {
-              return <code className="font-mono text-[11px]">{children}</code>;
-            }
-            return (
-              <code className="rounded bg-muted/60 px-1 py-0.5 font-mono text-[11px] break-all text-foreground">
-                {children}
-              </code>
-            );
-          },
-          pre: ({ children }) => (
-            <pre className="my-2 overflow-x-auto rounded-md border border-border/50 bg-muted/30 p-2 text-[11px] leading-snug">
+          // Inline code only: a fenced block is drawn whole by `pre` below.
+          code: ({ children }) => (
+            <code
+              className={cn(
+                "rounded-md font-mono break-words text-foreground",
+                chat ? "border border-border/60 bg-muted/60 px-1.5 py-px text-[12.5px]" : "bg-muted/60 px-1 py-0.5 text-[11px] break-all",
+              )}
+            >
               {children}
-            </pre>
+            </code>
           ),
+          pre: ({ node }) => {
+            const code = (node as HastNode | undefined)?.children?.find((c) => c.type === "element" && c.tagName === "code");
+            const classes = code?.properties?.className;
+            const lang = (Array.isArray(classes) ? classes : [classes])
+              .map(String)
+              .find((c) => c.startsWith("language-"))
+              ?.slice("language-".length);
+            return <CodeBlock code={hastText(code)} language={lang} />;
+          },
           blockquote: ({ children }) => (
             <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground italic">
               {children}

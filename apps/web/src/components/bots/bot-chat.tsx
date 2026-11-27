@@ -9,6 +9,7 @@ import {
   memo,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -46,6 +47,7 @@ import {
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
 import { BotSkillsDialog, SlashMenu, useBotSkills } from "@/components/bots/bot-skills";
+import { ModelPicker } from "@/components/bots/model-picker";
 import { MailCard } from "@/components/bots/bot-mail-card";
 import { Button } from "@/components/ui/button";
 import {
@@ -73,6 +75,11 @@ import {
   type Attachment,
 } from "@/lib/bot-attachments";
 import { CHOICE_LETTERS, type BotChoices } from "@/lib/bot-choices";
+import { caretAllowsHistory, promptHistory, stepHistory } from "@/lib/prompt-history";
+import { isNexusNotice, parseConfirmCard, parseCredentialCard, parseSourceCard } from "@/lib/nexus-cards";
+import { CredentialCard } from "@/components/bots/credential-card";
+import { ConfirmCard } from "@/components/bots/confirm-card";
+import { ProjectSourceCard } from "@/components/bots/project-source-card";
 import { findTeammate, handoffRun, replyRun } from "@/lib/bot-handoffs";
 import { mailRun, parseMailState } from "@/lib/bot-mail";
 import { type DockMode } from "@/lib/bot-layout";
@@ -121,7 +128,13 @@ export function BotChat({
   onChange,
   team,
   onOpenBot,
+  onTitleClick,
+  insetRight = 0,
 }: {
+  /** What clicking the chat's name does instead of toggling the panel (a project chat's card). */
+  onTitleClick?: () => void;
+  /** Room kept free on the right for something pinned over the chat (a project chat's card), in px. */
+  insetRight?: number;
   bot: BotListItem;
   feed: BotFeed | undefined;
   team: BotListItem[];
@@ -221,6 +234,41 @@ export function BotChat({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [prompt]);
 
+  // ↑ / ↓ bring back what you sent (only your own messages, not the app's).
+  const history = useMemo(
+    () =>
+      promptHistory(
+        (feed?.runs ?? [])
+          .map((r) => r.prompt)
+          .filter(
+            (p) =>
+              !isIntro(p) &&
+              !isNexusNotice(p) &&
+              !isHandback(p) &&
+              routineRun(p) === null &&
+              restartedRun(p) === null &&
+              replyRun(p) === null &&
+              mailRun(p) === null &&
+              handoffRun(p) === null,
+          )
+          .map((p) => splitAttachments(p).text),
+      ),
+    [feed?.runs],
+  );
+  const [historyAt, setHistoryAt] = useState<number | null>(null);
+  const historyDraft = useRef("");
+  const browseHistory = (dir: -1 | 1, el: HTMLTextAreaElement): boolean => {
+    if (el.selectionStart !== el.selectionEnd || !caretAllowsHistory(el.value, el.selectionStart, dir)) return false;
+    const step = stepHistory(history, historyAt, dir);
+    if (!step) return false;
+    if (historyAt === null) historyDraft.current = prompt;
+    setHistoryAt(step.index);
+    const text = step.index === null ? historyDraft.current : history[step.index]!;
+    setPrompt(text);
+    requestAnimationFrame(() => el.setSelectionRange(text.length, text.length));
+    return true;
+  };
+
   // A skill picked from the "/" menu rides as a chip, not as text (spec 38).
   const [pickedSkill, setPickedSkill] = useState<string | null>(null);
   const submit = () => {
@@ -233,6 +281,7 @@ export function BotChat({
         onSuccess: () => {
           files.clear();
           setPickedSkill(null);
+          setHistoryAt(null);
         },
       });
   };
@@ -242,13 +291,15 @@ export function BotChat({
   // The "/" menu (spec 38): open while a command is typed alone at the start,
   // until it is picked or dismissed with Escape.
   const skills = useBotSkills(bot.id);
+  // The Nexus chat (spec 39) has no computer, details panel or skills.
+  const nexus = bot.kind === "nexus";
   const [skillsOpen, setSkillsOpen] = useState(false);
   // The highlighted row, for the query it was picked on: typing more resets it.
   const [slashSel, setSlashSel] = useState<{ q: string | null; i: number }>({ q: null, i: 0 });
   const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
   const slash = slashQuery(prompt);
   const slashMenu =
-    slash !== null && slashDismissed !== prompt
+    !nexus && slash !== null && slashDismissed !== prompt
       ? slashOptions(slash, (skills.data ?? []).filter((s) => s.loaded))
       : [];
   const slashActive = slashSel.q === slash ? slashSel.i : 0;
@@ -299,24 +350,30 @@ export function BotChat({
         </div>
       )}
       {/* Floating title */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center justify-center bg-gradient-to-b from-background via-background/80 to-transparent px-4 pt-3 pb-6">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center gap-2 bg-gradient-to-b from-background via-background/80 to-transparent px-4 pt-3 pb-6">
         {/* The top strip drags the window in the macOS app (overlay title bar). */}
         <div
           data-tauri-drag-region
           className="titlebar-only pointer-events-auto absolute inset-x-0 top-0 h-12"
         />
-        <button
-          type="button"
-          onClick={onTogglePanel}
-          className="group pointer-events-auto flex items-center gap-2 rounded-full border border-border bg-card/90 py-1 pr-3.5 pl-1.5 text-[13.5px] shadow-sm backdrop-blur transition-colors hover:bg-card"
-        >
-          <BotAvatar shape={bot.shape} color={bot.color} size={24} />
-          {bot.name}
-        </button>
-        <div className="pointer-events-auto absolute top-3 right-4 flex items-center gap-1.5">
+        {/* The name centres in whatever room the buttons leave, and gives way
+            (truncates) before it ever runs under them. */}
+        <div className="flex min-w-0 flex-1 justify-center">
+          <button
+            type="button"
+            onClick={onTitleClick ?? (nexus ? undefined : onTogglePanel)}
+            data-card-toggle={onTitleClick ? "" : undefined}
+            className="group pointer-events-auto flex min-w-0 items-center gap-2 rounded-full border border-border bg-card/90 py-1 pr-3.5 pl-1.5 text-[13.5px] shadow-sm backdrop-blur transition-colors hover:bg-card"
+          >
+            <BotAvatar shape={bot.shape} color={bot.color} size={24} />
+            <span className="truncate">{bot.name}</span>
+          </button>
+        </div>
+        <div className="pointer-events-auto relative flex shrink-0 items-center gap-1.5">
           {/* Where to keep the screen: nowhere (it opens as a dialog), beside
               the chat, or under the bot's details — so you can watch it work
               while you type. */}
+          {!nexus && (
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
@@ -359,6 +416,7 @@ export function BotChat({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
@@ -383,6 +441,7 @@ export function BotChat({
                   </span>
                 </span>
               </DropdownMenuItem>
+              {!nexus && (
               <DropdownMenuItem disabled={restart.isPending} onClick={() => setConfirm("restart")}>
                 <RotateCcw />
                 <span className="flex-1">
@@ -392,6 +451,7 @@ export function BotChat({
                   </span>
                 </span>
               </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 disabled={removeChat.isPending}
@@ -403,7 +463,7 @@ export function BotChat({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          {!panelOpen && (
+          {!panelOpen && (!nexus || bot.projectId) && (
             <Button variant="secondary" size="sm" className="rounded-full px-3" onClick={onTogglePanel}>
               <PanelRight className="h-3.5 w-3.5" />
               Details
@@ -412,7 +472,7 @@ export function BotChat({
         </div>
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto" style={insetRight ? { paddingRight: insetRight } : undefined}>
         <div className="mx-auto w-full max-w-[960px] space-y-2.5 px-6 pt-16 pb-6">
           {feed && runs.length === 0 && (
             <div className="flex flex-col items-center gap-3 pt-20 text-center">
@@ -497,8 +557,8 @@ export function BotChat({
         </div>
       </div>
 
-      <div className="shrink-0 px-6 pb-5">
-        <div className="relative mx-auto w-full max-w-[960px] rounded-[22px] border border-border bg-card/70 py-1.5 pr-1.5 pl-1.5 focus-within:border-foreground/25">
+      <div className="shrink-0 px-6 pb-5" style={insetRight ? { paddingRight: insetRight + 24 } : undefined}>
+        <div className="relative mx-auto w-full max-w-[960px] rounded-2xl border border-border bg-card/70 px-3 pt-3 pb-2 shadow-sm focus-within:border-foreground/25">
           <SlashMenu
             options={slashMenu}
             active={Math.min(slashActive, Math.max(slashMenu.length - 1, 0))}
@@ -522,13 +582,12 @@ export function BotChat({
             </div>
           )}
           {files.items.length > 0 && (
-            <div className="flex flex-wrap gap-2 px-1.5 pt-1.5 pb-1">
+            <div className="flex flex-wrap gap-2 pb-2">
               {files.items.map((f) => (
                 <PendingFileChip key={f.key} file={f} onRemove={() => files.remove(f.key)} />
               ))}
             </div>
           )}
-          <div className="flex items-end gap-1">
           <input
             ref={fileInputRef}
             type="file"
@@ -539,20 +598,15 @@ export function BotChat({
               e.target.value = "";
             }}
           />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            aria-label="Attach files"
-            title="Attach files — or paste or drop them here"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <Paperclip className="h-4 w-4" />
-          </button>
           <textarea
             ref={inputRef}
             rows={1}
             value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
+            onChange={(e) => {
+              setPrompt(e.target.value);
+              // Editing a recalled message makes it the draft.
+              setHistoryAt(null);
+            }}
             onPaste={(e) => {
               const pasted = filesFromClipboard(e.clipboardData);
               if (pasted.length === 0) return;
@@ -580,6 +634,17 @@ export function BotChat({
                   return;
                 }
               }
+              if (
+                (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+                !e.shiftKey &&
+                !e.altKey &&
+                !e.metaKey &&
+                !e.ctrlKey &&
+                browseHistory(e.key === "ArrowUp" ? -1 : 1, e.currentTarget)
+              ) {
+                e.preventDefault();
+                return;
+              }
               if (e.key === "Backspace" && pickedSkill && prompt === "") {
                 setPickedSkill(null);
                 return;
@@ -594,10 +659,24 @@ export function BotChat({
                 ? `What should ${bot.name} do with ${pickedSkill}? (or just send)`
                 : busy
                   ? `${bot.name} is busy. This will run next…`
-                  : `Message ${bot.name} — / for skills`
+                  : nexus
+                    ? ""
+                    : `Message ${bot.name} — / for skills`
             }
-            className="max-h-40 min-h-[30px] flex-1 resize-none bg-transparent py-1.5 pl-1 text-[13.5px] leading-5 outline-none placeholder:text-muted-foreground"
+            className="block max-h-48 min-h-[44px] w-full resize-none bg-transparent px-1 text-[13.5px] leading-5 outline-none placeholder:text-muted-foreground"
           />
+          <div className="mt-1 flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Attach files"
+            title="Attach files — or paste or drop them here"
+            className="-ml-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <Paperclip className="h-4 w-4" />
+          </button>
+            <div className="flex-1" />
+            <ModelPicker key={bot.id} bot={bot} />
           <button
             type="button"
             onClick={submit}
@@ -933,7 +1012,7 @@ function Thread({
               </p>
             ) : (
               <div className="line-clamp-6 text-[13px] [&_p]:text-foreground/90">
-                <MarkdownReport>{r.text ?? "Done."}</MarkdownReport>
+                <MarkdownReport variant="chat">{r.text ?? "Done."}</MarkdownReport>
               </div>
             )}
             <button
@@ -1083,6 +1162,13 @@ const RunMessages = memo(function RunMessages({
     );
   });
   const choices = reply?.choices ?? null;
+  // A project chat (spec 39) asks where the code comes from with a card.
+  const source = bot.kind === "nexus" && run.status === "completed" ? parseSourceCard(reply?.body) : null;
+  // …and asks before anything that costs money.
+  const confirmCard = bot.kind === "nexus" && run.status === "completed" && !source ? parseConfirmCard(reply?.body) : null;
+  // …and helps add a cloud key when the one picked has none.
+  const credentialCard =
+    bot.kind === "nexus" && run.status === "completed" && !source && !confirmCard ? parseCredentialCard(reply?.body) : null;
   const routine = routineRun(run.prompt);
   const restarted = restartedRun(run.prompt);
   const incoming = handoffRun(run.prompt);
@@ -1094,7 +1180,12 @@ const RunMessages = memo(function RunMessages({
   // The app sent it, not you (an intro, a routine, a teammate's answer coming
   // back, an email you approved on its card).
   const quiet =
-    isIntro(run.prompt) || routine !== null || restarted !== null || answerBack !== null || sending !== null;
+    isIntro(run.prompt) ||
+    isNexusNotice(run.prompt) ||
+    routine !== null ||
+    restarted !== null ||
+    answerBack !== null ||
+    sending !== null;
   const { text: sentText, attachments: attached } = splitAttachments(run.prompt);
   // "/<skill> …" shows as a chip over what you wrote.
   const { skill: usedSkill, rest: ownText } = splitSkillCommand(sentText);
@@ -1232,6 +1323,7 @@ const RunMessages = memo(function RunMessages({
         >
           {!isIntro(run.prompt) && (
             <>
+              {bot.kind !== "nexus" && (
               <button
                 type="button"
                 onClick={() => onOpenComputer()}
@@ -1239,6 +1331,7 @@ const RunMessages = memo(function RunMessages({
               >
                 Watch
               </button>
+              )}
               <button
                 type="button"
                 onClick={() => onCancel(run.id)}
@@ -1265,11 +1358,44 @@ const RunMessages = memo(function RunMessages({
       )}
 
       {run.status === "completed" &&
-        (choices ? (
+        (source ? (
+          <>
+            {source.body && (
+              <Bubble>
+                <MarkdownReport variant="chat">{source.body}</MarkdownReport>
+              </Bubble>
+            )}
+            <ProjectSourceCard question={source.question} disabled={!canChoose} onAnswer={onChoose} />
+          </>
+        ) : credentialCard ? (
+          <>
+            {credentialCard.body && (
+              <Bubble>
+                <MarkdownReport variant="chat">{credentialCard.body}</MarkdownReport>
+              </Bubble>
+            )}
+            <CredentialCard provider={credentialCard.provider} disabled={!canChoose} onSaved={onChoose} />
+          </>
+        ) : confirmCard ? (
+          <>
+            {confirmCard.body && (
+              <Bubble>
+                <MarkdownReport variant="chat">{confirmCard.body}</MarkdownReport>
+              </Bubble>
+            )}
+            <ConfirmCard
+              botId={bot.id}
+              actionId={confirmCard.actionId}
+              title={confirmCard.title}
+              detail={confirmCard.detail}
+              disabled={!canChoose}
+            />
+          </>
+        ) : choices ? (
           <>
             {choices.body && (
               <Bubble>
-                <MarkdownReport>{choices.body}</MarkdownReport>
+                <MarkdownReport variant="chat">{choices.body}</MarkdownReport>
               </Bubble>
             )}
             {posts}
@@ -1288,11 +1414,12 @@ const RunMessages = memo(function RunMessages({
             <Bubble className="space-y-2.5" copyText={reply?.body}>
               <div className="font-medium text-foreground/85 [&_p]:text-foreground/85">
                 {reply?.body ? (
-                  <MarkdownReport>{reply.body}</MarkdownReport>
+                  <MarkdownReport variant="chat">{reply.body}</MarkdownReport>
                 ) : (
                   "I need your input."
                 )}
               </div>
+              {bot.kind !== "nexus" && (
               <button
                 type="button"
                 onClick={() => onOpenComputer(true)}
@@ -1306,6 +1433,7 @@ const RunMessages = memo(function RunMessages({
                 </span>
                 Take control of the computer
               </button>
+              )}
             </Bubble>
             {posts}
             {mails}
@@ -1318,7 +1446,7 @@ const RunMessages = memo(function RunMessages({
                 !reply?.mails.length)) && (
               <Bubble>
                 {reply?.body ? (
-                  <MarkdownReport>{reply.body}</MarkdownReport>
+                  <MarkdownReport variant="chat">{reply.body}</MarkdownReport>
                 ) : (
                   "Done."
                 )}

@@ -285,7 +285,11 @@ function AccountRow({ account }: { account: GitHubAccount }) {
   );
 }
 
-export function GitHubAccountsSection() {
+/**
+ * `bare`: inside Connect apps (spec 39) — no card or title of its own (the
+ * page around it says what it is), just its actions and its rows.
+ */
+export function GitHubAccountsSection({ bare = false }: { bare?: boolean } = {}) {
   const queryClient = useQueryClient();
 
   const { data: accounts = [], isLoading } = useQuery<GitHubAccount[]>({
@@ -300,10 +304,10 @@ export function GitHubAccountsSection() {
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["github-accounts"] });
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className={bare ? "gap-3 border-0 bg-transparent py-0 shadow-none ring-0" : undefined}>
+      <CardHeader className={bare ? "px-0" : undefined}>
         <div className="flex items-center justify-between">
-          <div>
+          <div className={bare ? "sr-only" : undefined}>
             <CardTitle className="flex items-center gap-2">
               <GitBranch className="h-5 w-5" />
               GitHub Accounts
@@ -316,7 +320,7 @@ export function GitHubAccountsSection() {
           <AddAccountDialog onSuccess={refresh} />
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className={bare ? "rounded-xl border border-border bg-card/60 px-3" : undefined}>
         {isLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
             <Loader2 className="h-4 w-4 animate-spin" />

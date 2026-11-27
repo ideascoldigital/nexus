@@ -72,6 +72,7 @@ import {
   withRoutinesNote,
 } from "@/lib/bot-view";
 import { resolveClaudeCodeToken } from "@/lib/sandbox-manager";
+import { cancelNexusRun, enqueueNexusPrompt, isNexusBot, recoverNexusChats } from "@/lib/nexus-assistant";
 
 export const ACTIVE_SESSION_STATUSES = ["starting", "ready"] as const;
 const READY_TIMEOUT_MS = 3 * 60_000;
@@ -147,6 +148,7 @@ export async function startBotSession(botId: string): Promise<BotSession> {
 
   const bot = await prisma.bot.findUnique({ where: { id: botId } });
   if (!bot) throw new Error("Bot not found");
+  if (isNexusBot(bot)) throw new Error("The Nexus chat has no computer");
   const target = await botTarget(bot);
   if (target.host) {
     // The endpoint probe rather than `dockerAvailable`: both ask the daemon one
@@ -174,7 +176,7 @@ export async function startBotSession(botId: string): Promise<BotSession> {
   const claude = await resolveClaudeCodeToken(bot.claudeCredentialId);
   if (!claude) {
     throw new Error(
-      "No Claude Code token — add one in Settings → AI Providers (`claude setup-token`)",
+      "No Claude Code token — add one in Vault → AI providers (`claude setup-token`)",
     );
   }
 
@@ -427,7 +429,8 @@ export async function clearBotContext(botId: string): Promise<Date> {
   const clearedAt = new Date();
   await prisma.bot.update({ where: { id: botId }, data: { contextClearedAt: clearedAt } });
   await prisma.botSession.updateMany({
-    where: { botId, status: { in: [...ACTIVE_SESSION_STATUSES] } },
+    // "host": the Nexus chat's session (spec 39), which has no computer.
+    where: { botId, status: { in: [...ACTIVE_SESSION_STATUSES, "host"] } },
     data: { claudeSessionId: null, systemPromptHash: null },
   });
   return clearedAt;
@@ -457,6 +460,9 @@ export async function deleteBotConversation(botId: string): Promise<number> {
 
 /** Queue a prompt; boots the computer first when the bot has none running. */
 export async function enqueueBotPrompt(botId: string, prompt: string) {
+  // The Nexus chat has no computer: its messages run on this machine.
+  const kind = await prisma.bot.findUnique({ where: { id: botId }, select: { kind: true } });
+  if (kind && isNexusBot(kind)) return enqueueNexusPrompt(botId, prompt);
   const session = await startBotSession(botId);
   const run = await prisma.botRun.create({
     data: { botId, sessionId: session.id, prompt, status: "queued" },
@@ -481,6 +487,7 @@ export async function cancelBotRun(botId: string, runId: string): Promise<boolea
     return true;
   }
   if (run.status === "running") {
+    if (cancelNexusRun(runId)) return true;
     aborts.get(runId)?.abort();
     return true;
   }
@@ -720,6 +727,7 @@ async function drain(sessionId: string): Promise<void> {
         systemPrompt,
         resumeSessionId: resume,
         model: session.bot.model,
+        effort: session.bot.effort,
         userMcp,
         cwd: botWorkdir(session.bot.name),
         onLog: log.sink,
@@ -1036,9 +1044,17 @@ export async function recoverBots(): Promise<void> {
     null,
     ...(await prisma.dockerEndpoint.findMany({ select: { host: true } })).map((e) => e.host),
   ];
+  // Only computers this Nexus made: another install on the same Docker (the
+  // packaged app next to a dev build) keeps its own in the same label, and
+  // deleting them cut that one's bots off mid-task.
+  const known = new Set(
+    (await prisma.botSession.findMany({ select: { containerName: true } })).map((s) => s.containerName),
+  );
   const containers: BotContainerRef[] = [];
   for (const host of hosts) {
-    for (const name of await listBotContainers({ host })) containers.push({ name, dockerHost: host });
+    for (const name of await listBotContainers({ host })) {
+      if (known.has(name)) containers.push({ name, dockerHost: host });
+    }
   }
   const plan = planRecovery(sessions, containers);
   const now = new Date();
@@ -1074,6 +1090,7 @@ export async function recoverBots(): Promise<void> {
   for (const c of plan.remove) {
     await stopBotContainer(c.name, { host: c.dockerHost });
   }
+  await recoverNexusChats().catch((err) => console.warn("[nexus] recovery failed:", err));
   if (!g.nexuxBotReaper) {
     // One tick a minute: put idle computers to sleep, wake bots whose
     // routines are due ("around 8:00 AM" — at most a minute late).

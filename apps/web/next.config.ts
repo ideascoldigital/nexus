@@ -39,6 +39,18 @@ const nextConfig: NextConfig = {
     // throws and ws keeps its pure-JS fallback.
     "ws",
   ],
+  // Nexus is the bots view (spec 39): the dashboard's pages send you back
+  // there, and settings opens as a modal on it (?tab= is carried along).
+  async redirects() {
+    return [
+      ...["/projects", "/skills", "/agents", "/terminal", "/workspaces"].flatMap((base) => [
+        { source: base, destination: "/bots", permanent: false },
+        { source: `${base}/:path*`, destination: "/bots", permanent: false },
+      ]),
+      { source: "/settings", destination: "/bots?settings=1", permanent: false },
+      { source: "/settings/:path*", destination: "/bots?settings=1", permanent: false },
+    ];
+  },
   webpack: (config, { isServer }) => {
     if (isServer) {
       config.externals = config.externals || [];

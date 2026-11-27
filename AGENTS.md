@@ -4,7 +4,7 @@ Local-first AI dev orchestrator. Monorepo pnpm + Turborepo: Next.js 16 dashboard
 
 ## Hard rules (local-first)
 
-- **Never** use `claude -p` or any automated/headless Claude CLI invocation **on the host**. All host Claude usage is manual, interactive (`claude code`). The sanctioned exception: `runClaudeTask` in `@nexux/sandbox` runs `claude -p` *inside* a provisioned sandbox VM/container, launched from the UI.
+- **Never** use `claude -p` or any automated/headless Claude CLI invocation **on the host**. All host Claude usage is manual, interactive (`claude code`). The sanctioned exceptions: `runClaudeTask` in `@nexux/sandbox` runs `claude -p` *inside* a provisioned sandbox VM/container, launched from the UI; and the **Nexus assistant** (spec 39) runs `claude -p` on the host with only the Nexus MCP server in `--mcp-config` and `--allowedTools` limited to its `nexux_*` tools (no shell; it reads and edits only the project's own files, through the `nexux_*` file tools — inside its repositories, never secrets or `.git`), on the user's saved Claude Code credential.
 - Claude context is provided natively via the `.claude/` folder + symlink (built by `@nexux/storage` `ContextBuilder`) — do not build custom context-injection machinery.
 - Skills, Tools and MCPs are defined in **neutral format** and adapted per brain (Claude, Codex, xAI, Ollama…). Host-side automation is reserved for non-Claude brains.
 - Embeddings are local: Ollama `nomic-embed-text` + LanceDB, exposed as the `search_project` default tool. No cloud embedding providers.

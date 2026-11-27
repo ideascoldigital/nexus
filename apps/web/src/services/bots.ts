@@ -15,6 +15,7 @@ export type Bot = {
   color: string;
   shape: BotShape;
   model: string | null;
+  effort: string | null;
   /** Its own MCP servers (Claude Code's native mcpServers shape), or null. */
   mcpServers: Record<string, Record<string, unknown>> | null;
   claudeCredentialId: string | null;
@@ -23,6 +24,10 @@ export type Bot = {
   idleMinutes: number;
   /** When the user last cleared this conversation (spec 37); the chat marks it. */
   contextClearedAt: string | null;
+  /** "bot", or "nexus" for the Nexus chat (spec 39): no computer, Nexus's own tools. */
+  kind: "bot" | "nexus";
+  /** The project a Nexus chat belongs to; null on the "New project" chat. */
+  projectId: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -117,6 +122,7 @@ export type BotInput = {
   color?: string;
   shape?: BotShape;
   model?: string | null;
+  effort?: string | null;
   idleMinutes?: number;
   /** null = this machine; a change applies to the bot's next computer. */
   dockerEndpointId?: string | null;
@@ -138,7 +144,8 @@ async function call<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const getBots = () => call<BotListItem[]>("/api/bots");
 
-export const createBot = (input: BotInput) =>
+/** `kind: "nexus"` makes a project chat (spec 39) instead of an assistant with a computer. */
+export const createBot = (input: BotInput & { kind?: "bot" | "nexus" }) =>
   call<Bot>("/api/bots", { method: "POST", body: JSON.stringify(input) });
 
 export const updateBot = (id: string, input: Partial<BotInput>) =>
