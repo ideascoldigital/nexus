@@ -406,7 +406,36 @@ export type StreamEvent = {
       input?: Record<string, unknown>;
     }>;
   };
+  /** --include-partial-messages: the raw API stream event (text deltas). */
+  event?: {
+    type?: string;
+    delta?: { type?: string; text?: string };
+  };
 };
+
+/**
+ * The reply as it is being written, from stream-json events: the text of the
+ * assistant message in progress. Text deltas (--include-partial-messages)
+ * grow it; a new message starts it over; a whole assistant message (without
+ * partials) replaces it. Returns the new draft, or null when the event does
+ * not change it. Pure.
+ */
+export function nextDraft(draft: string, event: StreamEvent): string | null {
+  if (event.type === "stream_event") {
+    const ev = event.event;
+    if (ev?.type === "message_start") return draft ? "" : null;
+    if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta" && ev.delta.text) return draft + ev.delta.text;
+    return null;
+  }
+  if (event.type === "assistant") {
+    const text = (event.message?.content ?? [])
+      .filter((b) => b.type === "text" && b.text)
+      .map((b) => b.text!)
+      .join("");
+    return text && text !== draft ? text : null;
+  }
+  return null;
+}
 
 /** Turns one stream-json event into a readable progress line (or nothing). */
 export function describeEvent(event: StreamEvent): string | null {
@@ -480,13 +509,14 @@ export function buildClaudeCommand(
  * Call `flush()` after the stream ends to process a trailing partial line;
  * `getFinal()` returns the last `result` event seen (the run outcome).
  */
-export function createStreamParser(onLog?: LogSink): {
+export function createStreamParser(onLog?: LogSink, onDraft?: (draft: string) => void): {
   handleChunk: (chunk: string) => void;
   flush: () => void;
   getFinal: () => StreamEvent | null;
 } {
   let final: StreamEvent | null = null;
   let buffer = "";
+  let draft = "";
 
   const handleLine = (line: string) => {
     const trimmed = line.trim();
@@ -502,6 +532,10 @@ export function createStreamParser(onLog?: LogSink): {
       return; // partial/garbled line — the stream is best-effort for display
     }
     if (event.type === "result") final = event;
+    if (onDraft) {
+      const next = nextDraft(draft, event);
+      if (next !== null) onDraft((draft = next));
+    }
     const text = describeEvent(event);
     if (text) onLog?.(text + "\n");
   };

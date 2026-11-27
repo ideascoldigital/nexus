@@ -114,7 +114,7 @@ test("the Claude command resumes, picks the model, and wires the browser MCP", (
   assert.ok(cmd.includes(`'busca '\\''vuelos'\\'''`));
   assert.ok(cmd.includes(`--mcp-config ${BOT_MCP_CONFIG}`));
   assert.ok(cmd.includes("--append-system-prompt 'You are X'"));
-  assert.ok(cmd.endsWith("--permission-mode bypassPermissions --output-format stream-json --verbose"));
+  assert.ok(cmd.endsWith("--permission-mode bypassPermissions --output-format stream-json --verbose --include-partial-messages"));
   // A sign-in registers servers in the computer's own Claude config (spec 37);
   // a run must load exactly the two files it was given, never those.
   assert.ok(cmd.includes("--strict-mcp-config"));

@@ -366,3 +366,42 @@ html[data-titlebar="overlay"] .titlebar-only {
 .nexux-sub > [data-slot="card"]:first-child [data-slot="card-title"] {
   display: none;
 }
+
+/* ---- Chat: a bot at work (spec 39) ------------------------------------- */
+/* Three dots in the bot's colour, one wave through them. */
+@keyframes nexux-dot {
+  0%, 60%, 100% { transform: translateY(0) scale(0.8); opacity: 0.45; }
+  30% { transform: translateY(-2px) scale(1); opacity: 1; }
+}
+.nexux-dot { animation: nexux-dot 1.2s ease-in-out infinite; }
+/* A light sweeping across a label: "Thinking it through". */
+@keyframes nexux-shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+.nexux-shimmer {
+  background: linear-gradient(90deg, var(--muted-foreground) 0%, var(--muted-foreground) 40%, var(--foreground) 50%, var(--muted-foreground) 60%, var(--muted-foreground) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: nexux-shimmer 2.2s linear infinite;
+}
+/* The caret at the end of a reply being written (after its last block). */
+@keyframes nexux-caret { 50% { opacity: 0; } }
+.nexux-caret > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.6;
+  animation: nexux-caret 1s steps(1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nexux-dot, .nexux-shimmer, .nexux-caret > :last-child::after { animation: none; }
+  .nexux-shimmer { color: var(--muted-foreground); background: none; }
+}

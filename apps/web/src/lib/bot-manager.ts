@@ -71,6 +71,7 @@ import {
   withEarlierContext,
   withRoutinesNote,
 } from "@/lib/bot-view";
+import { clearRunDraft, setRunDraft } from "@/lib/run-drafts";
 import { resolveClaudeCodeToken } from "@/lib/sandbox-manager";
 import { cancelNexusRun, enqueueNexusPrompt, isNexusBot, recoverNexusChats } from "@/lib/nexus-assistant";
 
@@ -731,6 +732,7 @@ async function drain(sessionId: string): Promise<void> {
         userMcp,
         cwd: botWorkdir(session.bot.name),
         onLog: log.sink,
+        onDraft: (draft) => setRunDraft(run.id, draft),
         timeoutMs: RUN_TIMEOUT_MS,
         signal: abort.signal,
       });
@@ -769,6 +771,8 @@ async function drain(sessionId: string): Promise<void> {
           },
         });
       }
+      // Saved: the chat shows the reply itself now, not the draft.
+      clearRunDraft(run.id);
       // The reply may message teammates and create, change or remove routines.
       if (result.ok && !abort.signal.aborted) {
         const hop = (incoming?.hop ?? answer?.hop ?? 0) + 1;
@@ -812,6 +816,7 @@ async function drain(sessionId: string): Promise<void> {
       });
     } catch (err) {
       await log.close();
+      clearRunDraft(run.id);
       await prisma.botRun.updateMany({
         where: { id: run.id, status: "running" },
         data: {

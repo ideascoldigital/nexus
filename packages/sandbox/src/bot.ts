@@ -1314,7 +1314,8 @@ export function buildBotClaudeCommand(
     // only acts on servers Claude has configured), and a run must not load a
     // server because a sign-in left it there.
     ` --mcp-config ${BOT_MCP_CONFIG}${opts.userMcp ? ` ${BOT_USER_MCP_CONFIG}` : ""} --strict-mcp-config` +
-    ` --permission-mode bypassPermissions --output-format stream-json --verbose`
+    // Partial messages: the reply streams into the chat as it is written.
+    ` --permission-mode bypassPermissions --output-format stream-json --verbose --include-partial-messages`
   );
 }
 
@@ -1352,6 +1353,8 @@ export async function runBotPrompt(
     effort?: string | null;
     userMcp?: boolean;
     onLog?: LogSink;
+    /** The reply so far, each time it grows (see nextDraft). */
+    onDraft?: (draft: string) => void;
     timeoutMs?: number;
     signal?: AbortSignal;
     /** Working directory for Claude; defaults to the scratch BOT_WORKDIR. */
@@ -1359,7 +1362,7 @@ export async function runBotPrompt(
     target?: DockerTarget | null;
   },
 ): Promise<ClaudeRunResult> {
-  const parser = createStreamParser(opts.onLog);
+  const parser = createStreamParser(opts.onLog, opts.onDraft);
   const cwd = opts.cwd ?? BOT_WORKDIR;
   await ensureBotCwd(opts.container, cwd, opts.target);
   const res = await execRemote(buildBotClaudeCommand(prompt, opts), {

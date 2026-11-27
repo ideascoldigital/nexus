@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { prisma } from "@nexux/db";
+import { createStreamParser } from "@nexux/sandbox";
 import { toolsFor, type Scope } from "@nexux/mcp";
 
 import { detectNeedsInput, NEEDS_INPUT_MARKER } from "@/lib/agent-core";
@@ -24,6 +25,7 @@ import { grantRun } from "@/lib/nexus-run-tokens";
 import { requireConfirmation } from "@/lib/nexus-confirmations";
 import { nexusMessage } from "@/lib/nexus-attachments";
 import { watchSandbox } from "@/lib/nexus-sandbox-watch";
+import { clearRunDraft, setRunDraft } from "@/lib/run-drafts";
 import { resolveClaudeCodeToken } from "@/lib/sandbox-manager";
 
 export const NEXUS_KIND = "nexus";
@@ -158,7 +160,10 @@ async function drain(botId: string): Promise<void> {
 
     const now = new Date();
     const current = await prisma.botRun.findUnique({ where: { id: run.id }, select: { status: true } });
-    if (current?.status !== "running") continue;
+    if (current?.status !== "running") {
+      clearRunDraft(run.id);
+      continue;
+    }
     await prisma.botRun.update({
       where: { id: run.id },
       data: outcome.canceled
@@ -180,6 +185,7 @@ async function drain(botId: string): Promise<void> {
             finishedAt: now,
           },
     });
+    clearRunDraft(run.id);
     if (outcome.sessionId) {
       await prisma.botSession.update({ where: { id: run.session.id }, data: { claudeSessionId: outcome.sessionId } });
     }
@@ -269,9 +275,14 @@ export function nexusClaudeArgs(opts: {
 }): string[] {
   return [
     "-p",
-    ...(opts.prompt === null
-      ? ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
-      : [opts.prompt, "--output-format", "json"]),
+    ...(opts.prompt === null ? ["--input-format", "stream-json"] : [opts.prompt]),
+    // Streamed, partial messages included: the reply shows in the chat as it
+    // is written, and the tools it calls show as steps. The last line is
+    // still the result event parseClaudeOutput reads.
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
     // Nothing built in: no Bash, no Read/Edit/Write, no web. Only the MCP tools below.
     "--tools",
     "",
@@ -352,7 +363,24 @@ async function runClaude(opts: {
     let out = "";
     let err = "";
     let canceled = false;
-    child.stdout?.on("data", (d) => (out += d));
+    // Steps into the run's log (throttled), the reply so far into memory.
+    let log = "";
+    let logTimer: NodeJS.Timeout | null = null;
+    const flushLog = () => {
+      logTimer = null;
+      void prisma.botRun.update({ where: { id: opts.runId }, data: { log: log.slice(-20_000) } }).catch(() => undefined);
+    };
+    const parser = createStreamParser(
+      (line) => {
+        log += line;
+        logTimer ??= setTimeout(flushLog, 1000);
+      },
+      (draft) => setRunDraft(opts.runId, draft),
+    );
+    child.stdout?.on("data", (d) => {
+      out += d;
+      parser.handleChunk(String(d));
+    });
     child.stderr?.on("data", (d) => (err += d));
     const timer = setTimeout(() => child.kill("SIGTERM"), RUN_TIMEOUT_MS);
     child.on("error", (e) => {
@@ -363,6 +391,9 @@ async function runClaude(opts: {
     child.on("close", (code, signal) => {
       clearTimeout(timer);
       children.delete(opts.runId);
+      parser.flush();
+      if (logTimer) clearTimeout(logTimer);
+      if (log) flushLog();
       if (signal === "SIGTERM") canceled = true;
       resolve(parseClaudeOutput(out, err, code, canceled));
     });

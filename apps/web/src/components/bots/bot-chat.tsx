@@ -46,6 +46,7 @@ import {
 } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
+import { LiveReply, RunIndicator } from "@/components/bots/run-indicator";
 import { BotSkillsDialog, SlashMenu, useBotSkills } from "@/components/bots/bot-skills";
 import { ModelPicker } from "@/components/bots/model-picker";
 import { MailCard } from "@/components/bots/bot-mail-card";
@@ -217,6 +218,9 @@ export function BotChat({
   const busy = runs.some(
     (r) => r.status === "queued" || r.status === "running",
   );
+  // What the composer's Stop stops: the run going now, else the next queued.
+  const activeRun =
+    runs.findLast((r) => r.status === "running") ?? runs.find((r) => r.status === "queued") ?? null;
   const last = runs.at(-1);
   const cleared = bot.contextClearedAt ? new Date(bot.contextClearedAt) : null;
 
@@ -677,6 +681,25 @@ export function BotChat({
           </button>
             <div className="flex-1" />
             <ModelPicker key={bot.id} bot={bot} />
+          {/* While it works, send becomes Stop — until something is typed,
+              which then queues as the next message. */}
+          {activeRun && !canSend ? (
+            <button
+              type="button"
+              onClick={() => cancel.mutate(activeRun.id)}
+              disabled={cancel.isPending}
+              aria-label="Stop"
+              title={activeRun.status === "running" ? "Stop" : "Cancel the queued message"}
+              className="flex h-8 w-8 shrink-0 animate-in items-center justify-center rounded-full text-white transition-opacity duration-200 zoom-in-75 disabled:opacity-60"
+              style={{ background: bot.color }}
+            >
+              {cancel.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Square className="h-3 w-3 fill-current" />
+              )}
+            </button>
+          ) : (
           <button
             type="button"
             onClick={submit}
@@ -692,6 +715,7 @@ export function BotChat({
               <ArrowUp className="h-4 w-4" />
             )}
           </button>
+          )}
           </div>
         </div>
       </div>
@@ -848,32 +872,6 @@ function Bubble({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
-  );
-}
-
-function TypingBubble({
-  label,
-  children,
-}: {
-  label: ReactNode;
-  children?: ReactNode;
-}) {
-  return (
-    <Bubble copyable={false} className="flex items-center gap-3 bg-card/60">
-      <span className="flex gap-1" aria-hidden>
-        {[0, 150, 300].map((d) => (
-          <span
-            key={d}
-            className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground"
-            style={{ animationDelay: `${d}ms` }}
-          />
-        ))}
-      </span>
-      <span className="min-w-0 flex-1 text-[12.5px] text-muted-foreground">
-        {label}
-      </span>
-      {children}
-    </Bubble>
   );
 }
 
@@ -1304,45 +1302,27 @@ const RunMessages = memo(function RunMessages({
       )}
 
       {run.status === "queued" && (quiet || incoming) && (
-        <TypingBubble label="Waking up" />
+        <RunIndicator color={bot.color} label="Waking up" />
       )}
 
-      {/* Progress is a single line that updates in place, and goes away with
-          the reply — the conversation reads like a chat, not a log. */}
+      {/* While it works: dots and one line that updates in place, then the
+          reply itself as it is written. Stop lives on the composer. */}
       {run.status === "running" && (
-        <TypingBubble
+        <LiveReply
+          botId={bot.id}
+          runId={run.id}
+          bot={bot}
+          bubble={(content) => <Bubble copyable={false}>{content}</Bubble>}
           label={
             isIntro(run.prompt) ? (
-              "Typing"
+              "Typing…"
             ) : run.steps.length ? (
               <CurrentStep key={run.steps.length} step={run.steps.at(-1)!} />
             ) : (
-              "Working"
+              "Thinking it through"
             )
           }
-        >
-          {!isIntro(run.prompt) && (
-            <>
-              {bot.kind !== "nexus" && (
-              <button
-                type="button"
-                onClick={() => onOpenComputer()}
-                className="shrink-0 text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-              >
-                Watch
-              </button>
-              )}
-              <button
-                type="button"
-                onClick={() => onCancel(run.id)}
-                className="inline-flex shrink-0 items-center gap-1 text-[12px] text-muted-foreground hover:text-destructive"
-              >
-                <Square className="h-2.5 w-2.5 fill-current" />
-                Stop
-              </button>
-            </>
-          )}
-        </TypingBubble>
+        />
       )}
 
       {run.status === "canceled" && (
