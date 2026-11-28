@@ -100,3 +100,19 @@ export function textOn(hex: string): "#ffffff" | "#18181b" {
   const lum = 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
   return lum > 0.4 ? "#18181b" : "#ffffff";
 }
+
+/**
+ * A random face for a new bot: a shape and a colour, each different from the
+ * current one when there is one, so every roll visibly changes. Pure (pass
+ * `rnd` in tests).
+ */
+export function randomBotLook(
+  current?: { shape: BotShape; color: string },
+  rnd: () => number = Math.random,
+): { shape: BotShape; color: string } {
+  const pick = <T,>(list: readonly T[], not?: T): T => {
+    const pool = list.length > 1 && not !== undefined ? list.filter((x) => x !== not) : list;
+    return pool[Math.floor(rnd() * pool.length) % pool.length]!;
+  };
+  return { shape: pick(BOT_SHAPES, current?.shape), color: pick(BOT_COLORS, current?.color) };
+}

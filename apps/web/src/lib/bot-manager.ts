@@ -71,6 +71,7 @@ import {
   withEarlierContext,
   withRoutinesNote,
 } from "@/lib/bot-view";
+import { NO_CLAUDE_TOKEN } from "@/lib/claude-setup";
 import { clearRunDraft, setRunDraft } from "@/lib/run-drafts";
 import { resolveClaudeCodeToken } from "@/lib/sandbox-manager";
 import { cancelNexusRun, enqueueNexusPrompt, isNexusBot, recoverNexusChats } from "@/lib/nexus-assistant";
@@ -177,7 +178,7 @@ export async function startBotSession(botId: string): Promise<BotSession> {
   const claude = await resolveClaudeCodeToken(bot.claudeCredentialId);
   if (!claude) {
     throw new Error(
-      "No Claude Code token — add one in Vault → AI providers (`claude setup-token`)",
+      NO_CLAUDE_TOKEN,
     );
   }
 

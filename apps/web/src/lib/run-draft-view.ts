@@ -7,7 +7,7 @@
 // package), so the page keeps its own copy, as bot-chat does.
 const NEEDS_INPUT_MARKER = "NEEDS_INPUT:";
 
-const CARD_FENCES = ["choices", "mail", "handoff", "routine", "restart", "project-source", "confirm", "add-credential"];
+const CARD_FENCES = ["run", "choices", "mail", "handoff", "routine", "restart", "project-source", "confirm", "add-credential"];
 const CARD_START = new RegExp("^\\s*```(" + CARD_FENCES.map((f) => f.replace(/-/g, "\\-")).join("|") + ")\\b", "m");
 
 export function draftBody(draft: string | null | undefined): string {

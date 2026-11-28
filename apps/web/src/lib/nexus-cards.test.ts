@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { parseGitUrls, parseSourceCard, sourceAnswer } from "./nexus-cards";
+import { parseGitUrls, parseRunCard, parseSourceCard, sourceAnswer } from "./nexus-cards";
 
 test("a project-source block becomes a card, and the reply keeps its text", () => {
   const card = parseSourceCard('Hi! Let\'s set up your project.\n\n```project-source\n{"question": "¿De dónde sale el código?"}\n```');
@@ -25,11 +25,29 @@ test("a confirm block becomes a card only with a real action id", async () => {
   assert.equal(parseConfirmCard('```confirm\n{"actionId": "anything"}\n```'), null);
 });
 
-test("an add-credential block becomes a card for AWS or Civo only", async () => {
+test("an add-credential block becomes a card for a cloud key or a git token, nothing else", async () => {
   const { parseCredentialCard } = await import("./nexus-cards");
   assert.deepEqual(parseCredentialCard('Falta la llave.\n```add-credential\n{"provider": "aws"}\n```'), {
     body: "Falta la llave.",
     provider: "aws",
   });
-  assert.equal(parseCredentialCard('```add-credential\n{"provider": "github"}\n```'), null);
+  assert.equal(parseCredentialCard('```add-credential\n{"provider": "github"}\n```')?.provider, "github");
+  assert.equal(parseCredentialCard('```add-credential\n{"provider": "gitlab"}\n```')?.provider, "gitlab");
+  assert.equal(parseCredentialCard('```add-credential\n{"provider": "dropbox"}\n```'), null);
+});
+
+test("a run card lists one command per repository, one line each", () => {
+  const text = 'Así lo levantas:\n\n```run\n{"commands": [{"repo": "simplifybot-api", "command": "npm run start:dev", "label": "API"}, {"repo": "simplifybot-ui", "command": "npm run dev"}]}\n```';
+  const card = parseRunCard(text);
+  assert.equal(card?.body, "Así lo levantas:");
+  assert.deepEqual(card?.commands, [
+    { repo: "simplifybot-api", command: "npm run start:dev", label: "API" },
+    { repo: "simplifybot-ui", command: "npm run dev", label: "simplifybot-ui" },
+  ]);
+});
+
+test("a run card drops multi-line or empty commands", () => {
+  const bad = '```run\n{"commands": [{"repo": "a", "command": "ls\\nrm x"}, {"repo": "b", "command": ""}]}\n```';
+  assert.equal(parseRunCard(bad), null);
+  assert.equal(parseRunCard("no card"), null);
 });

@@ -35,7 +35,9 @@ export const scanDirectory: ToolDefinition<{ directory: string }> = {
   description:
     "Find the git repositories in a folder on the user's machine (the folder itself, or up to two " +
     "levels below it). Use it when the user wants a project from code they already have; show them " +
-    "what was found and ask which ones belong to the project.",
+    "what was found and ask which ones belong to the project. A repo with `containsRepos` is a wrapper " +
+    "around repos of its own (marked `insideRepo`): offer those inner ones (e.g. an api and a ui) as " +
+    "the project's repositories, not the wrapper.",
   scope: "projects:read",
   inputSchema: {
     type: "object",

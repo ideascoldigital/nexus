@@ -7,7 +7,7 @@
 // send button while a run is going.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
 import { MarkdownReport } from "@/components/ui/markdown-report";
@@ -63,8 +63,23 @@ export function LiveReply({
     },
     refetchInterval: 400,
   });
-  const target = draftBody(data);
+  const qc = useQueryClient();
+  // Sticky: once words are on screen they stay until newer ones replace them.
+  // The draft goes empty in two moments that are not "nothing written": a new
+  // message starting after a tool call, and the run finishing (the server
+  // drops the draft once the reply is saved). Dropping the text there made it
+  // vanish, then come back whole with its card.
+  const fresh = draftBody(data);
+  const [kept, setKept] = useState("");
+  if (fresh && fresh !== kept) setKept(fresh);
+  const target = fresh || kept;
   const shown = useTypewriter(target);
+  // Gone after there was text: most likely finished — fetch the saved reply
+  // now instead of waiting for the chat's next poll.
+  const hadText = Boolean(kept);
+  useEffect(() => {
+    if (hadText && data === null) void qc.invalidateQueries({ queryKey: ["bot-feed", botId] });
+  }, [hadText, data, qc, botId]);
 
   if (!shown) return <RunIndicator color={bot.color} label={label} />;
   return (

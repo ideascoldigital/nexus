@@ -30,10 +30,22 @@ import {
 } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
+import { SandboxStatusBar } from "@/components/bots/sandbox-status-bar";
+import {
+  LocalProcessesStrip,
+  startLocalProcesses,
+  tailCommand,
+  type LocalProcessView,
+} from "@/components/bots/local-processes-strip";
 import { BotChat } from "@/components/bots/bot-chat";
 import { ComputerDialog, ComputerDock, useComputerControl } from "@/components/bots/bot-computer";
 import { BotPanel } from "@/components/bots/bot-panel";
-import { ProjectSandboxPanel, useProjectSandboxes, type SurfaceKind } from "@/components/bots/project-sandbox-panel";
+import {
+  ProjectSandboxPanel,
+  useProjectSandboxes,
+  type RunRequest,
+  type SurfaceKind,
+} from "@/components/bots/project-sandbox-panel";
 import { ProjectCard } from "@/components/bots/project-card";
 import { NewBotDialog } from "@/components/bots/new-bot-dialog";
 import { WorkspaceSwitcher } from "@/components/layout/workspace-switcher";
@@ -340,6 +352,7 @@ export function BotsView() {
           onDeleted={() => setSelectedId(null)}
           team={bots ?? []}
           onOpenBot={setSelectedId}
+          onOpenSettings={(tab) => setPanel({ kind: "settings", tab })}
         />
       ) : (
         !isLoading && <EmptyTeam onCreate={() => setCreating(true)} />
@@ -362,7 +375,11 @@ export function BotsView() {
         open={deleting !== null}
         onOpenChange={(open) => !open && setDeleting(null)}
         title={`Delete ${deleting?.name ?? "this bot"}?`}
-        description="Its computer and chat history go with it."
+        description={
+          deleting?.kind === "nexus" && deleting.projectId
+            ? "Its project goes with it: the chat, the project and its sandboxes (destroyed). Your folders and repositories on disk stay."
+            : "Its computer and chat history go with it."
+        }
         confirmLabel="Delete bot"
         onConfirm={() => deleting && remove.mutate(deleting.id)}
       />
@@ -561,6 +578,7 @@ function BotWorkspace({
   onDeleted,
   team,
   onOpenBot,
+  onOpenSettings,
 }: {
   bot: BotListItem;
   seenAt: string | null;
@@ -569,6 +587,8 @@ function BotWorkspace({
   /** Every bot, for teammate messages (avatars, names, links). */
   team: BotListItem[];
   onOpenBot: (id: string) => void;
+  /** Settings over the bots view, on a section (a chat card's "Open in Vault"). */
+  onOpenSettings: (tab: string) => void;
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -596,12 +616,25 @@ function BotWorkspace({
   // It opens by itself only while a sandbox is being set up (its setup log);
   // otherwise "Details" opens it.
   const booting = (projectSandboxes.data ?? []).some((s) => s.status === "provisioning" || s.status === "pending");
+  // The newest sandbox that is booting or just failed: the strip over the composer.
+  const statusSandbox =
+    (projectSandboxes.data ?? []).find((s) => !s.archived && (s.status === "provisioning" || s.status === "pending" || s.status === "error")) ?? null;
   // The right column: the sandbox (by itself once there is one) or Details.
   const [pane, setPane] = useState<"sandbox" | "none" | null>(null);
   const shownPane = bot.projectId ? (pane ?? (booting ? "sandbox" : "none")) : "none";
   // A surface something asked the panel to open (the floating card), and
   // whether the panel is expanded over the chat.
-  const [surfaceAsk, setSurfaceAsk] = useState<{ kind: SurfaceKind; at: number } | null>(null);
+  const [surfaceAsk, setSurfaceAsk] = useState<{ kind: SurfaceKind; at: number; run?: RunRequest[] } | null>(null);
+  /** Each process's live output in a panel terminal (tail of its log). */
+  const openProcesses = (procs: LocalProcessView[]) => {
+    if (!procs.length) return;
+    setPane("sandbox");
+    setSurfaceAsk({
+      kind: "terminal",
+      at: Date.now(),
+      run: procs.map((p) => ({ repo: p.repo, command: tailCommand(p.logPath), label: p.label })),
+    });
+  };
   const [cardOpen, setCardOpen] = useState(false);
   // A wide chat keeps the project card pinned at its top right (and leaves it
   // room); a narrow one shows it as a popover from the chat's name.
@@ -717,6 +750,35 @@ function BotWorkspace({
           panelOpen={shownPane === "sandbox"}
           onTogglePanel={() => setPane(shownPane === "sandbox" ? "none" : "sandbox")}
           onTitleClick={bot.projectId && !pinCard ? () => setCardOpen((v) => !v) : undefined}
+          onOpenSettings={(tab) => onOpenSettings(tab)}
+          aboveComposer={
+            bot.projectId ? (
+              <>
+                {statusSandbox && (
+                  <SandboxStatusBar
+                    projectId={bot.projectId}
+                    sandbox={statusSandbox}
+                    color={bot.color}
+                    onOpenLog={() => {
+                      setPane("sandbox");
+                      setSurfaceAsk({ kind: "log", at: Date.now() });
+                    }}
+                  />
+                )}
+                <LocalProcessesStrip projectId={bot.projectId} onOpen={(p) => openProcesses([p])} />
+              </>
+            ) : null
+          }
+          onRun={(commands) => {
+            if (!bot.projectId) return;
+            // Detached processes, so they outlive a reload; the terminal only shows their output.
+            void startLocalProcesses(bot.projectId, commands)
+              .then((started) => {
+                qc.invalidateQueries({ queryKey: ["local-processes", bot.projectId] });
+                openProcesses(started);
+              })
+              .catch((err) => toast({ title: "Could not start it", description: (err as Error).message, variant: "destructive" }));
+          }}
           insetRight={pinCard ? 340 : 0}
           dockMode="off"
           onDockMode={() => {}}

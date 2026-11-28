@@ -1842,3 +1842,24 @@ test("a repo name with spaces is slugged into the step name", () => {
   assert.ok(slug && /^[a-z0-9-]+$/.test(slug), `bad slug: ${slug}`);
   assert.ok(probe!.includes(`'/opt/nexus/${slug}'`));
 });
+
+test("fnpm is installed with Node (x86_64 only) and inferred installs go through it", () => {
+  const script = renderCloudInit(baseSpec());
+  assert.match(script, /\[nexux\] installing fnpm/);
+  assert.match(script, /if \[ "\$\(uname -m\)" = "x86_64" \]; then\n  curl -fsSL -o \/usr\/local\/bin\/fnpm https:\/\/github\.com\/ideascoldigital\/fnpm\/releases\/latest\/download\/fnpm-linux-amd64/);
+  // Set up once with the repo's own manager, falling back to it without fnpm.
+  assert.match(script, /if command -v fnpm >\/dev\/null 2>&1; then/);
+  assert.match(script, /\{ \[ -d \.fnpm \] \|\| fnpm setup pnpm; \} && fnpm install/);
+  assert.match(script, /pnpm install/);
+});
+
+test("no Node, no fnpm", () => {
+  const script = renderCloudInit(baseSpec({ installNode: false, installClaudeCode: false, installOpenCode: false, installAgentBrowser: false }));
+  assert.doesNotMatch(script, /installing fnpm/);
+});
+
+test("the bootstrap with fnpm is valid bash", { skip: process.platform === "win32" }, () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fnpm-boot-")), "boot.sh");
+  fs.writeFileSync(file, renderCloudInit(baseSpec()));
+  execFileSync("bash", ["-n", file]);
+});

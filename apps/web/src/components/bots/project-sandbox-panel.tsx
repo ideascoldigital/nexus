@@ -62,9 +62,24 @@ const SURFACES: { kind: SurfaceKind; label: string; key: string; icon: typeof Sq
 ];
 
 /** A terminal keeps the place it opened in: this Mac or the sandbox. */
-type Tab = { id: string; kind: SurfaceKind; n: number; cwd?: string; local?: boolean };
+type Tab = {
+  id: string;
+  kind: SurfaceKind;
+  n: number;
+  cwd?: string;
+  local?: boolean;
+  /** Typed into the terminal once it is up (a Run from the chat), and its tab's name. */
+  command?: string;
+  title?: string;
+};
 
-type ProjectFolders = { workspacePath: string | null; repositories: { localPath: string | null; isMain: boolean }[] };
+/** Commands the chat's Run card starts on this Mac, each in its repository's folder. */
+export type RunRequest = { repo: string; command: string; label: string };
+
+type ProjectFolders = {
+  workspacePath: string | null;
+  repositories: { name: string; localPath: string | null; isMain: boolean }[];
+};
 
 /** Where a terminal on this Mac opens: the main repository's folder, else the project's. */
 function localFolder(p: ProjectFolders | undefined): string | null {
@@ -108,6 +123,7 @@ const newTab = (kind: SurfaceKind, tabs: Tab[], extra: Partial<Tab> = {}): Tab =
   ...extra,
 });
 const tabLabel = (t: Tab) => {
+  if (t.title) return t.title;
   const base = SURFACES.find((s) => s.kind === t.kind)!.label;
   return t.kind === "terminal" && t.n > 1 ? `${base} ${t.n}` : base;
 };
@@ -123,8 +139,8 @@ export function ProjectSandboxPanel({
   projectId: string;
   /** The chat's face, for the Settings surface. */
   bot: { shape: BotShape; color: string };
-  /** A surface the chat header asked for (Sandbox ▾); bumps open one. */
-  open: { kind: SurfaceKind; at: number } | null;
+  /** A surface the chat header asked for (Sandbox ▾); bumps open one. `run`: terminals to start commands in. */
+  open: { kind: SurfaceKind; at: number; run?: RunRequest[] } | null;
   expanded: boolean;
   onExpand: (expanded: boolean) => void;
   onClose: () => void;
@@ -188,9 +204,28 @@ export function ProjectSandboxPanel({
   }
   // The chat header's Sandbox ▾ asked for a surface.
   const [handled, setHandled] = useState(0);
-  if (requested && requested.at !== handled) {
+  if (requested && requested.at !== handled && (!requested.run || project.data)) {
     setHandled(requested.at);
-    openSurface(requested.kind);
+    if (requested.run?.length) {
+      // One terminal per command, on this Mac, in its repository's folder
+      // (only the project's own repositories — never a path from the chat).
+      let next = tabs;
+      let focus: string | null = null;
+      for (const r of requested.run) {
+        // Already showing that output: go to it instead of opening another.
+        const same = next.find((t) => t.kind === "terminal" && t.command === r.command);
+        if (same) {
+          focus ??= same.id;
+          continue;
+        }
+        const repo = project.data?.repositories.find((x) => x.name === r.repo);
+        const tab = newTab("terminal", next, { local: true, cwd: repo?.localPath ?? here ?? "", command: r.command, title: r.label });
+        next = [...next, tab];
+        focus ??= tab.id;
+      }
+      setTabs(next);
+      if (focus) setActive(focus);
+    } else openSurface(requested.kind);
   }
 
   // T, F, L, P open surfaces while the panel has focus (not while typing in it).
@@ -351,7 +386,7 @@ export function ProjectSandboxPanel({
             return (
               <div key={t.id} className={cn("absolute inset-0", t.id === active ? "block" : "hidden")}>
                 {where || t.local ? (
-                  <RealTerminal key={`${t.id}:${where}`} workingDirectory={where || undefined} />
+                  <RealTerminal key={`${t.id}:${where}`} workingDirectory={where || undefined} initialCommand={t.command} />
                 ) : (
                   <Centered>The terminal opens when the sandbox is running.</Centered>
                 )}

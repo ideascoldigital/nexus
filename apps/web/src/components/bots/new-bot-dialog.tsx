@@ -7,13 +7,13 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { Dices, Loader2 } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { BOT_COLORS, BOT_SHAPES, type BotShape } from "@/lib/bot-shapes";
+import { BOT_COLORS, BOT_SHAPES, randomBotLook, type BotShape } from "@/lib/bot-shapes";
 import { cn } from "@/lib/utils";
 import { createBot } from "@/services/bots";
 import { getDockerEndpoints } from "@/services/docker-endpoints";
@@ -31,8 +31,16 @@ export function NewBotDialog({
   const qc = useQueryClient();
   const [kind, setKind] = useState<"bot" | "nexus">("bot");
   const [name, setName] = useState("");
-  const [shape, setShape] = useState<BotShape>("blob");
-  const [color, setColor] = useState<string>("#ec4899");
+  // Each new bot starts with a random face; the dice rolls another.
+  const [look, setLook] = useState(() => randomBotLook());
+  const { shape, color } = look;
+  const setShape = (s: BotShape) => setLook((l) => ({ ...l, shape: s }));
+  const setColor = (c: string) => setLook((l) => ({ ...l, color: c }));
+  const [rolls, setRolls] = useState(0);
+  const roll = () => {
+    setLook((l) => randomBotLook(l));
+    setRolls((n) => n + 1);
+  };
   // null = this machine's docker context, which is where a bot ran before
   // endpoints reached them (D-86).
   const [dockerEndpointId, setDockerEndpointId] = useState<string | null>(null);
@@ -47,6 +55,7 @@ export function NewBotDialog({
       onCreated(bot.id);
       onOpenChange(false);
       setName("");
+      setLook(randomBotLook()); // the next one gets a new face too
       setKind("bot");
       setDockerEndpointId(null);
     },
@@ -103,7 +112,21 @@ export function NewBotDialog({
               </button>
             ))}
           </div>
-          <BotAvatar shape={shape} color={color} size={108} looking />
+          <div className="relative">
+            {/* Re-keyed per roll so the new face pops in. */}
+            <div key={rolls} className="animate-in duration-300 zoom-in-75 fade-in">
+              <BotAvatar shape={shape} color={color} size={108} looking />
+            </div>
+            <button
+              type="button"
+              onClick={roll}
+              aria-label="Random shape and color"
+              title="Surprise me — random shape and color"
+              className="absolute -right-3 -bottom-1 flex h-8 w-8 items-center justify-center rounded-full border border-border bg-popover text-muted-foreground shadow-sm transition-all hover:rotate-12 hover:text-foreground active:scale-90"
+            >
+              <Dices className="h-4 w-4" />
+            </button>
+          </div>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}

@@ -20,12 +20,14 @@ import { toolsFor, type Scope } from "@nexux/mcp";
 import { detectNeedsInput, NEEDS_INPUT_MARKER } from "@/lib/agent-core";
 import { parseChoices } from "@/lib/bot-choices";
 import { INTRO_TAG } from "@/lib/bot-prompts";
-import { CREDENTIAL_FENCE, parseConfirmCard, parseCredentialCard, parseSourceCard, SOURCE_FENCE } from "@/lib/nexus-cards";
+import { CREDENTIAL_FENCE, parseConfirmCard, parseCredentialCard, parseSourceCard, RUN_FENCE, SOURCE_FENCE } from "@/lib/nexus-cards";
 import { grantRun } from "@/lib/nexus-run-tokens";
 import { requireConfirmation } from "@/lib/nexus-confirmations";
 import { nexusMessage } from "@/lib/nexus-attachments";
 import { watchSandbox } from "@/lib/nexus-sandbox-watch";
+import { NO_CLAUDE_TOKEN } from "@/lib/claude-setup";
 import { clearRunDraft, setRunDraft } from "@/lib/run-drafts";
+import { fnpmPath } from "@/lib/fnpm";
 import { resolveClaudeCodeToken } from "@/lib/sandbox-manager";
 
 export const NEXUS_KIND = "nexus";
@@ -87,9 +89,13 @@ export async function enqueueNexusPrompt(botId: string, prompt: string) {
 }
 
 /** Stop a running message (the chat's stop button). */
+/** Runs the user stopped: Claude may exit cleanly on SIGTERM, so the signal alone does not tell. */
+const stopping = new Set<string>();
+
 export function cancelNexusRun(runId: string): boolean {
   const child = children.get(runId);
   if (!child) return false;
+  stopping.add(runId);
   child.kill("SIGTERM");
   return true;
 }
@@ -212,7 +218,11 @@ type RunOutcome = {
 };
 
 /** The instructions the Nexus chat runs with. Pure, for tests. */
-export function renderNexusSystemPrompt(project: { id: string; name: string } | null): string {
+export function renderNexusSystemPrompt(
+  project: { id: string; name: string } | null,
+  /** fnpm is installed on this Mac: installs and scripts go through it by default. */
+  opts: { fnpm?: boolean } = {},
+): string {
   return [
     "You are Nexus, the assistant that runs the user's Nexus app — a local-first workspace where they keep projects (their repositories), sandboxes that run them, and AI teammates (bots). The user drives everything by talking to you; there are no other screens for projects. Act through the nexux_* tools. You have no shell, but you can work on the project's own files on this Mac (no sandbox needed): nexux_list_files, nexux_read_file, nexux_edit_file and nexux_write_file.",
     "",
@@ -228,24 +238,42 @@ export function renderNexusSystemPrompt(project: { id: string; name: string } | 
     "```",
     "",
     "   The answer comes back as \"Use the folder <path>\", \"Git repositories:\" with a list, or \"Start from an idea\". Then:",
-    "   - A folder: run nexux_scan_directory on it, show what was found and ask which repositories belong to the project (choices).",
+    "   - A folder: run nexux_scan_directory on it. Only ask which repositories belong (choices) when it is a real choice — several unrelated repos. One repo: use it. A wrapper repo (`containsRepos`): use the repos inside it, not the wrapper. Say in one line what you are using.",
     "   - Git repositories: you have the URLs. For private ones, offer the saved credentials from nexux_list_git_credentials by name (never ask the user to paste a token in the chat).",
+    "   Whenever a git token is missing — none saved for that host, or a clone/launch fails for lack of one — do NOT tell the user to go to Settings or set GITHUB_TOKEN: one line on what it needs (read access to which repositories), then end your reply with the add-credential card with provider \"github\" or \"gitlab\". It saves the token straight to their Vault and has an Open in Vault button. When they say it is saved, carry on (clone or launch again) without asking.",
     "   - An idea: ask what it is, offer the types from nexux_list_bootstrap_types, and the folder (default from that tool).",
-    "2. A name (suggest one) and a one-line description. Then nexux_create_project.",
+    "2. Create it with nexux_create_project right away — do NOT ask for a name or a description. From a folder, name it after the folder; from Git URLs, after the main repository; a one-line description only if you already know what it is (else leave it out). Then tell the user the name in one line and that they can rename it whenever they like. Only an idea, which has no folder yet, gets a suggested name to confirm.",
     "3. Git repositories: nexux_clone_repositories, then check nexux_get_project until each is ready or failed, and say so.",
     "4. Recognise it: nexux_detect_stack, and tell the user in plain words what each repository is (language, package manager, how it runs, ports, services it needs).",
-    "5. Offer to run it in a sandbox. Call nexux_sandbox_options, then ask where with a choices block that ALWAYS lists every place: \"Docker on this Mac\" (free), each Docker endpoint by name (free), \"Civo\" and \"AWS\" (they cost money). Do not drop a cloud because it has no key yet — just add \"(needs a key)\" to its option. Mention that a folder-only repository (no Git URL) can only run on this Mac.",
+    "5. Ask how they want to run it, with a choices block in this order: \"Run it on this Mac (your own setup)\" first, then \"Just work on the files\", then the sandboxes from nexux_sandbox_options: \"Docker sandbox on this Mac\" (free), each Docker endpoint by name (free), \"Civo\" and \"AWS\" (they cost money). Do not drop a cloud because it has no key yet — just add \"(needs a key)\" to its option. Mention that a folder-only repository (no Git URL) can only run on this Mac. \"Run it on this Mac\" means the Run card below, not a sandbox.",
+    "   If they pick no sandbox: launch nothing. Say the project is ready to work on — they can ask about its code or ask for changes here (you read and edit its files), and the panel's Terminal and Files work on this Mac; to run it here they just ask — and that they can ask for a sandbox any time. Then stop; do not ask again.",
     `   If the user picks Civo or AWS and nexux_sandbox_options says it has no credential, help them add one: one line on what key that provider needs, then end your reply with this card (never ask them to type a key in the chat — the card saves it straight to their Vault):`,
     "",
     "```" + CREDENTIAL_FENCE,
     '{"provider": "aws"}',
     "```",
     "",
-    "   (provider \"aws\" or \"civo\"). When they say it is saved, call nexux_sandbox_options again and carry on with the launch. If terraform is not installed, a cloud sandbox cannot launch: say so and offer Docker instead.",
+    "   (provider \"aws\", \"civo\", \"github\" or \"gitlab\"). When they say it is saved, call nexux_sandbox_options again and carry on with the launch. If terraform is not installed, a cloud sandbox cannot launch: say so and offer Docker instead.",
     "6. Launch it with nexux_launch_sandbox (provider local, civo or aws; dockerEndpoint for an endpoint). A local or endpoint sandbox launches right away. A cloud one comes back asking for the user's confirmation: end your reply with the confirm card the tool describes and wait; when the user confirms, call it again with the same arguments.",
     "7. Once it is launched, do NOT check on it, poll it or ask whether to check: Nexus posts each step in this chat by itself and tells the user when it is ready or failed, and then tells you too. Just say it is starting and that progress will appear here.",
     "",
-    "In a chat that already has a project, start from step 5 when the user asks to run it, and use nexux_get_project / nexux_detect_stack to answer questions about it.",
+    "In a chat that already has a project, use nexux_get_project / nexux_detect_stack to answer questions about it.",
+    "Where it runs is the user's call, every time. When they ask to run it (\"levanta la app\", \"run it\", \"arráncala\") without naming a place, do NOT pick one — ask how, with the same choices block as step 5: \"Run it on this Mac (your own setup)\" first, then the sandboxes (Docker sandbox on this Mac, each endpoint, Civo, AWS). If they already chose in this chat, list that one first with \"(like last time)\". When they name the place in the message, go straight there. Launch a sandbox ONLY when they chose or asked for one now; having talked about a sandbox earlier in the chat is not a request to launch one. After a key or token is saved, carry on with what the user asked for — if it was not a sandbox, do not launch one.",
+    "# Running it on this Mac, without a sandbox",
+    "When the project should run on this Mac (they chose it, or said so), never propose Docker or a sandbox instead. Their folders already have their setup (dependencies, .env files); use them as they are. You have no shell, so you do not run it yourself: get each repository's dev command from nexux_detect_stack (its package manager and scripts), say in one line what each needs that is not there yet (a database, Redis, env vars such as DATABASE_URL), then end your reply with this card — one entry per repository, its name exactly as the project has it, one single-line command each (chain an install with && when it is needed):",
+    "",
+    "```" + RUN_FENCE,
+    '{"commands": [{"repo": "my-api", "command": "npm install && npm run start:dev", "label": "API"}, {"repo": "my-ui", "command": "npm run dev", "label": "UI"}]}',
+    "```",
+    "",
+    "The user taps Run and each command starts in the panel's Terminal, in that repository's folder. If they say it failed, ask them to paste the error from the Terminal.",
+    ...(opts.fnpm
+      ? [
+          `fnpm is installed on this Mac, and it is the default for JavaScript repositories (those with a package.json): every install and script goes through it — it keeps the repository's own lockfile and audits packages before they install. Write each command as \`[ -d .fnpm ] || fnpm setup <pm>; fnpm install && fnpm run <script>\`, where <pm> is that repository's own package manager (npm, pnpm, yarn, bun — from its lockfile) and <script> its dev script; drop \`fnpm install &&\` when the dependencies are already there. Never plain npm/pnpm/yarn/bun for these. The first run adds a .fnpm folder to the repository (and to its .gitignore) — mention that once.`,
+        ]
+      : [
+          "For JavaScript repositories, use the repository's own package manager. Once, you may mention fnpm (github.com/ideascoldigital/fnpm — keeps the lockfile and audits packages before they install), which Nexus uses by default when it is installed.",
+        ]),
     "A project does not need a sandbox to be worked on. When the user asks about its code, find it with nexux_list_files and read it with nexux_read_file — a big file comes in parts: keep calling with the `next` offset until you have what you need, never answer from a partial read. When the user asks for a change, make it yourself with nexux_edit_file (exact text from the file, small unique pieces; all: true for a repeated string) or nexux_write_file for a new file, then say in a line or two what you changed. Do not offer to hand them text to paste, or send them to another tool, for something you can edit. Files marked secret (.env, keys, .git) cannot be read or written — say so, never ask the user to paste them. To run commands, point the user to the Terminal in the panel.",
     "",
     "# How you talk",
@@ -317,7 +345,7 @@ async function runClaude(opts: {
 }): Promise<RunOutcome> {
   const claude = await resolveClaudeCodeToken(opts.claudeCredentialId);
   if (!claude) {
-    return { ok: false, error: "No Claude Code token — add one in Vault → AI providers (`claude setup-token`)" };
+    return { ok: false, error: NO_CLAUDE_TOKEN };
   }
   const port = process.env.PORT || "3000";
   const mcpConfig = JSON.stringify({
@@ -346,7 +374,7 @@ async function runClaude(opts: {
   const message = nexusMessage(opts.botId, opts.prompt);
   const args = nexusClaudeArgs({
     prompt: message.blocks ? null : message.text,
-    systemPrompt: renderNexusSystemPrompt(opts.project),
+    systemPrompt: renderNexusSystemPrompt(opts.project, { fnpm: Boolean(fnpmPath()) }),
     mcpConfig,
     allowedTools,
     resume: opts.resume,
@@ -394,7 +422,7 @@ async function runClaude(opts: {
       parser.flush();
       if (logTimer) clearTimeout(logTimer);
       if (log) flushLog();
-      if (signal === "SIGTERM") canceled = true;
+      if (signal === "SIGTERM" || stopping.delete(opts.runId)) canceled = true;
       resolve(parseClaudeOutput(out, err, code, canceled));
     });
   });
@@ -403,7 +431,19 @@ async function runClaude(opts: {
 /** `claude -p --output-format json` → the run's outcome. Pure, for tests. */
 export function parseClaudeOutput(stdout: string, stderr: string, code: number | null, canceled = false): RunOutcome {
   if (canceled) return { ok: false, canceled: true };
-  const line = stdout.trim().split("\n").filter(Boolean).pop() ?? "";
+  // stream-json: the outcome is the last `result` event — not simply the last
+  // line, which after a stop can be any event (a "status" one read as the
+  // error). Plain json output is one result object.
+  const lines = stdout.trim().split("\n").filter(Boolean);
+  const line =
+    [...lines].reverse().find((l) => {
+      try {
+        const t = (JSON.parse(l) as { type?: string }).type;
+        return t === "result" || t === undefined;
+      } catch {
+        return false;
+      }
+    }) ?? "";
   try {
     const j = JSON.parse(line) as {
       result?: string;

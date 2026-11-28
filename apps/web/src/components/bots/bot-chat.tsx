@@ -47,6 +47,8 @@ import {
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
 import { LiveReply, RunIndicator } from "@/components/bots/run-indicator";
+import { ClaudeSetupCard } from "@/components/bots/claude-setup-card";
+import { isMissingClaudeToken } from "@/lib/claude-setup";
 import { BotSkillsDialog, SlashMenu, useBotSkills } from "@/components/bots/bot-skills";
 import { ModelPicker } from "@/components/bots/model-picker";
 import { MailCard } from "@/components/bots/bot-mail-card";
@@ -77,7 +79,15 @@ import {
 } from "@/lib/bot-attachments";
 import { CHOICE_LETTERS, type BotChoices } from "@/lib/bot-choices";
 import { caretAllowsHistory, promptHistory, stepHistory } from "@/lib/prompt-history";
-import { isNexusNotice, parseConfirmCard, parseCredentialCard, parseSourceCard } from "@/lib/nexus-cards";
+import {
+  isNexusNotice,
+  parseConfirmCard,
+  parseCredentialCard,
+  parseRunCard,
+  parseSourceCard,
+  type RunCommand,
+} from "@/lib/nexus-cards";
+import { RunCard } from "@/components/bots/run-card";
 import { CredentialCard } from "@/components/bots/credential-card";
 import { ConfirmCard } from "@/components/bots/confirm-card";
 import { ProjectSourceCard } from "@/components/bots/project-source-card";
@@ -130,10 +140,19 @@ export function BotChat({
   team,
   onOpenBot,
   onTitleClick,
+  onRun,
+  onOpenSettings,
+  aboveComposer,
   insetRight = 0,
 }: {
   /** What clicking the chat's name does instead of toggling the panel (a project chat's card). */
   onTitleClick?: () => void;
+  /** A Run card's commands: start them in the panel's terminals on this Mac. */
+  onRun?: (commands: RunCommand[]) => void;
+  /** Open Settings on a section (a credential card's "Open in Vault"). */
+  onOpenSettings?: (tab: string) => void;
+  /** A live strip over the composer (a sandbox being set up). */
+  aboveComposer?: ReactNode;
   /** Room kept free on the right for something pinned over the chat (a project chat's card), in px. */
   insetRight?: number;
   bot: BotListItem;
@@ -205,7 +224,10 @@ export function BotChat({
   });
   const [confirm, setConfirm] = useState<"restart" | "delete" | null>(null);
 
-  const runs = feed?.runs ?? [];
+  // A sandbox's step-by-step notices ("· pulling …") predate the live strip
+  // over the composer; older chats still hold them. Only its first and last
+  // words show: the assistant saying it started, and ready / failed.
+  const runs = (feed?.runs ?? []).filter((r) => !(isNexusNotice(r.prompt) && r.result?.startsWith("· ")));
   // Teammates' replies to this bot's handoffs, grouped under the run that sent them.
   const threadsByRun = new Map<string, BotThreadReply[]>();
   for (const t of feed?.threads ?? []) {
@@ -551,6 +573,8 @@ export function BotChat({
                   threads={threadsByRun.get(r.id)}
                   runsById={runsById}
                   onChange={onChange}
+                  onRun={onRun}
+                  onOpenSettings={onOpenSettings}
                 />
               </Fragment>
             );
@@ -561,6 +585,7 @@ export function BotChat({
       </div>
 
       <div className="shrink-0 px-6 pb-5" style={insetRight ? { paddingRight: insetRight + 24 } : undefined}>
+        {aboveComposer && <div className="mx-auto w-full max-w-[960px]">{aboveComposer}</div>}
         <div className="relative mx-auto w-full max-w-[960px] rounded-2xl border border-border bg-card/70 px-3 pt-3 pb-2 shadow-sm focus-within:border-foreground/25">
           <SlashMenu
             options={slashMenu}
@@ -1141,12 +1166,16 @@ const RunMessages = memo(function RunMessages({
   threads,
   runsById,
   onChange,
+  onRun,
+  onOpenSettings,
 }: {
   run: BotRun;
   bot: BotListItem;
   /** The chat's runs, to follow the run that sends each email card. */
   runsById: Map<string, BotRun>;
   onChange: () => void;
+  onRun?: (commands: RunCommand[]) => void;
+  onOpenSettings?: (tab: string) => void;
   team: BotListItem[];
   onOpenBot: (id: string) => void;
   threads?: BotThreadReply[];
@@ -1200,6 +1229,11 @@ const RunMessages = memo(function RunMessages({
   // …and helps add a cloud key when the one picked has none.
   const credentialCard =
     bot.kind === "nexus" && run.status === "completed" && !source && !confirmCard ? parseCredentialCard(reply?.body) : null;
+  // …and proposes how to run it on this Mac, without a sandbox.
+  const runCard =
+    bot.kind === "nexus" && run.status === "completed" && !source && !confirmCard && !credentialCard
+      ? parseRunCard(reply?.body)
+      : null;
   const routine = routineRun(run.prompt);
   const restarted = restartedRun(run.prompt);
   const incoming = handoffRun(run.prompt);
@@ -1364,11 +1398,20 @@ const RunMessages = memo(function RunMessages({
         </p>
       )}
 
-      {run.status === "error" && (
-        <Bubble className="text-destructive">
-          {run.error ?? "Something went wrong."}
-        </Bubble>
-      )}
+      {run.status === "error" &&
+        (isMissingClaudeToken(run.error) ? (
+          // The first thing a fresh Nexus hits: set it up right here, then
+          // the message goes out again. Older ones just say what happened.
+          canChoose ? (
+            <ClaudeSetupCard color={bot.color} disabled={false} onSaved={() => onRetry(run.prompt)} />
+          ) : (
+            <p className="px-1 text-[12px] text-muted-foreground">Not sent — Claude Code wasn&apos;t connected yet.</p>
+          )
+        ) : (
+          <Bubble className="text-destructive">
+            {run.error ?? "Something went wrong."}
+          </Bubble>
+        ))}
 
       {run.status === "completed" &&
         (source ? (
@@ -1387,7 +1430,15 @@ const RunMessages = memo(function RunMessages({
                 <MarkdownReport variant="chat">{credentialCard.body}</MarkdownReport>
               </Bubble>
             )}
-            <CredentialCard provider={credentialCard.provider} disabled={!canChoose} onSaved={onChoose} />
+            <CredentialCard
+              provider={credentialCard.provider}
+              disabled={!canChoose}
+              onSaved={onChoose}
+              projectId={bot.projectId}
+              onOpenVault={onOpenSettings}
+              botName={bot.kind === "nexus" ? "Nexus" : bot.name}
+              bot={bot}
+            />
           </>
         ) : confirmCard ? (
           <>
@@ -1403,6 +1454,15 @@ const RunMessages = memo(function RunMessages({
               detail={confirmCard.detail}
               disabled={!canChoose}
             />
+          </>
+        ) : runCard ? (
+          <>
+            {runCard.body && (
+              <Bubble>
+                <MarkdownReport variant="chat">{runCard.body}</MarkdownReport>
+              </Bubble>
+            )}
+            <RunCard commands={runCard.commands} color={bot.color} onRun={(c) => onRun?.(c)} />
           </>
         ) : choices ? (
           <>

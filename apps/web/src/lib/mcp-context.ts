@@ -550,7 +550,22 @@ export function createMcpContext(opts: McpContextOptions = {}): NexuxContext {
         input.provider as "civo" | "aws" | "local" | undefined,
         input.name,
         dockerEndpointId,
-      );
+      ).catch(async (err: unknown) => {
+        // The launcher's own wording sends people to Settings; the chat has a
+        // card for it, and repeated the wording instead of using the card.
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/Missing: .*git token/.test(message)) throw err;
+        const repos = await prisma.repository.findMany({ where: { projectId: input.projectId }, select: { repoUrl: true } });
+        const provider = repos.some((r) => r.repoUrl && !/github\.com/i.test(r.repoUrl)) && !repos.some((r) => /github\.com/i.test(r.repoUrl ?? ""))
+          ? "gitlab"
+          : "github";
+        throw new Error(
+          `No ${provider === "github" ? "GitHub" : "GitLab"} token is saved, so the repositories cannot be cloned. ` +
+            `Do not send the user to Settings or ask for a GITHUB_TOKEN env var: say in one line that it needs a token that can read these repositories, ` +
+            `then end your reply with the add-credential card: \`\`\`add-credential\n{"provider": "${provider}"}\n\`\`\`. ` +
+            `When the user says it is saved, launch again.`,
+        );
+      });
       opts.onSandboxLaunched?.(sandbox.id);
       return toSandbox(sandbox);
     },

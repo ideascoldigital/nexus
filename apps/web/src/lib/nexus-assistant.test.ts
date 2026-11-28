@@ -49,10 +49,25 @@ test("a reply, its session and cost are read from the CLI's JSON", () => {
   assert.deepEqual(parseClaudeOutput("", "", null, true), { ok: false, canceled: true });
 });
 
+test("stream-json: the result event is read, not whatever line came last", () => {
+  const stream = [
+    JSON.stringify({ type: "system", subtype: "init", session_id: "s1" }),
+    JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Listo.", session_id: "s1" }),
+    JSON.stringify({ type: "system", subtype: "status" }),
+  ].join("\n");
+  assert.equal(parseClaudeOutput(stream, "", 0).result, "Listo.");
+  // Stopped before any result: never "status" as the error.
+  const stopped = JSON.stringify({ type: "system", subtype: "status" });
+  assert.notEqual(parseClaudeOutput(stopped, "", 143).error, "status");
+});
+
 test("the new-project chat asks where the code comes from; a project chat knows its project", () => {
   assert.match(renderNexusSystemPrompt(null), /no project yet/);
   assert.match(renderNexusSystemPrompt(null), /never ask the user to paste a token/);
   assert.match(renderNexusSystemPrompt({ id: "p1", name: "Acme" }), /project "Acme" \(projectId p1\)/);
+  // fnpm is the default when installed; otherwise only mentioned.
+  assert.match(renderNexusSystemPrompt(null, { fnpm: true }), /fnpm setup <pm>; fnpm install && fnpm run <script>/);
+  assert.doesNotMatch(renderNexusSystemPrompt(null), /fnpm setup/);
   assert.match(renderNexusIntro("revisa las campañas"), /^\[nexux:intro\]/);
   assert.match(renderNexusIntro(null), /Spanish/);
 });

@@ -93,7 +93,7 @@ export function parseConfirmCard(text: string | null | undefined): ConfirmCard |
 
 export const CREDENTIAL_FENCE = "add-credential";
 const CREDENTIAL_BLOCK = new RegExp("```" + CREDENTIAL_FENCE + "[ \\t]*\\n?([\\s\\S]*?)\\n?```", "g");
-export const CARD_PROVIDERS = ["aws", "civo"] as const;
+export const CARD_PROVIDERS = ["aws", "civo", "github", "gitlab"] as const;
 export type CardProvider = (typeof CARD_PROVIDERS)[number];
 
 export type CredentialCard = { body: string; provider: CardProvider };
@@ -119,3 +119,43 @@ export function parseCredentialCard(text: string | null | undefined): Credential
 export const NOTICE_TAG = "[nexux:notice]";
 export const SANDBOX_DONE_TAG = "[nexux:sandbox]";
 export const isNexusNotice = (prompt: string) => prompt.startsWith(NOTICE_TAG) || prompt.startsWith(SANDBOX_DONE_TAG);
+
+// ---- Run cards --------------------------------------------------------------------
+//
+//   ```run
+//   {"commands": [{"repo": "simplifybot-api", "command": "npm run start:dev", "label": "API"}]}
+//   ```
+//
+// Running a project on this Mac, as plain processes, without a sandbox. The
+// chat has no shell (AGENTS.md), so it proposes; the user taps Run and the
+// command starts in a panel Terminal in that repository's folder, in view.
+
+export const RUN_FENCE = "run";
+const RUN_BLOCK = new RegExp("```" + RUN_FENCE + "[ \\t]*\\n([\\s\\S]*?)\\n?```", "g");
+
+export type RunCommand = { repo: string; command: string; label: string };
+export type RunCard = { body: string; commands: RunCommand[] };
+
+export function parseRunCard(text: string | null | undefined): RunCard | null {
+  if (!text) return null;
+  const last = [...text.matchAll(RUN_BLOCK)].at(-1);
+  if (!last) return null;
+  let data: { commands?: unknown };
+  try {
+    data = JSON.parse((last[1] ?? "").trim());
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(data.commands)) return null;
+  const commands: RunCommand[] = [];
+  for (const c of data.commands.slice(0, 8)) {
+    const { repo, command, label } = (c ?? {}) as { repo?: unknown; command?: unknown; label?: unknown };
+    if (typeof repo !== "string" || !repo.trim() || typeof command !== "string" || !command.trim()) continue;
+    // One line: it is typed into a shell, a newline would run a second command unseen.
+    if (/[\r\n]/.test(command)) continue;
+    commands.push({ repo: repo.trim(), command: command.trim(), label: typeof label === "string" && label.trim() ? label.trim() : repo.trim() });
+  }
+  if (!commands.length) return null;
+  const body = (text.slice(0, last.index) + text.slice(last.index! + last[0].length)).trim();
+  return { body, commands };
+}

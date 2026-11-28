@@ -6,6 +6,7 @@ import { removeCookieSnapshot } from "@/lib/team-cookies";
 import { stopBotSession } from "@/lib/bot-manager";
 import { botDataFor, botInputSchema } from "@/lib/bot-view";
 import { missingEndpoint } from "@/lib/docker-endpoints";
+import { projectGoesWithChat, tearDownProject } from "@/lib/project-teardown";
 
 export const dynamic = "force-dynamic";
 
@@ -33,15 +34,21 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   return NextResponse.json(bot);
 }
 
-/** Deletes the bot, its computer (if one is up) and its chat history. */
+/**
+ * Deletes the bot, its computer (if one is up) and its chat history. A project
+ * chat takes its project along: sandboxes destroyed, then the project — unless
+ * another bot still belongs to it. Folders on disk stay.
+ */
 export async function DELETE(_req: NextRequest, { params }: Params) {
   const { botId } = await params;
-  const exists = await prisma.bot.findUnique({ where: { id: botId }, select: { id: true } });
-  if (!exists) return NextResponse.json({ error: "Bot not found" }, { status: 404 });
+  const bot = await prisma.bot.findUnique({ where: { id: botId }, select: { id: true, kind: true, projectId: true } });
+  if (!bot) return NextResponse.json({ error: "Bot not found" }, { status: 404 });
+  const project = bot.kind === "nexus" && bot.projectId && (await projectGoesWithChat(bot.projectId, botId)) ? bot.projectId : null;
   await stopBotSession(botId);
   await prisma.bot.delete({ where: { id: botId } });
   removeBotFiles(botId);
   removeBotProfile(botId);
   removeCookieSnapshot(botId);
-  return NextResponse.json({ ok: true });
+  if (project) tearDownProject(project);
+  return NextResponse.json({ ok: true, removingProject: Boolean(project) });
 }

@@ -8,6 +8,10 @@ export interface DiscoveredRepo {
   name: string;
   localPath: string;
   hasGit: boolean;
+  /** Nested inside another repo found here (its name): a wrapper repo holding its own repos. */
+  insideRepo?: string;
+  /** Holds other repos: likely a wrapper — the ones inside are usually what is meant. */
+  containsRepos?: number;
 }
 
 const storage = new LocalFsStorage("/");
@@ -16,40 +20,35 @@ async function scanForRepos(
   dirPath: string,
   maxDepth: number = 2,
   currentDepth: number = 0,
+  insideRepo?: string,
 ): Promise<DiscoveredRepo[]> {
   const repos: DiscoveredRepo[] = [];
 
   if (currentDepth > maxDepth) return repos;
 
   try {
-    // If the directory itself is a git repo, it IS the repo — return it. This
-    // covers both nested repos found during recursion and the common case where
-    // the user points the scan straight at a single-repo folder (currentDepth
-    // === 0). Without the depth-0 case, scanning a lone repo yields 0 results.
+    // A folder with .git is a repo — but it may also hold repos of its own (a
+    // wrapper repo around an api and a ui, or submodules). Stopping at the
+    // first .git hid those: "simplifybot-app" came back alone when the user
+    // meant the two inside it. So it is listed, and its folders still looked at.
+    let parent = insideRepo;
+    let self: DiscoveredRepo | null = null;
     if (await storage.exists(path.join(dirPath, ".git"))) {
-      repos.push({
-        name: path.basename(dirPath),
-        localPath: dirPath,
-        hasGit: true,
-      });
-      return repos;
+      self = { name: path.basename(dirPath), localPath: dirPath, hasGit: true, ...(insideRepo ? { insideRepo } : {}) };
+      repos.push(self);
+      parent = self.name;
     }
+    if (currentDepth === maxDepth) return repos;
 
     const entries = await storage.listDetailed(dirPath);
-
     for (const entry of entries) {
       if (!entry.isDirectory) continue;
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-
-      const fullPath = path.join(dirPath, entry.name);
-      const childHasGit = await storage.exists(path.join(fullPath, ".git"));
-
-      if (childHasGit) {
-        repos.push({ name: entry.name, localPath: fullPath, hasGit: true });
-      } else if (currentDepth < maxDepth) {
-        const nested = await scanForRepos(fullPath, maxDepth, currentDepth + 1);
-        repos.push(...nested);
-      }
+      repos.push(...(await scanForRepos(path.join(dirPath, entry.name), maxDepth, currentDepth + 1, parent)));
+    }
+    if (self) {
+      const inner = repos.filter((r) => r.insideRepo === self.name).length;
+      if (inner) self.containsRepos = inner;
     }
   } catch {
     // Permission errors, etc.

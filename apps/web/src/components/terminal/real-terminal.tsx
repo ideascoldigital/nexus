@@ -3,12 +3,27 @@
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import {
   NEXUS_TERMINAL_FONT,
   NEXUS_TERMINAL_THEME,
 } from "./terminal-theme";
+import { openExternal } from "@/services/updates";
+
+/**
+ * A link in the terminal opens in the real browser on ⌘-click (Ctrl-click
+ * off macOS) — a plain click stays a click, so selecting text near a URL
+ * does not fire it. openExternal goes through the app, which matters in the
+ * desktop shell where window.open would stay inside it.
+ */
+function openTerminalLink(event: MouseEvent, uri: string) {
+  if (!(event.metaKey || event.ctrlKey)) return;
+  if (!/^https?:\/\//i.test(uri)) return;
+  event.preventDefault();
+  void openExternal(uri);
+}
 
 interface RealTerminalProps {
   workingDirectory?: string;
@@ -26,6 +41,11 @@ interface RealTerminalProps {
   slot?: HTMLElement | null;
   /** Bumped by parent when slot map changes; forces reparent re-check. */
   slotsVersion?: number;
+  /**
+   * Typed into the shell once it is up (its first output), then Enter — a
+   * project's dev command started from the chat, in view, like typing it.
+   */
+  initialCommand?: string;
 }
 
 export function RealTerminal({
@@ -33,6 +53,7 @@ export function RealTerminal({
   shellId,
   slot,
   slotsVersion,
+  initialCommand,
 }: RealTerminalProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fallbackRef = useRef<HTMLDivElement>(null);
@@ -66,9 +87,13 @@ export function RealTerminal({
       allowProposedApi: true,
       drawBoldTextInBrightColors: true,
       theme: NEXUS_TERMINAL_THEME,
+      // OSC 8 hyperlinks (the ones tools print with hidden targets).
+      linkHandler: { activate: openTerminalLink, allowNonHttpProtocols: false },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    // Plain URLs in the output: underlined on hover, opened on ⌘-click.
+    term.loadAddon(new WebLinksAddon(openTerminalLink));
     termRef.current = term;
     fitRef.current = fit;
 
@@ -141,12 +166,20 @@ export function RealTerminal({
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
+      let typed = !initialCommand;
       ws.onmessage = (event) => {
         const data =
           typeof event.data === "string"
             ? event.data
             : decoder.decode(new Uint8Array(event.data as ArrayBuffer));
         term.write(data);
+        // The shell has printed something (its prompt): it is ready to type into.
+        if (!typed) {
+          typed = true;
+          setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN) ws.send(`${initialCommand}\r`);
+          }, 150);
+        }
       };
 
       ws.onclose = () => {
