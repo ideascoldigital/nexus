@@ -1,8 +1,7 @@
 "use client";
 
 // "Details" in a project chat (spec 39) — what an assistant's Details is to
-// it: everything about the project, editable in place. Its tasks (a simple
-// to-do list, each with the PR that closed it), its repositories and
+// it: everything about the project, editable in place. Its repositories and
 // folders (add a folder or a Git URL, remove one), the skills its sandboxes
 // load, and where its notifications go (Telegram, Slack).
 
@@ -11,7 +10,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderOpen, GitBranch, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
 
 import { BotAvatar } from "@/components/bots/bot-avatar";
-import { ProjectTodos } from "@/components/bots/project-todos";
 import { BrandIcon } from "@/components/ui/brand-icon";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -228,9 +226,6 @@ export function ProjectDetailsPanel({
           </div>
 
           <div className={cn("space-y-5 px-4 pb-6", embedded && "mx-auto w-full max-w-xl")}>
-            {/* ---- Tasks ---- */}
-            <ProjectTodos projectId={projectId} />
-
             {/* ---- Repositories & folders ---- */}
             <Section
               title={`Repositories · ${p.repositories.length}`}

@@ -546,7 +546,6 @@ export function BotChat({
                   onRetry={send.mutate}
                   onOpenComputer={onOpenComputer}
                   onChoose={(option) => send.mutate(option)}
-                  onSomethingElse={() => inputRef.current?.focus()}
                   team={team}
                   onOpenBot={onOpenBot}
                   threads={threadsByRun.get(r.id)}
@@ -1034,17 +1033,16 @@ function ChoicesCard({
   answer,
   disabled,
   onChoose,
-  onSomethingElse,
 }: {
   choices: BotChoices;
   bot: BotListItem;
   answer: string | null;
   disabled: boolean;
   onChoose: (option: string) => void;
-  onSomethingElse: () => void;
 }) {
   const letter = (i: number) => CHOICE_LETTERS[i] ?? "•";
   const picked = answer ? choices.options.indexOf(answer) : -1;
+  const [other, setOther] = useState<string | null>(null);
   return (
     <div className="w-full max-w-[560px] rounded-2xl bg-card px-4 pt-5 pb-3">
       <p className="pb-2 text-[13.5px] font-semibold">{choices.question}</p>
@@ -1074,17 +1072,54 @@ function ChoicesCard({
               {o}
             </button>
           ))}
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={onSomethingElse}
-            className="group flex w-full items-center gap-3 rounded-lg px-1 py-1.5 text-left text-[13.5px] text-muted-foreground transition-colors hover:bg-accent/60 disabled:opacity-50"
-          >
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border text-[11px]">
-              {letter(choices.options.length)}
-            </span>
-            Something else
-          </button>
+          {/* "Something else" opens a field right here: type it, Enter sends. */}
+          {other === null ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => setOther("")}
+              className="group flex w-full items-center gap-3 rounded-lg px-1 py-1.5 text-left text-[13.5px] text-muted-foreground transition-colors hover:bg-accent/60 disabled:opacity-50"
+            >
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border text-[11px]">
+                {letter(choices.options.length)}
+              </span>
+              Something else
+            </button>
+          ) : (
+            <form
+              className="flex w-full items-center gap-3 rounded-lg bg-accent/40 px-1 py-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (other.trim()) onChoose(other.trim());
+              }}
+            >
+              <span
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold text-white"
+                style={{ background: bot.color }}
+              >
+                {letter(choices.options.length)}
+              </span>
+              <input
+                autoFocus
+                value={other}
+                disabled={disabled}
+                onChange={(e) => setOther(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setOther(null)}
+                onBlur={() => !other.trim() && setOther(null)}
+                placeholder="Tell it what you need…"
+                className="h-7 min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-muted-foreground"
+              />
+              <button
+                type="submit"
+                disabled={disabled || !other.trim()}
+                aria-label="Send"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white transition-opacity disabled:opacity-40"
+                style={{ background: bot.color }}
+              >
+                <ArrowUp className="h-3.5 w-3.5" />
+              </button>
+            </form>
+          )}
         </div>
       )}
     </div>
@@ -1101,7 +1136,6 @@ const RunMessages = memo(function RunMessages({
   onRetry,
   onOpenComputer,
   onChoose,
-  onSomethingElse,
   team,
   onOpenBot,
   threads,
@@ -1126,7 +1160,6 @@ const RunMessages = memo(function RunMessages({
   onRetry: (prompt: string) => void;
   onOpenComputer: (takeControl?: boolean) => void;
   onChoose: (option: string) => void;
-  onSomethingElse: () => void;
 }) {
   const reply = run.status === "completed" ? splitReply(run.result) : null;
   // Messages to teammates (with their threads) read right after the bot's
@@ -1386,7 +1419,6 @@ const RunMessages = memo(function RunMessages({
               answer={answer}
               disabled={!canChoose}
               onChoose={onChoose}
-              onSomethingElse={onSomethingElse}
             />
           </>
         ) : run.needsInput && run.result?.includes(NEEDS_INPUT_MARKER) ? (

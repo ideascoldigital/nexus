@@ -27,11 +27,13 @@ import {
   RefreshCw,
   ScrollText,
   Settings,
+  ListTodo,
   SquareTerminal,
   X,
 } from "lucide-react";
 
 import { ProjectDetailsPanel } from "@/components/bots/project-details-panel";
+import { ProjectTodos } from "@/components/bots/project-todos";
 import { PullRequestsSurface } from "@/components/bots/pull-requests-surface";
 import { Button } from "@/components/ui/button";
 import type { BotShape } from "@/lib/bot-shapes";
@@ -45,7 +47,7 @@ const RealTerminal = dynamic(() => import("@/components/terminal/real-terminal")
   ssr: false,
 });
 
-export type SurfaceKind = "terminal" | "files" | "log" | "preview" | "prs" | "settings";
+export type SurfaceKind = "terminal" | "files" | "log" | "preview" | "prs" | "tasks" | "settings";
 /** Kept for the chat header's "Sandbox ▾" menu, which opens one of these. */
 export type SandboxTab = "terminal" | "log";
 
@@ -55,6 +57,7 @@ const SURFACES: { kind: SurfaceKind; label: string; key: string; icon: typeof Sq
   { kind: "log", label: "Setup log", key: "L", icon: ScrollText },
   { kind: "preview", label: "Preview", key: "P", icon: Globe },
   { kind: "prs", label: "Pull requests", key: "R", icon: GitPullRequest },
+  { kind: "tasks", label: "Tasks", key: "K", icon: ListTodo },
   { kind: "settings", label: "Settings", key: "S", icon: Settings },
 ];
 
@@ -304,6 +307,12 @@ export function ProjectSandboxPanel({
           <ProjectDetailsPanel projectId={projectId} bot={bot} embedded />
         ) : activeTab?.kind === "prs" ? (
           <PullRequestsSurface projectId={projectId} />
+        ) : activeTab?.kind === "tasks" ? (
+          <div className="h-full overflow-y-auto px-4 py-4">
+            <div className="mx-auto w-full max-w-xl">
+              <ProjectTodos projectId={projectId} />
+            </div>
+          </div>
         ) : !activeTab ? (
           <div className="flex h-full flex-col items-center justify-center gap-3">
             <p className="text-[13px] font-medium">Open a surface</p>

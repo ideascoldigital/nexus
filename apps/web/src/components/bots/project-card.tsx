@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, FolderGit2, FolderOpen, Monitor, Settings, SquareTerminal } from "lucide-react";
+import { ChevronDown, FolderGit2, FolderOpen, ListTodo, Monitor, Settings, SquareTerminal } from "lucide-react";
 import { siCursor, siZedindustries } from "simple-icons";
 
 import { useProjectSandboxes, type SurfaceKind } from "@/components/bots/project-sandbox-panel";
@@ -146,6 +146,15 @@ export function ProjectCard({
       toast({ title: "Could not open the folder", description: body.error, variant: "destructive" });
     }
   };
+  // Same query as the Tasks tab, so ticking one off there updates the count here.
+  const todos = useQuery({
+    queryKey: ["project-todos", projectId],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}/todos`);
+      return res.ok ? ((await res.json()) as { done: boolean }[]) : [];
+    },
+  });
+  const openTodos = (todos.data ?? []).filter((t) => !t.done).length;
   const go = (kind: SurfaceKind) => {
     onOpenSurface(kind);
     if (!pinned) onClose();
@@ -262,6 +271,11 @@ export function ProjectCard({
       )}
 
       <div className="mx-2.5 my-1 h-px bg-border" />
+      <button type="button" onClick={() => go("tasks")} className={row}>
+        <ListTodo className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="flex-1">Tasks</span>
+        {openTodos > 0 && <span className="text-[11px] text-muted-foreground tabular-nums">{openTodos}</span>}
+      </button>
       <button type="button" onClick={() => go("settings")} className={row}>
         <Settings className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="flex-1">Settings</span>
