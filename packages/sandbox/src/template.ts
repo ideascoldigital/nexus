@@ -658,19 +658,28 @@ NEXUX_DOTENV_EOF`,
         asAgent(dir, command),
         `echo "[nexux] WARN: inferred install failed for ${repo.name}"`,
       );
+    // fnpm is Nexus's default installer (it keeps the repo's lockfile and
+    // audits packages before they land) — set up with the repo's own manager.
+    // Where it could not be installed (no build for the machine's
+    // architecture), the manager runs directly, as before.
+    const install = (pm: string) => `if command -v fnpm >/dev/null 2>&1; then
+      ${inferred(`{ [ -d .fnpm ] || fnpm setup ${pm}; } && fnpm install`)}
+    else
+      ${inferred(`${pm} install`)}
+    fi`;
     lines.push(`if [ -f ${shq(`${dir}/package.json`)} ]; then
   echo "[nexux] no install command for ${repo.name} — inferring from lockfile"
   if [ -f ${shq(`${dir}/bun.lockb`)} ] || [ -f ${shq(`${dir}/bun.lock`)} ]; then
     command -v bun >/dev/null || npm install -g bun
-    ${inferred("bun install")}
+    ${install("bun")}
   elif [ -f ${shq(`${dir}/pnpm-lock.yaml`)} ]; then
     corepack enable
-    ${inferred("pnpm install")}
+    ${install("pnpm")}
   elif [ -f ${shq(`${dir}/yarn.lock`)} ]; then
     corepack enable
-    ${inferred("yarn install")}
+    ${install("yarn")}
   else
-    ${inferred("npm install")}
+    ${install("npm")}
   fi
 fi`);
   }
@@ -873,6 +882,19 @@ nexus_apt install -y nodejs`);
 corepack enable || echo "[nexux] WARN: corepack enable failed"
 corepack prepare pnpm@latest --activate || echo "[nexux] WARN: pnpm activate failed"
 corepack prepare yarn@stable --activate || echo "[nexux] WARN: yarn activate failed"`);
+    // fnpm (github.com/ideascoldigital/fnpm), the default installer for JS
+    // repos. Its releases ship a Linux binary for x86_64 only: elsewhere (a
+    // local sandbox on Apple silicon) installs fall back to the repo's own
+    // package manager. Straight to /usr/local/bin — its install script would
+    // put it in root's ~/.local/bin, out of the agent user's reach.
+    sections.push(`echo "[nexux] installing fnpm"
+if [ "$(uname -m)" = "x86_64" ]; then
+  curl -fsSL -o /usr/local/bin/fnpm https://github.com/ideascoldigital/fnpm/releases/latest/download/fnpm-linux-amd64 \\
+    && chmod 755 /usr/local/bin/fnpm \\
+    || { rm -f /usr/local/bin/fnpm; echo "[nexux] WARN: fnpm install failed — installs use the repo's own package manager"; }
+else
+  echo "[nexux] fnpm has no build for $(uname -m) — installs use the repo's own package manager"
+fi`);
   }
 
   // A repo whose install/build/run commands call bun needs the real binary —

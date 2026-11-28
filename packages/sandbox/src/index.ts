@@ -153,6 +153,7 @@ export {
 export {
   buildClaudeCommand,
   createStreamParser,
+  nextDraft,
   describeEvent,
   execRemote,
   fetchRemoteDir,

@@ -3,7 +3,7 @@
 This project is in **local-first** mode:
 
 - No multi-tenant, no Firebase, no cloud requirement
-- Claude must always be used manually (`claude code`) on the host — never `claude -p` / headless
+- Claude must always be used manually (`claude code`) on the host — never `claude -p` / headless, except the Nexus assistant (spec 39): `claude -p` with only the Nexus MCP tools allowed — see AGENTS.md
 - Context is loaded natively via `.claude/` folder + symlink
 - Skills, Tools, MCPs and Embeddings are brain-agnostic
 - Host automation is reserved for non-Claude brains (Codex, xAI, Ollama, etc.)

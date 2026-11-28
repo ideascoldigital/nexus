@@ -1,5 +1,6 @@
 import { READ_TOOLS } from "./tools/read";
 import { WRITE_TOOLS } from "./tools/write";
+import { PROJECT_TOOLS } from "./tools/projects";
 import {
   ScopeError,
   type NexuxContext,
@@ -21,6 +22,7 @@ import {
 export const TOOLS: readonly ToolDefinition<any>[] = [
   ...READ_TOOLS,
   ...WRITE_TOOLS,
+  ...PROJECT_TOOLS,
 ];
 
 export function toolByName(name: string): ToolDefinition | undefined {

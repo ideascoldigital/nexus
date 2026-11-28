@@ -1,8 +1,8 @@
 "use client";
 
-// The one workspace editor: create and edit share this dialog, used by the
-// /workspaces page (management home) and by the sidebar switcher's "+ New
-// workspace" (which stays a shortcut — management lives on the page).
+// The one workspace editor: create and edit share WorkspaceFields — inline in
+// Settings → Workspaces, and wrapped in a dialog for the sidebar switcher's
+// "+ New workspace" shortcut.
 
 import { useRef, useState } from "react";
 import { ImagePlus, Loader2 } from "lucide-react";
@@ -128,11 +128,75 @@ function EditorForm({
   onOpenChange: (open: boolean) => void;
   onSaved: (id: string, created: boolean) => void | Promise<void>;
 }) {
+  return (
+    <DialogContent className="sm:max-w-sm">
+      <DialogHeader>
+        <DialogTitle>{workspace ? "Edit workspace" : "New workspace"}</DialogTitle>
+        <DialogDescription>
+          {workspace
+            ? "Rename it or pick a different icon."
+            : "An isolated space: its own projects, bots, skills, credentials and settings."}
+        </DialogDescription>
+      </DialogHeader>
+      <WorkspaceFields
+        workspace={workspace}
+        onCancel={() => onOpenChange(false)}
+        onSaved={async (id, created) => {
+          onOpenChange(false);
+          await onSaved(id, created);
+        }}
+        footer={(actions) => <DialogFooter>{actions}</DialogFooter>}
+      />
+    </DialogContent>
+  );
+}
+
+/** Save a workspace: PATCH an existing one, POST a new one. Returns its id, or null. */
+async function saveWorkspace(
+  workspace: WorkspaceInfo | null,
+  fields: { name: string; icon: string; logo: string | null },
+): Promise<{ id: string; created: boolean } | { error: string }> {
+  const res = workspace
+    ? await fetch(`/api/workspaces/${workspace.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: fields.name, icon: fields.icon.trim() || null, logo: fields.logo }),
+      })
+    : await fetch("/api/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: fields.name, icon: fields.icon.trim() || undefined, logo: fields.logo ?? undefined }),
+      });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    return { error: typeof body.error === "string" ? body.error : "Could not save the workspace" };
+  }
+  if (workspace) return { id: workspace.id, created: false };
+  const ws = (await res.json()) as { id: string };
+  return { id: ws.id, created: true };
+}
+
+/**
+ * The workspace's fields — name, icon, logo — and Cancel / Save. Inline in
+ * Settings → Workspaces; the dialog above wraps the same thing.
+ */
+export function WorkspaceFields({
+  workspace,
+  onCancel,
+  onSaved,
+  footer = (actions) => <div className="flex justify-end gap-2">{actions}</div>,
+}: {
+  workspace: WorkspaceInfo | null;
+  onCancel: () => void;
+  onSaved: (id: string, created: boolean) => void | Promise<void>;
+  footer?: (actions: React.ReactNode) => React.ReactNode;
+}) {
   const [name, setName] = useState(workspace?.name ?? "");
   const [icon, setIcon] = useState(workspace?.icon ?? "");
   const [logo, setLogo] = useState<string | null>(workspace?.logo ?? null);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const pickLogo = async (file: File | undefined | null) => {
@@ -148,54 +212,29 @@ function EditorForm({
     const trimmed = name.trim();
     if (!trimmed || busy) return;
     setBusy(true);
+    setError(null);
     try {
-      if (workspace) {
-        const res = await fetch(`/api/workspaces/${workspace.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: trimmed,
-            icon: icon.trim() || null,
-            logo,
-          }),
-        });
-        if (res.ok) {
-          onOpenChange(false);
-          await onSaved(workspace.id, false);
-        }
-      } else {
-        const res = await fetch("/api/workspaces", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: trimmed,
-            icon: icon.trim() || undefined,
-            logo: logo ?? undefined,
-          }),
-        });
-        if (res.ok) {
-          const ws = (await res.json()) as { id: string };
-          onOpenChange(false);
-          await onSaved(ws.id, true);
-        }
-      }
+      const saved = await saveWorkspace(workspace, { name: trimmed, icon, logo });
+      if ("error" in saved) setError(saved.error);
+      else await onSaved(saved.id, saved.created);
     } finally {
       setBusy(false);
     }
   };
 
+  const label = "block px-0.5 pb-1.5 text-[12px] text-muted-foreground";
   return (
-    <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>
-            {workspace ? "Edit workspace" : "New workspace"}
-          </DialogTitle>
-          <DialogDescription>
-            {workspace
-              ? "Rename it or pick a different icon."
-              : "An isolated space: its own projects, agents, skills, credentials and settings (it inherits Personal's tokens until it defines its own)."}
-          </DialogDescription>
-        </DialogHeader>
+    <form
+      className="space-y-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <div>
+        <label className={label} htmlFor="ws-name">
+          Name
+        </label>
         <div className="flex items-center gap-2">
           <Input
             value={icon}
@@ -206,17 +245,37 @@ function EditorForm({
             aria-label="Workspace icon"
           />
           <Input
+            id="ws-name"
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void submit();
-            }}
             placeholder="e.g. Cliente ACME"
             className="flex-1 text-sm"
           />
         </div>
-        {/* Logo dropzone — click to browse or drag an image in. */}
+      </div>
+
+      <div>
+        <span className={label}>Icon</span>
+        <div className="flex flex-wrap gap-1">
+          {ICON_PRESETS.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              onClick={() => setIcon(emoji)}
+              className={`flex h-8 w-8 items-center justify-center rounded-lg text-base transition-colors hover:bg-accent ${
+                icon === emoji ? "bg-accent ring-1 ring-primary/50" : ""
+              }`}
+            >
+              {emoji}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <span className={label}>Logo</span>
+        {/* Click to browse or drag an image in; it wins over the icon. */}
         <div
           role="button"
           tabIndex={0}
@@ -234,28 +293,20 @@ function EditorForm({
             setDragging(false);
             void pickLogo(e.dataTransfer.files?.[0]);
           }}
-          className={`flex cursor-pointer items-center gap-3 rounded-lg border border-dashed px-3 py-3 transition-colors ${
-            dragging
-              ? "border-primary bg-primary/10"
-              : "border-border/70 hover:border-border"
+          className={`flex cursor-pointer items-center gap-3 rounded-xl border border-dashed px-3 py-3 transition-colors ${
+            dragging ? "border-primary bg-primary/10" : "border-border/70 hover:border-border"
           }`}
         >
           {logo ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={logo}
-              alt="Workspace logo"
-              className="h-10 w-10 shrink-0 rounded-md object-cover"
-            />
+            <img src={logo} alt="Workspace logo" className="h-10 w-10 shrink-0 rounded-md object-cover" />
           ) : (
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted/40">
               <ImagePlus className="h-4 w-4 text-muted-foreground" />
             </span>
           )}
-          <span className="min-w-0 flex-1 text-[11px] text-muted-foreground">
-            {logo
-              ? "Click or drop an image to replace the logo"
-              : "Drop your logo here, or click to browse"}
+          <span className="min-w-0 flex-1 text-[12px] text-muted-foreground">
+            {logo ? "Click or drop an image to replace the logo" : "Drop your logo here, or click to browse"}
           </span>
           {logo && (
             <button
@@ -280,37 +331,21 @@ function EditorForm({
             }}
           />
         </div>
-        <div className="flex flex-wrap gap-1">
-          {ICON_PRESETS.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              onClick={() => setIcon(emoji)}
-              className={`flex h-7 w-7 items-center justify-center rounded-md text-base transition-colors hover:bg-accent ${
-                icon === emoji ? "bg-accent ring-1 ring-primary/50" : ""
-              }`}
-            >
-              {emoji}
-            </button>
-          ))}
-        </div>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
+      </div>
+
+      {error && <p className="text-[12px] text-destructive">{error}</p>}
+
+      {footer(
+        <>
+          <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
             Cancel
           </Button>
-          <Button
-            onClick={() => void submit()}
-            disabled={!name.trim() || busy}
-            className="gap-1.5"
-          >
+          <Button type="submit" disabled={!name.trim() || busy} className="gap-1.5">
             {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {workspace ? "Save" : "Create"}
+            {workspace ? "Save" : "Create workspace"}
           </Button>
-      </DialogFooter>
-    </DialogContent>
+        </>,
+      )}
+    </form>
   );
 }

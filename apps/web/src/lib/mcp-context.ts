@@ -1,7 +1,9 @@
 import { prisma } from "@nexux/db";
 import type {
   ActivitySummary,
+  CreateProjectInput,
   CreateTaskInput,
+  ProjectDetail,
   DockerEndpointSummary,
   LaunchSandboxInput,
   NexuxContext,
@@ -15,6 +17,7 @@ import type {
 
 import { createTask } from "@/lib/task-manager";
 import {
+  getSandboxReadiness,
   launchSandbox,
   pauseSandbox,
   reconcileLocalSandboxStatuses,
@@ -23,6 +26,49 @@ import {
 import { describeStack, validateProject } from "@/services/stack-validation";
 import { repairProjectStack } from "@/services/stack-repair";
 import { DEFAULT_WORKSPACE_ID } from "@/lib/workspace";
+import { createProject, BootstrapError, ProjectCreateError } from "@/lib/project-create";
+import { editProjectFile, listProjectDir, readProjectFileLines, writeProjectFile } from "@/lib/project-files";
+import { scanDirectory } from "@/lib/repo-scan";
+import { BOOTSTRAP_TEMPLATES } from "@/lib/bootstrap/templates";
+import { cloneRepository } from "@/lib/repo-clone";
+import { detectAndCache } from "@/lib/stack/detect-cache";
+import { getConfig } from "@nexux/config";
+import { expandHome } from "@nexux/storage";
+import path from "node:path";
+
+const GIT_PROVIDERS = ["github", "gitlab", "bitbucket"];
+
+/** Where new projects go by default — the wizard's own suggestion (projects/defaults route). */
+const defaultParentPath = () =>
+  process.env.NEXUX_ROLE === "host" ? getConfig().workspaceRoot : "~/Projects";
+
+const slugify = (s: string) =>
+  s.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "project";
+
+const PROJECT_DETAIL_SELECT = {
+  id: true,
+  name: true,
+  description: true,
+  workspacePath: true,
+  bootstrapType: true,
+  createdAt: true,
+  repositories: {
+    orderBy: [{ isMain: "desc" as const }, { createdAt: "asc" as const }],
+    select: { id: true, name: true, repoUrl: true, localPath: true, isMain: true, cloneStatus: true },
+  },
+};
+
+function toProjectDetail(p: {
+  id: string;
+  name: string;
+  description: string | null;
+  workspacePath: string | null;
+  bootstrapType: string | null;
+  createdAt: Date;
+  repositories: ProjectDetail["repositories"];
+}): ProjectDetail {
+  return { ...p, createdAt: p.createdAt.toISOString() };
+}
 
 /**
  * The host half of the MCP control surface (spec 21): real implementations of
@@ -43,7 +89,6 @@ import { DEFAULT_WORKSPACE_ID } from "@/lib/workspace";
  * so the surface answers for the default workspace — the one everything
  * created before workspaces lives in, and the one a single-user install has.
  */
-const workspaceId = DEFAULT_WORKSPACE_ID;
 
 const TASK_FIELDS = {
   id: true,
@@ -144,7 +189,36 @@ const SANDBOX_FIELDS = {
 /** How many finished runs to carry — the activity route's own limit. */
 const RECENT_LIMIT = 12;
 
-export function createMcpContext(): NexuxContext {
+export type McpContextOptions = {
+  /** The workspace the caller acts in; API tokens are install-wide and get the default one. */
+  workspaceId?: string;
+  /** Told about each project created through this context (the Nexus chat follows it). */
+  onProjectCreated?: (projectId: string) => void;
+  /**
+   * Asked before anything that costs money (a cloud sandbox). Returns null when
+   * the user already approved exactly this, else the id of a pending approval
+   * the chat shows as a confirm card. Without it (API tokens), no gate: the
+   * token's scope is the consent.
+   */
+  confirm?: (action: { key: string; summary: string }) => string | null;
+  /** Told about each sandbox launched through this context (the chat follows it). */
+  onSandboxLaunched?: (sandboxId: string) => void;
+};
+
+/** Thrown when an action waits for the user's tap on a confirm card. */
+export class NeedsConfirmation extends Error {
+  constructor(readonly actionId: string, readonly summary: string) {
+    super(
+      `Needs the user's confirmation (it costs money): ${summary}. Do not retry yet. End your reply with a confirm card ` +
+        `\`\`\`confirm {"actionId": "${actionId}", "title": "<short title>", "detail": "<what it creates and that it costs money until destroyed>"}\`\`\` ` +
+        "and wait. When the user confirms, call the same tool again with the same arguments.",
+    );
+    this.name = "NeedsConfirmation";
+  }
+}
+
+export function createMcpContext(opts: McpContextOptions = {}): NexuxContext {
+  const workspaceId = opts.workspaceId ?? DEFAULT_WORKSPACE_ID;
   /**
    * Refuses a project outside this workspace, the same way every other method
    * here scopes its query. A read tool that skipped it would answer questions
@@ -158,7 +232,154 @@ export function createMcpContext(): NexuxContext {
     if (!project) throw new Error("Project not found");
   };
 
+  const projectDetail = async (projectId: string): Promise<ProjectDetail | null> => {
+    const p = await prisma.project.findFirst({
+      where: { id: projectId, workspaceId },
+      select: PROJECT_DETAIL_SELECT,
+    });
+    return p ? toProjectDetail(p) : null;
+  };
+
+  /** The repository's folder, by name or id, within this workspace's project. */
+  const repoRoot = async (projectId: string, repository: string): Promise<string> => {
+    const project = await prisma.project.findFirst({
+      where: { id: projectId, workspaceId },
+      select: { repositories: { select: { id: true, name: true, localPath: true } } },
+    });
+    if (!project) throw new Error("Project not found");
+    const repo = project.repositories.find((r) => r.id === repository || r.name === repository);
+    if (!repo) throw new Error(`No repository "${repository}" in this project`);
+    if (!repo.localPath) throw new Error(`"${repo.name}" has no folder on this machine yet`);
+    return expandHome(repo.localPath);
+  };
+
   return {
+    getProject: projectDetail,
+
+    async listProjectFiles(projectId: string, repository: string, dir: string) {
+      return listProjectDir(await repoRoot(projectId, repository), dir);
+    },
+
+    async readProjectFile(projectId: string, repository: string, file: string, offset?: number, limit?: number) {
+      return readProjectFileLines(await repoRoot(projectId, repository), file, offset, limit);
+    },
+
+    async writeProjectFile(projectId: string, repository: string, file: string, content: string) {
+      return writeProjectFile(await repoRoot(projectId, repository), file, content);
+    },
+
+    async editProjectFile(projectId: string, repository: string, file: string, oldText: string, newText: string, all?: boolean) {
+      return editProjectFile(await repoRoot(projectId, repository), file, oldText, newText, all);
+    },
+
+    async scanDirectory(directory: string) {
+      return scanDirectory(directory);
+    },
+
+    async listBootstrapTypes() {
+      return {
+        types: BOOTSTRAP_TEMPLATES.map((t) => ({ key: t.key, name: t.name, tagline: t.tagline })),
+        // Same default the wizard offers (projects/defaults route).
+        defaultParentPath: defaultParentPath(),
+      };
+    },
+
+    async listGitCredentials() {
+      // Name and provider only: the token stays in Nexus, and a clone looks
+      // it up by id on its own side.
+      return prisma.cloudCredential.findMany({
+        where: { workspaceId, provider: { in: GIT_PROVIDERS } },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, name: true, provider: true },
+      });
+    },
+
+    async createProject(input: CreateProjectInput): Promise<ProjectDetail> {
+      // A Git URL with nowhere to live cannot be cloned: give it a folder
+      // under the project's (the wizard asks; a conversation should not have to).
+      const base = input.workspacePath ?? path.join(defaultParentPath(), slugify(input.name));
+      const repositories = input.repositories?.map((r) =>
+        r.localPath ? r : { ...r, localPath: path.join(base, slugify(r.name)) },
+      );
+      const withFolder = repositories?.some((r, i) => r !== input.repositories![i])
+        ? { ...input, workspacePath: input.workspacePath ?? base, repositories }
+        : input;
+      try {
+        const created = await createProject(
+          { ...withFolder, repositories: withFolder.repositories?.map((r) => ({ ...r, localPath: r.localPath && expandHome(r.localPath) })) },
+          workspaceId,
+        );
+        opts.onProjectCreated?.(created.id);
+        return (await projectDetail(created.id))!;
+      } catch (err) {
+        // The caller's mistake (a bad folder, an unknown credential): said as
+        // such, not as a server failure.
+        if (err instanceof BootstrapError || err instanceof ProjectCreateError) throw new Error(err.message);
+        throw err;
+      }
+    },
+
+    async cloneRepositories(projectId: string): Promise<ProjectDetail> {
+      await assertProject(projectId);
+      const repos = await prisma.repository.findMany({
+        where: { projectId, cloneStatus: { in: ["pending", "error"] } },
+        orderBy: [{ isMain: "desc" }, { createdAt: "asc" }],
+        select: { id: true },
+      });
+      // A clone can take minutes; a tool call must not. Each one marks its
+      // row cloning → ready | error, which nexux_get_project reports.
+      if (repos.length) {
+        await prisma.repository.updateMany({
+          where: { id: { in: repos.map((r) => r.id) } },
+          data: { cloneStatus: "cloning" },
+        });
+        void (async () => {
+          for (const r of repos) {
+            await cloneRepository(r.id).catch((err) =>
+              console.warn("[mcp] clone failed:", err instanceof Error ? err.message : err),
+            );
+          }
+        })();
+      }
+      return (await projectDetail(projectId))!;
+    },
+
+    async detectStack(projectId: string) {
+      await assertProject(projectId);
+      const repos = await prisma.repository.findMany({
+        where: { projectId },
+        orderBy: [{ isMain: "desc" }, { createdAt: "asc" }],
+        select: { id: true, name: true, localPath: true, cloneStatus: true },
+      });
+      const out = [];
+      for (const repo of repos) {
+        if (!repo.localPath || repo.cloneStatus !== "ready") {
+          out.push({ repository: repo.name, skipped: `not checked out (${repo.cloneStatus})` });
+          continue;
+        }
+        try {
+          const d = await detectAndCache({ id: repo.id, localPath: repo.localPath });
+          // What a conversation can use. Example env *values* stay out: a
+          // committed example file sometimes holds a real key.
+          out.push({
+            repository: repo.name,
+            packageManager: d.packageManager,
+            commands: d.suggestedCommands,
+            ports: d.suggestedPorts,
+            dockerfile: d.hasDockerfile ? (d.dockerfilePath ?? true) : false,
+            compose: d.hasCompose ? (d.composePath ?? true) : false,
+            makeTargets: d.makeTargets ?? [],
+            scripts: d.scripts,
+            envKeys: d.envExampleKeys,
+            notes: d.notes ?? [],
+          });
+        } catch (err) {
+          out.push({ repository: repo.name, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      return { repositories: out };
+    },
+
     async listProjects(): Promise<ProjectSummary[]> {
       const projects = await prisma.project.findMany({
         where: { workspaceId },
@@ -245,6 +466,30 @@ export function createMcpContext(): NexuxContext {
       });
     },
 
+    async sandboxOptions(projectId: string) {
+      await assertProject(projectId);
+      const [readiness, endpoints, config, sandboxes] = await Promise.all([
+        getSandboxReadiness(),
+        this.listDockerEndpoints(),
+        prisma.sandboxConfig.findUnique({
+          where: { projectId },
+          select: { provider: true, region: true, size: true, dockerEndpointId: true },
+        }),
+        this.listSandboxes(projectId),
+      ]);
+      return {
+        local: { available: readiness.dockerInstalled },
+        dockerEndpoints: endpoints,
+        cloud: {
+          civo: readiness.hasCivoToken,
+          aws: readiness.hasAwsCredentials,
+          terraformInstalled: readiness.terraformInstalled,
+        },
+        saved: config,
+        sandboxes,
+      };
+    },
+
     async getTask(taskId: string): Promise<TaskSummary | null> {
       const task = await prisma.sandboxTask.findFirst({
         where: { id: taskId, sandbox: { project: { workspaceId } } },
@@ -278,9 +523,17 @@ export function createMcpContext(): NexuxContext {
     async launchSandbox(input: LaunchSandboxInput): Promise<SandboxSummary> {
       const project = await prisma.project.findFirst({
         where: { id: input.projectId, workspaceId },
-        select: { id: true },
+        select: { id: true, name: true, sandboxConfig: { select: { provider: true, region: true, size: true } } },
       });
       if (!project) throw new Error("Project not found");
+      // A cloud machine costs money: the chat asks first (spec 39).
+      const effective = input.provider ?? (project.sandboxConfig?.provider === "aws" || project.sandboxConfig?.provider === "local" ? project.sandboxConfig.provider : "civo");
+      if (opts.confirm && effective !== "local") {
+        const where = `${effective.toUpperCase()} ${project.sandboxConfig?.region ?? (effective === "aws" ? "us-east-1" : "NYC1")}, ${project.sandboxConfig?.size ?? "default size"}`;
+        const summary = `launch a ${effective} sandbox for "${project.name}" (${where})`;
+        const pending = opts.confirm({ key: JSON.stringify(["launch", input.projectId, effective, input.name ?? null]), summary });
+        if (pending) throw new NeedsConfirmation(pending, summary);
+      }
 
       // Which providers an install accepts depends on its credentials, so the
       // value is validated here rather than in the package's tool definition.
@@ -297,7 +550,23 @@ export function createMcpContext(): NexuxContext {
         input.provider as "civo" | "aws" | "local" | undefined,
         input.name,
         dockerEndpointId,
-      );
+      ).catch(async (err: unknown) => {
+        // The launcher's own wording sends people to Settings; the chat has a
+        // card for it, and repeated the wording instead of using the card.
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/Missing: .*git token/.test(message)) throw err;
+        const repos = await prisma.repository.findMany({ where: { projectId: input.projectId }, select: { repoUrl: true } });
+        const provider = repos.some((r) => r.repoUrl && !/github\.com/i.test(r.repoUrl)) && !repos.some((r) => /github\.com/i.test(r.repoUrl ?? ""))
+          ? "gitlab"
+          : "github";
+        throw new Error(
+          `No ${provider === "github" ? "GitHub" : "GitLab"} token is saved, so the repositories cannot be cloned. ` +
+            `Do not send the user to Settings or ask for a GITHUB_TOKEN env var: say in one line that it needs a token that can read these repositories, ` +
+            `then end your reply with the add-credential card: \`\`\`add-credential\n{"provider": "${provider}"}\n\`\`\`. ` +
+            `When the user says it is saved, launch again.`,
+        );
+      });
+      opts.onSandboxLaunched?.(sandbox.id);
       return toSandbox(sandbox);
     },
 

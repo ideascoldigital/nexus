@@ -326,7 +326,11 @@ function AccountRow({ account }: { account: ClickUpAccount }) {
   );
 }
 
-export function ClickUpAccountsSection() {
+/**
+ * `bare`: inside Connect apps (spec 39) — no card or title of its own (the
+ * page around it says what it is), just its actions and its rows.
+ */
+export function ClickUpAccountsSection({ bare = false }: { bare?: boolean } = {}) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   // Sticky, not just a toast: the round-trip through ClickUp takes long
@@ -380,10 +384,10 @@ export function ClickUpAccountsSection() {
   const configured = config?.configured ?? false;
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className={bare ? "gap-3 border-0 bg-transparent py-0 shadow-none ring-0" : undefined}>
+      <CardHeader className={bare ? "px-0" : undefined}>
         <div className="flex items-center justify-between">
-          <div>
+          <div className={bare ? "sr-only" : undefined}>
             <CardTitle className="flex items-center gap-2">
               <CheckSquare className="h-5 w-5" />
               ClickUp Accounts
@@ -414,7 +418,7 @@ export function ClickUpAccountsSection() {
           </div>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className={bare ? "rounded-xl border border-border bg-card/60 px-3" : undefined}>
         {oauthError && (
           <div className="mb-4 flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2.5 text-sm">
             <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-destructive" />

@@ -182,7 +182,7 @@ async function resolveHostRegistryAuth(
   // pointing at the image rather than at the token.
   if (credentialId && git?.id !== credentialId) {
     throw new Error(
-      "The selected registry credential no longer exists. Pick another in Settings → Git.",
+      "The selected registry credential no longer exists. Pick another in Vault → Git.",
     );
   }
   if (!git) return null;
@@ -446,7 +446,7 @@ export async function assertImagePullable<
             ? ` That token needs the ${scope} scope and access to the package`
             : " That token needs access to the image"
         } — logging in is not enough, and a token without it fails only at the pull.`
-      : `${repository}:${tag} is private and no saved token logs in to ${host}. Add one in Settings → Git and pick it under “Registry credential” — or make the image public.`,
+      : `${repository}:${tag} is private and no saved token logs in to ${host}. Add one in Vault → Git and pick it under “Registry credential” — or make the image public.`,
   );
 }
 
@@ -729,7 +729,7 @@ async function createEndpointHost(input: CreateHostInput) {
   const tailscale = await resolveTailscaleKey(input.tailscaleCredentialId);
   if (!tailscale?.authKey) {
     throw new Error(
-      "A host needs a Tailscale credential with an auth key (Settings → Cloud) — it starts unattended and cannot complete a browser login.",
+      "A host needs a Tailscale credential with an auth key (Vault → Cloud) — it starts unattended and cannot complete a browser login.",
     );
   }
 

@@ -13,6 +13,8 @@ export const testDbDir = fs.mkdtempSync(path.join(os.tmpdir(), "nexux-routes-"))
 
 process.env.DATABASE_URL = `file:${path.join(testDbDir, "test.db")}`;
 process.env.NEXUX_DATA_DIR = testDbDir;
+// The Nexus chat (spec 39) runs Claude Code on the host; tests never do.
+process.env.NEXUX_NEXUS_CHAT_RUNNER = "off";
 process.env.NEXUX_MIGRATIONS_DIR = path.resolve(
   __dirname,
   "../../../../../packages/db/prisma/migrations"

@@ -983,3 +983,27 @@ Two layout details fell out of resizing: the inbox header wraps its buttons inst
 
 **Consequences:** skills are not named in the system prompt, so loading one does not start a fresh Claude session — the next process just finds a new folder. The sync owns only what its manifest lists, so a skill the bot wrote for itself survives; the cost is that a manifest lost by hand leaves stale folders until the bot's Claude volume is deleted. Disk-backed skills travel with their whole folder (capped). A skills.sh install whose GitHub API call is refused — the unauthenticated limit is 60 an hour per IP, and it ran out on the first day — falls back to the repo's codeload tarball (no API quota, unpacked with the system `tar`, 100 MB cap), which also brings the skill's references and scripts. The skills.sh install logic moved to `lib/skill-install.ts` so the Skills page and the bot dialog share it.
 
+
+## D-102 — Nexus is driven from a chat; the bots view is the home (2026-11-26)
+
+**Context:** the user wants to stop using the dashboard: create projects, recognise them, set up and launch sandboxes, run and schedule tasks — all by talking, with one Nexus chat per project (spec 39).
+
+**Decision:** the chat drives the existing MCP control surface (`packages/mcp`, `/api/mcp`) rather than a new API, so the dashboard, the ⌘I assistant and the chat share one set of tools and one scope check. Creating projects adds a `projects:write` scope. Credentials are listed by name and id and applied by Nexus on its own side — the chat never holds a secret, since what it reads (pages, issues, third-party skills) could talk it into sending one somewhere. Confirmation is required only for what costs or destroys. `/` now opens the bots view, which is the whole app: Settings opens as a modal on it (`/settings?tab=…` redirects to `/bots?settings=1&tab=…`), and every other dashboard page (projects, skills, agents, terminal, workspaces) redirects to `/bots`. What used to be one Settings page is three modals: **Vault** holds every key (logins and secrets, AI providers, cloud, git — all sealed at rest by the vault extension already), **Connect apps** everything Nexus talks to (apps for bots, Telegram/Slack, GitHub/GitLab/ClickUp accounts), and **Settings** only this machine (Docker endpoints and naming, API tokens, terminal, appearance, desktop, backup); an old `?tab=` lands in whichever holds it; the pages stay in the code until each flow has a chat equivalent. A dev build and the packaged app share Docker, so on start each removes only the bot computers its own database made.
+
+**Consequences:** the chat's brain is the user's Claude Code subscription, which needs the host rule against `claude -p` to allow this one, tool-limited case — a change the user makes to AGENTS.md/CLAUDE.md, not the agent. In the ⌘I assistant `projects:write` tools go through its approval card like every other `:write` scope. Agents left the navigation; their tables stay, since dropping them deletes data.
+
+## D-103 — A project chat is a bot without a computer, made from the New Bot dialog (2026-11-27)
+
+**Context:** spec 39 first had an always-present "Nexus · New project" chat. The user preferred one place to start: creating a bot asks whether it is an assistant or a project.
+
+**Decision:** `Bot.kind` is `bot` or `nexus`, plus `Bot.projectId`. A `nexus` bot reuses the whole chat UI but runs each message with `claude -p` on the host — the exception AGENTS.md now allows — with built-in tools off, only the Nexus MCP server, `--allowedTools` limited to its tools, and a per-run token that lives in memory and is scoped to the chat's workspace. When it creates a project it binds to it.
+
+**Consequences:** no Docker needed for the project chat, and it answers in seconds. It can create projects, clone and recognise stacks but not launch sandboxes or spend money yet (no `sandboxes:write`); that comes with confirmations in phase 2. The MCP context now acts in a given workspace instead of always the default one, which per-run tokens use and saved API tokens still do not.
+
+## D-104 — Money is spent only on a tap the model cannot make (2026-11-27)
+
+**Context:** the project chat can now launch sandboxes; a cloud one costs money until destroyed. Asking in the chat is not enough — a model can be talked into "the user said yes".
+
+**Decision:** in a chat run, the MCP context's launch asks a gate first. Unapproved, the tool fails with an action id; the chat shows a confirm card; the user's Confirm is an HTTP call to Nexus that approves that exact action (same project, provider, name) for one use within 30 minutes. Local and endpoint sandboxes, which cost nothing, skip it. Saved API tokens keep their old behaviour: `sandboxes:write` on the token is the consent.
+
+**Consequences:** approvals live in memory, so a restart between the card and the tap means asking again. The same gate will cover destroying sandboxes and adding credentials when the chat gets those.

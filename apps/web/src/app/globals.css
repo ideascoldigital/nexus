@@ -319,3 +319,89 @@ html[data-titlebar="overlay"] .titlebar-only {
 @utility max-w-page {
   max-width: var(--page-max-width);
 }
+
+/*
+ * Settings → the same look as Vault and Connect apps (spec 39): a section's
+ * cards lose their chrome — a small title over its content, and the content
+ * in one rounded box — instead of a card per block. Scoped to the panel, so
+ * the components keep their own look anywhere else.
+ */
+.nexux-flat [data-slot="card"] {
+  gap: 0.6rem;
+  overflow: visible;
+  padding-block: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.nexux-flat [data-slot="card-header"] {
+  padding-inline: 0.25rem;
+}
+.nexux-flat [data-slot="card-title"] {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.nexux-flat [data-slot="card-title"] > svg {
+  display: none;
+}
+.nexux-flat [data-slot="card-description"] {
+  font-size: 12.5px;
+}
+.nexux-flat [data-slot="card-content"] {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: color-mix(in oklab, var(--card) 60%, transparent);
+  padding: 0.875rem 1rem;
+}
+.nexux-flat [data-slot="card-content"] [data-slot="card-content"] {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.nexux-flat [data-slot="card-footer"] {
+  border: 0;
+  background: transparent;
+  padding: 0.25rem 0.25rem 0;
+}
+/* A sub-page already says its name in its header: its first block's title would repeat it. */
+.nexux-sub > [data-slot="card"]:first-child [data-slot="card-title"] {
+  display: none;
+}
+
+/* ---- Chat: a bot at work (spec 39) ------------------------------------- */
+/* Three dots in the bot's colour, one wave through them. */
+@keyframes nexux-dot {
+  0%, 60%, 100% { transform: translateY(0) scale(0.8); opacity: 0.45; }
+  30% { transform: translateY(-2px) scale(1); opacity: 1; }
+}
+.nexux-dot { animation: nexux-dot 1.2s ease-in-out infinite; }
+/* A light sweeping across a label: "Thinking it through". */
+@keyframes nexux-shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+.nexux-shimmer {
+  background: linear-gradient(90deg, var(--muted-foreground) 0%, var(--muted-foreground) 40%, var(--foreground) 50%, var(--muted-foreground) 60%, var(--muted-foreground) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: nexux-shimmer 2.2s linear infinite;
+}
+/* The caret at the end of a reply being written (after its last block). */
+@keyframes nexux-caret { 50% { opacity: 0; } }
+.nexux-caret > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.45em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.6;
+  animation: nexux-caret 1s steps(1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nexux-dot, .nexux-shimmer, .nexux-caret > :last-child::after { animation: none; }
+  .nexux-shimmer { color: var(--muted-foreground); background: none; }
+}

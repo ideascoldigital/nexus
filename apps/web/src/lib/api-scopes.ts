@@ -11,6 +11,9 @@
  */
 export const API_SCOPES = [
   "projects:read",
+  "projects:write",
+  "files:read",
+  "files:write",
   "tasks:read",
   "tasks:write",
   "sandboxes:read",

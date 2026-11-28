@@ -1283,31 +1283,39 @@ export function renderBotSystemPrompt(bot: {
   return parts.join("\n");
 }
 
+/** Claude Code's --effort levels. */
+export const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
+
 export function buildBotClaudeCommand(
   prompt: string,
   opts: {
     systemPrompt: string;
     resumeSessionId?: string | null;
     model?: string | null;
+    /** claude --effort: low, medium, high, xhigh or max; null = the CLI default. */
+    effort?: string | null;
     /** Also load BOT_USER_MCP_CONFIG (the bot's own servers, written by writeBotMcpConfig). */
     userMcp?: boolean;
   },
 ): string {
   const resume = opts.resumeSessionId ? `--resume ${shq(opts.resumeSessionId)} ` : "";
   const model = opts.model?.trim() ? `--model ${shq(opts.model.trim())} ` : "";
+  const effort = opts.effort && CLAUDE_EFFORTS.includes(opts.effort as ClaudeEffort) ? `--effort ${opts.effort} ` : "";
   // A bot's own stdio MCP servers usually start with `npx -y <pkg>`, and its
   // computer is fresh after every sleep: the first download can take a minute
   // or more (mongodb-mcp-server: ~72s), past Claude Code's 30s startup wait.
   const mcpWait = opts.userMcp ? `MCP_TIMEOUT=${BOT_MCP_STARTUP_MS} ` : "";
   return (
-    `${mcpWait}claude ${resume}${model}-p ${shq(prompt)}` +
+    `${mcpWait}claude ${resume}${model}${effort}-p ${shq(prompt)}` +
     ` --append-system-prompt ${shq(opts.systemPrompt)}` +
     // --strict-mcp-config: these files are the whole list. The computer's own
     // Claude config holds throwaway registrations (spec 37: `claude mcp login`
     // only acts on servers Claude has configured), and a run must not load a
     // server because a sign-in left it there.
     ` --mcp-config ${BOT_MCP_CONFIG}${opts.userMcp ? ` ${BOT_USER_MCP_CONFIG}` : ""} --strict-mcp-config` +
-    ` --permission-mode bypassPermissions --output-format stream-json --verbose`
+    // Partial messages: the reply streams into the chat as it is written.
+    ` --permission-mode bypassPermissions --output-format stream-json --verbose --include-partial-messages`
   );
 }
 
@@ -1342,8 +1350,11 @@ export async function runBotPrompt(
     systemPrompt: string;
     resumeSessionId?: string | null;
     model?: string | null;
+    effort?: string | null;
     userMcp?: boolean;
     onLog?: LogSink;
+    /** The reply so far, each time it grows (see nextDraft). */
+    onDraft?: (draft: string) => void;
     timeoutMs?: number;
     signal?: AbortSignal;
     /** Working directory for Claude; defaults to the scratch BOT_WORKDIR. */
@@ -1351,7 +1362,7 @@ export async function runBotPrompt(
     target?: DockerTarget | null;
   },
 ): Promise<ClaudeRunResult> {
-  const parser = createStreamParser(opts.onLog);
+  const parser = createStreamParser(opts.onLog, opts.onDraft);
   const cwd = opts.cwd ?? BOT_WORKDIR;
   await ensureBotCwd(opts.container, cwd, opts.target);
   const res = await execRemote(buildBotClaudeCommand(prompt, opts), {

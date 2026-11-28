@@ -351,3 +351,21 @@ test("a run killed by our own timeout says so, with the minutes", () => {
   const crash = finalizeClaudeRun(null, { code: -1, stderr: "" });
   assert.match(crash.error!, /without a result event/);
 });
+
+test("nextDraft grows with text deltas and starts over on a new message", async () => {
+  const { nextDraft } = await import("./remote");
+  const delta = (text: string) => ({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text } } });
+  let d = "";
+  for (const ev of [delta("Hola, "), delta("Cristhian")]) d = nextDraft(d, ev) ?? d;
+  assert.equal(d, "Hola, Cristhian");
+  assert.equal(nextDraft(d, { type: "stream_event", event: { type: "message_start" } }), "");
+  assert.equal(nextDraft("", { type: "stream_event", event: { type: "message_start" } }), null);
+  assert.equal(nextDraft(d, { type: "stream_event", event: { type: "content_block_delta", delta: { type: "input_json_delta" } } }), null);
+});
+
+test("nextDraft takes a whole assistant message, ignoring tool-only ones", async () => {
+  const { nextDraft } = await import("./remote");
+  assert.equal(nextDraft("", { type: "assistant", message: { content: [{ type: "text", text: "Listo." }] } }), "Listo.");
+  assert.equal(nextDraft("Listo.", { type: "assistant", message: { content: [{ type: "tool_use", name: "Read" }] } }), null);
+  assert.equal(nextDraft("x", { type: "result", result: "x" }), null);
+});

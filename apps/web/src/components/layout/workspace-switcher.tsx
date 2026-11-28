@@ -57,10 +57,16 @@ export function WorkspaceSwitcher({
   variant = "sidebar",
   /** Where the reload lands — the bots view switches without leaving itself. */
   returnTo = "/",
+  /** "Manage workspaces": the bots view opens its Settings on Workspaces. */
+  onManage,
+  onNew,
 }: {
   collapsed?: boolean;
   variant?: "sidebar" | "compact";
   returnTo?: string;
+  onManage?: () => void;
+  /** "+ New workspace": the bots view opens the form in Settings, not a modal. */
+  onNew?: () => void;
 }) {
   const [creating, setCreating] = useState(false);
 
@@ -131,13 +137,17 @@ export function WorkspaceSwitcher({
         <DropdownMenuSeparator />
         {/* Base UI menus close on item click — creation lives in a dialog. */}
         <DropdownMenuItem
-          onClick={() => setCreating(true)}
+          onClick={() => (onNew ? onNew() : setCreating(true))}
           className="text-muted-foreground"
         >
           + New workspace
         </DropdownMenuItem>
+        {/* /workspaces redirects to the bots view (spec 39): management
+            lives in Settings → Workspaces there. */}
         <DropdownMenuItem
-          render={<Link href="/workspaces" />}
+          {...(onManage
+            ? { onClick: onManage }
+            : { render: <Link href="/bots?settings=1&tab=workspaces" /> })}
           className="gap-2 text-muted-foreground"
         >
           <Settings2 className="h-3.5 w-3.5" />

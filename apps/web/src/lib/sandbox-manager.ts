@@ -1167,7 +1167,7 @@ export async function launchSandbox(
     !(await resolveClaudeCodeToken(project.sandboxConfig?.claudeCredentialId))
   ) {
     missing.push(
-      "Claude Code token (Settings → AI Providers, or a CLAUDE_CODE_OAUTH_TOKEN project env var)",
+      "Claude Code token (Vault → AI providers, or a CLAUDE_CODE_OAUTH_TOKEN project env var)",
     );
   }
   if (missing.length > 0) {
