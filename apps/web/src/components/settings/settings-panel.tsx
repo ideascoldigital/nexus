@@ -20,6 +20,7 @@ import {
   ShieldCheck,
   Blocks,
   Box,
+  Boxes,
   ChevronLeft,
   ChevronRight,
   Container,
@@ -40,6 +41,7 @@ import { ConnectApps } from "@/components/connectors/connect-apps";
 import { ChannelsAndAccounts } from "@/components/settings/channels-accounts";
 import { ProviderCatalog } from "@/components/settings/provider-catalog";
 import { VaultSection } from "@/components/vault/vault-section";
+import { WorkspacesSection } from "@/components/workspaces/workspaces-section";
 
 type Setting = {
   id: string;
@@ -166,6 +168,7 @@ const SETTINGS_TABS = [
   "connectors",
   "machines",
   "api",
+  "workspaces",
 ] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
 const TAB_STORAGE_KEY = "nexux:settings:tab";
@@ -183,7 +186,7 @@ const PANEL_SECTIONS: Record<SettingsPanelKind, readonly SettingsTab[]> = {
   settings: [
     "vault", "ai", "cloud", "git",
     "connectors", "communications", "integrations",
-    "machines", "api", "terminal", "appearance", "desktop", "backup",
+    "workspaces", "machines", "api", "terminal", "appearance", "desktop", "backup",
   ],
 };
 const PANEL_COPY: Record<SettingsPanelKind, { title: string; subtitle: string }> = {
@@ -279,6 +282,12 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
   {
     label: "System",
     items: [
+      {
+        id: "workspaces",
+        label: "Workspaces",
+        icon: Boxes,
+        description: "Separate spaces, each with its own projects, bots and settings. Create, rename, switch or delete them.",
+      },
       {
         id: "machines",
         label: "Machines",
@@ -425,9 +434,12 @@ export function isSettingsSection(value: string | null): value is SettingsTab {
 export function SettingsPanel({
   panel = "settings",
   initialTab,
+  intent,
 }: {
   panel?: SettingsPanelKind;
   initialTab?: string | null;
+  /** Something to start on inside the section, e.g. "new-workspace". */
+  intent?: string | null;
 }) {
   const sections = PANEL_SECTIONS[panel];
   const inPanel = (v: string | null): v is SettingsTab => isSettingsTab(v) && sections.includes(v);
@@ -575,6 +587,8 @@ export function SettingsPanel({
               {activeTab === "ai" && <ProviderCatalog kind="ai" />}
 
               {activeTab === "cloud" && <ProviderCatalog kind="cloud" />}
+
+              {activeTab === "workspaces" && <WorkspacesSection startNew={intent === "new-workspace"} />}
 
               {activeTab === "machines" && <SubPageList pages={SUB_PAGES.machines!} back="Machines" />}
 

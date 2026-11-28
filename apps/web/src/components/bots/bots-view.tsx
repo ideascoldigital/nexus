@@ -122,7 +122,7 @@ export function BotsView() {
   // Vault, Connect apps and Settings are modals here, not pages. Old links
   // (/settings?tab=…) are redirected to /bots?settings=1&tab=…, which opens
   // whichever of the three holds that section.
-  const [panel, setPanel] = useState<{ kind: SettingsPanelKind; tab: string | null } | null>(() => {
+  const [panel, setPanel] = useState<{ kind: SettingsPanelKind; tab: string | null; intent?: string } | null>(() => {
     if (typeof window === "undefined") return null;
     const params = new URLSearchParams(window.location.search);
     if (!params.has("settings")) return null;
@@ -241,7 +241,12 @@ export function BotsView() {
               {/* The inbox below is this workspace's team (D-87). Switching
                   reloads /bots rather than the dashboard, so the simple view
                   stays the simple view. */}
-              <WorkspaceSwitcher variant="compact" returnTo="/bots" />
+              <WorkspaceSwitcher
+                variant="compact"
+                returnTo="/bots"
+                onManage={() => setPanel({ kind: "settings", tab: "workspaces" })}
+                onNew={() => setPanel({ kind: "settings", tab: "workspaces", intent: "new-workspace" })}
+              />
               <Button size="icon-sm" variant="secondary" className="shrink-0 rounded-full" onClick={() => setQuery("")} aria-label="Search bots" title="Search">
                 <Search className="h-3.5 w-3.5" />
               </Button>
@@ -347,7 +352,7 @@ export function BotsView() {
             {panel?.kind === "vault" ? "Vault" : panel?.kind === "apps" ? "Connect apps" : "Settings"}
           </DialogTitle>
           {/* Keyed so switching from one panel to another starts on its own section. */}
-          {panel && <SettingsPanel key={panel.kind} panel={panel.kind} initialTab={panel.tab} />}
+          {panel && <SettingsPanel key={`${panel.kind}:${panel.intent ?? ""}`} panel={panel.kind} initialTab={panel.tab} intent={panel.intent} />}
         </DialogContent>
       </Dialog>
       {/* Keyed so the field starts from whichever bot was right-clicked,
